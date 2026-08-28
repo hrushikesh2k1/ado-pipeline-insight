@@ -1,0 +1,12 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "SQL_CONNECTION_STRING": "Driver={ODBC Driver 18 for SQL Server};Server=localhost;Database=ado_pipeline_insight;Trusted_Connection=yes;TrustServerCertificate=yes;",
+    "ADO_PAT": "local-development-only",
+    "ADO_PAT_SECRET_NAME": "ado-pat",
+    "AZURE_OPENAI_ENDPOINT": "https://your-resource.openai.azure.com/",
+    "AZURE_OPENAI_DEPLOYMENT": "your-gpt-4o-deployment"
+  }
+}
