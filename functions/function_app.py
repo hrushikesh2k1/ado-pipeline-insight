@@ -13,9 +13,9 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
 
 @app.route(route="ingest_run", methods=["POST"])
-def ingest_run(request: func.HttpRequest) -> func.HttpResponse:
+def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
     try:
-        payload = request.get_json()
+        payload = req.get_json()
         resource = payload.get("resource", payload)
         organization = payload.get("resourceContainers", {}).get("account", {}).get("id") or payload.get("organization")
         project = resource.get("project", {}).get("name") or payload.get("project")
@@ -39,9 +39,9 @@ def ingest_run(request: func.HttpRequest) -> func.HttpResponse:
 
 
 @app.route(route="get_recommendations", methods=["POST"])
-def get_recommendations(request: func.HttpRequest) -> func.HttpResponse:
+def get_recommendations(req: func.HttpRequest) -> func.HttpResponse:
     try:
-        body = request.get_json()
+        body = req.get_json()
         pipeline_id = int(body["pipeline_id"])
         settings = get_settings()
         repository = AlertRepository(settings.sql_connection_string)
