@@ -17,7 +17,16 @@ class AlertRepository:
             import pyodbc
         except ImportError as error:
             raise RuntimeError("pyodbc is not available in the function runtime. Ensure dependency install succeeded.") from error
-        return pyodbc.connect(self.connection_string)
+        attempts = [self.connection_string]
+        # Azure Linux images may have a different SQL Server ODBC driver installed.
+        attempts.extend(_connection_variants(self.connection_string))
+        last_error: Exception | None = None
+        for connection_string in attempts:
+            try:
+                return pyodbc.connect(connection_string)
+            except Exception as error:
+                last_error = error
+        raise RuntimeError("Unable to connect to SQL with configured ODBC settings.") from last_error
 
     def upsert_metrics(self, metrics: Iterable[TimelineMetric]) -> None:
         metrics = list(metrics)
@@ -148,3 +157,22 @@ def _percentile(values: list[float], percentile: float) -> float:
         return 0
     ordered = sorted(values)
     return ordered[min(len(ordered) - 1, int(len(ordered) * percentile))]
+
+
+def _connection_variants(connection_string: str) -> list[str]:
+    variants: list[str] = []
+    if "ODBC Driver 18 for SQL Server" in connection_string:
+        variants.append(connection_string.replace("ODBC Driver 18 for SQL Server", "ODBC Driver 17 for SQL Server"))
+    if "ODBC Driver 17 for SQL Server" in connection_string:
+        variants.append(connection_string.replace("ODBC Driver 17 for SQL Server", "ODBC Driver 18 for SQL Server"))
+    if "Driver={" not in connection_string:
+        variants.append(f"Driver={{ODBC Driver 18 for SQL Server}};{connection_string}")
+        variants.append(f"Driver={{ODBC Driver 17 for SQL Server}};{connection_string}")
+    # Keep order stable and remove duplicates.
+    seen: set[str] = set()
+    unique: list[str] = []
+    for variant in variants:
+        if variant not in seen:
+            seen.add(variant)
+            unique.append(variant)
+    return unique
