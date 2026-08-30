@@ -131,8 +131,15 @@ def build_analysis_summary(rows: list[dict[str, Any]], window_days: int = 30) ->
 
 def _stats(rows: list[dict[str, Any]]) -> dict[str, float]:
     durations = _durations(rows)
-    latest = [row for row in rows if row.get("start_time") and row["start_time"] >= datetime.now(timezone.utc) - timedelta(days=7)]
-    previous = [row for row in rows if row.get("start_time") and datetime.now(timezone.utc) - timedelta(days=14) <= row["start_time"] < datetime.now(timezone.utc) - timedelta(days=7)]
+    now_utc = datetime.now(timezone.utc)
+    latest_start = now_utc - timedelta(days=7)
+    previous_start = now_utc - timedelta(days=14)
+    latest = [row for row in rows if _as_utc(row.get("start_time")) and _as_utc(row.get("start_time")) >= latest_start]
+    previous = [
+        row
+        for row in rows
+        if _as_utc(row.get("start_time")) and previous_start <= _as_utc(row.get("start_time")) < latest_start
+    ]
     current_average, previous_average = _average(_durations(latest)), _average(_durations(previous))
     delta = round((current_average - previous_average) / previous_average * 100, 1) if previous_average else 0
     return {
@@ -157,6 +164,14 @@ def _percentile(values: list[float], percentile: float) -> float:
         return 0
     ordered = sorted(values)
     return ordered[min(len(ordered) - 1, int(len(ordered) * percentile))]
+
+
+def _as_utc(value: Any) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _connection_variants(connection_string: str) -> list[str]:
