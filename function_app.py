@@ -19,7 +19,7 @@ def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
         payload = req.get_json()
         resource = payload.get("resource", payload)
         organization = _extract_organization(payload, resource)
-        project = resource.get("project", {}).get("name") or payload.get("project")
+        project = _extract_project(payload, resource)
         build_id = resource.get("id") or resource.get("buildId") or payload.get("runId")
         if not all([organization, project, build_id]):
             return func.HttpResponse("Webhook must include organization, project, and run/build ID.", status_code=400)
@@ -64,6 +64,17 @@ def _extract_organization(payload: dict, resource: dict) -> str | None:
     # Last fallback: if account container has a human-readable name, use it.
     container_name = payload.get("resourceContainers", {}).get("account", {}).get("name")
     return container_name
+
+
+def _extract_project(payload: dict, resource: dict) -> str | None:
+    return (
+        resource.get("project", {}).get("name")
+        or resource.get("definition", {}).get("project", {}).get("name")
+        or resource.get("project", {}).get("id")
+        or resource.get("definition", {}).get("project", {}).get("id")
+        or payload.get("project")
+        or payload.get("resourceContainers", {}).get("project", {}).get("id")
+    )
 
 
 @app.route(route="get_recommendations", methods=["POST"])
