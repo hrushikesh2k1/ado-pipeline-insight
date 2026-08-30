@@ -37,7 +37,9 @@ jobs:
       # Optional: Add step to run tests here
 
       - name: Zip artifact for deployment
-        run: zip release.zip ./* -r
+        run: |
+          # Include hidden folders so .python_packages is deployed.
+          zip -r release.zip . -x ".git/*" "venv/*" "__pycache__/*" "*.pyc"
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
