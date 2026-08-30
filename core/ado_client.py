@@ -68,7 +68,7 @@ class AzureDevOpsClient:
                     duration_seconds=record.get("duration") / 1000 if record.get("duration") is not None else None,
                     result=record.get("result"),
                     retry_count=int(record.get("attempt", 1)) - 1,
-                    log_id=record.get("log", {}).get("id"),
+                    log_id=(record.get("log") or {}).get("id"),
                     record_id=record.get("id"),
                     parent_id=record.get("parentId"),
                 )

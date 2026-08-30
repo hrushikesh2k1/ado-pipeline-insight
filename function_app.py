@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import azure.functions as func
@@ -8,6 +9,7 @@ import azure.functions as func
 from core.ado_client import AzureDevOpsClient
 from core.config import get_ado_pat, get_settings
 from core.db import AlertRepository, build_analysis_summary
+from core.models import TimelineMetric
 from core.openai_client import PipelineRecommendationClient
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
@@ -23,12 +25,17 @@ def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
         build_id = resource.get("id") or resource.get("buildId") or payload.get("runId")
         if not all([organization, project, build_id]):
             return func.HttpResponse("Webhook must include organization, project, and run/build ID.", status_code=400)
-        client = AzureDevOpsClient(organization, get_ado_pat())
-        build = client.get_build(project, int(build_id))
-        metrics = client.flatten_timeline(build, client.get_timeline(project, int(build_id)))
-        for index, metric in enumerate(metrics):
-            if metric.level == "task" and metric.result == "failed" and metric.log_id:
-                metrics[index] = metric.__class__(**{**metric.__dict__, "failure_log_excerpt": client.get_log_tail(project, int(build_id), metric.log_id)})
+        build_id_int = int(build_id)
+        try:
+            client = AzureDevOpsClient(organization, get_ado_pat())
+            build = client.get_build(project, build_id_int)
+            metrics = client.flatten_timeline(build, client.get_timeline(project, build_id_int))
+            for index, metric in enumerate(metrics):
+                if metric.level == "task" and metric.result == "failed" and metric.log_id:
+                    metrics[index] = metric.__class__(**{**metric.__dict__, "failure_log_excerpt": client.get_log_tail(project, build_id_int, metric.log_id)})
+        except Exception:
+            logging.exception("ingest_run enrichment failed; using fallback metric", extra={"run_id": build_id_int})
+            metrics = [_build_fallback_metric(resource, build_id_int)]
         AlertRepository(get_settings().sql_connection_string).upsert_metrics(metrics)
         logging.info("ingest_run completed", extra={"run_id": build_id, "metric_count": len(metrics)})
         return func.HttpResponse(json.dumps({"run_id": build_id, "records_upserted": len(metrics)}), mimetype="application/json")
@@ -74,6 +81,34 @@ def _extract_project(payload: dict, resource: dict) -> str | None:
         or resource.get("definition", {}).get("project", {}).get("id")
         or payload.get("project")
         or payload.get("resourceContainers", {}).get("project", {}).get("id")
+    )
+
+
+def _build_fallback_metric(resource: dict, build_id: int) -> TimelineMetric:
+    definition = resource.get("definition", {})
+    pipeline_id = int(definition.get("id") or resource.get("pipelineId") or 0)
+    pipeline_name = definition.get("name") or resource.get("pipelineName") or f"pipeline-{pipeline_id or 'unknown'}"
+    result = resource.get("result") or resource.get("status")
+    now = datetime.now(timezone.utc)
+    return TimelineMetric(
+        run_id=build_id,
+        pipeline_id=pipeline_id,
+        pipeline_name=pipeline_name,
+        level="stage",
+        stage_name="summary",
+        job_name=None,
+        task_name=None,
+        agent_name=None,
+        queue_time=now,
+        start_time=now,
+        finish_time=now,
+        duration_seconds=0,
+        result=result,
+        retry_count=0,
+        failure_log_excerpt=None,
+        log_id=None,
+        record_id=f"fallback-{build_id}",
+        parent_id=None,
     )
 
 
