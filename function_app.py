@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from urllib.parse import urlparse
 
 import azure.functions as func
 
@@ -17,7 +18,7 @@ def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
     try:
         payload = req.get_json()
         resource = payload.get("resource", payload)
-        organization = payload.get("resourceContainers", {}).get("account", {}).get("id") or payload.get("organization")
+        organization = _extract_organization(payload, resource)
         project = resource.get("project", {}).get("name") or payload.get("project")
         build_id = resource.get("id") or resource.get("buildId") or payload.get("runId")
         if not all([organization, project, build_id]):
@@ -36,6 +37,33 @@ def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
     except Exception:
         logging.exception("ingest_run failed")
         return func.HttpResponse("Unable to ingest pipeline run.", status_code=500)
+
+
+def _extract_organization(payload: dict, resource: dict) -> str | None:
+    # Accept explicit organization first when provided.
+    explicit = payload.get("organization") or payload.get("org")
+    if explicit:
+        return explicit
+
+    # Prefer Azure DevOps URLs to derive org name; resourceContainers.account.id is a GUID, not org name.
+    url_candidates = [
+        resource.get("url"),
+        resource.get("_links", {}).get("web", {}).get("href"),
+    ]
+    for value in url_candidates:
+        if not value:
+            continue
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower()
+        path_parts = [part for part in parsed.path.split("/") if part]
+        if host == "dev.azure.com" and path_parts:
+            return path_parts[0]
+        if host.endswith(".visualstudio.com"):
+            return host.split(".")[0]
+
+    # Last fallback: if account container has a human-readable name, use it.
+    container_name = payload.get("resourceContainers", {}).get("account", {}).get("name")
+    return container_name
 
 
 @app.route(route="get_recommendations", methods=["POST"])
