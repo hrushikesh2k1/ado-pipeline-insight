@@ -5,8 +5,6 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
-import pyodbc
-
 from core.models import TimelineMetric
 
 
@@ -14,11 +12,18 @@ class AlertRepository:
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
 
+    def _connect(self):
+        try:
+            import pyodbc
+        except ImportError as error:
+            raise RuntimeError("pyodbc is not available in the function runtime. Ensure dependency install succeeded.") from error
+        return pyodbc.connect(self.connection_string)
+
     def upsert_metrics(self, metrics: Iterable[TimelineMetric]) -> None:
         metrics = list(metrics)
         if not metrics:
             return
-        with pyodbc.connect(self.connection_string) as connection:
+        with self._connect() as connection:
             cursor = connection.cursor()
             first = metrics[0]
             cursor.execute("EXEC dbo.UpsertPipeline @pipeline_id=?, @pipeline_name=?", first.pipeline_id, first.pipeline_name)
@@ -62,18 +67,18 @@ class AlertRepository:
             LEFT JOIN pipeline_tasks t ON t.run_id = r.run_id AND t.job_name = j.job_name
             WHERE r.pipeline_id = ? AND r.start_time >= ?
         """
-        with pyodbc.connect(self.connection_string) as connection:
+        with self._connect() as connection:
             cursor = connection.cursor()
             columns = [column[0] for column in cursor.execute(query, pipeline_id, start).description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def count_runs(self, pipeline_id: int, days: int = 30) -> int:
         start = datetime.now(timezone.utc) - timedelta(days=days)
-        with pyodbc.connect(self.connection_string) as connection:
+        with self._connect() as connection:
             return connection.execute("SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_id=? AND start_time>=?", pipeline_id, start).fetchval()
 
     def upsert_recommendations(self, pipeline_id: int, findings: list[dict[str, Any]]) -> None:
-        with pyodbc.connect(self.connection_string) as connection:
+        with self._connect() as connection:
             cursor = connection.cursor()
             cursor.execute("DELETE FROM ai_recommendations WHERE pipeline_id=?", pipeline_id)
             for finding in findings:
