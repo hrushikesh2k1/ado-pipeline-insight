@@ -6,6 +6,12 @@ from functools import lru_cache
 
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
+from dotenv import load_dotenv
+
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
+load_dotenv(os.path.join(PROJECT_ROOT, "backend", ".env"))
 
 
 @dataclass(frozen=True)
@@ -25,8 +31,8 @@ def get_settings() -> Settings:
         sql_connection_string=os.environ["SQL_CONNECTION_STRING"],
         ado_pat_secret_name=os.environ.get("ADO_PAT_SECRET_NAME", "ado-pat"),
         key_vault_url=os.environ.get("KEY_VAULT_URL"),
-        azure_openai_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-        azure_openai_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT"],
+        azure_openai_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT", ""),
+        azure_openai_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", ""),
         azure_openai_api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21"),
         min_history_runs=int(os.environ.get("MIN_HISTORY_RUNS", "5")),
     )
