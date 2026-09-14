@@ -209,7 +209,15 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
     Ongoing webhook ingestion uses the configured Key Vault/env secret via get_ado_pat().
     """
     try:
-        body = req.get_json()
+        raw_body = req.get_body().decode("utf-8-sig").strip()
+        try:
+            body = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            logging.error("ingest_pipeline invalid JSON: %s", exc)
+            return func.HttpResponse(
+                "Request body is not valid JSON.",
+                status_code=400
+            )
         organization = str(body.get("organization", "")).strip()
         project = str(body.get("project", "")).strip()
         pipeline_id = int(body.get("pipeline_id"))
