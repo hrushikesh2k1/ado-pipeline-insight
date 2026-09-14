@@ -29,7 +29,7 @@ def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
             return func.HttpResponse("Webhook must include organization, project, and run/build ID.", status_code=400)
         build_id_int = int(build_id)
         try:
-            client = AzureDevOpsClient(organization, get_ado_pat())
+            client = AzureDevOpsClient(organization, get_ado_pat(organization))
             build = client.get_build(project, build_id_int)
             timeline = client.get_timeline(project, build_id_int)
             metrics = client.flatten_timeline(build, timeline)
@@ -237,7 +237,7 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
                 status_code=400
             )
 
-        pat = get_ado_pat()
+        pat = get_ado_pat(organization)
         client = AzureDevOpsClient(organization, pat)
         logging.warning("INGEST_PIPELINE_V3_ADO_CALL_START")
         builds = client.list_builds(project, pipeline_id=pipeline_id, min_time=datetime.now(timezone.utc) - timedelta(days=days), top=200)

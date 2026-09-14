@@ -122,6 +122,16 @@ The PAT is accepted only for the connection/ingestion request and is not written
 
 Set `INGEST_FUNCTION_URL` in the backend environment to the deployed `ingest_pipeline` function endpoint.
 
+### Multiple Azure DevOps organizations
+
+The backend and Azure Functions resolve the PAT by organization without exposing credentials to the browser. Set `ADO_PAT_SECRET_TEMPLATE` in the Azure Function App and backend environment to a Key Vault secret naming convention, for example:
+
+```text
+ADO_PAT_SECRET_TEMPLATE=ado-pat-{organization}
+```
+
+For organization `cicd-analysis`, the resolver reads the Key Vault secret `ado-pat-cicd-analysis`. Organization names are normalized to lowercase and hyphen-separated. Grant the Function App and FastAPI host managed identities permission to read every organization secret. For local development without `KEY_VAULT_URL`, `ADO_PAT` remains the local fallback.
+
 
 ## V7 telemetry correction
 

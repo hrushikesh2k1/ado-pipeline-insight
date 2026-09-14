@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -18,6 +19,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, "backend", ".env"))
 class Settings:
     sql_connection_string: str
     ado_pat_secret_name: str
+    ado_pat_secret_template: str | None
     key_vault_url: str | None
     azure_openai_endpoint: str
     azure_openai_deployment: str
@@ -30,6 +32,7 @@ def get_settings() -> Settings:
     return Settings(
         sql_connection_string=os.environ["SQL_CONNECTION_STRING"],
         ado_pat_secret_name=os.environ.get("ADO_PAT_SECRET_NAME", "ado-pat"),
+        ado_pat_secret_template=os.environ.get("ADO_PAT_SECRET_TEMPLATE") or None,
         key_vault_url=os.environ.get("KEY_VAULT_URL"),
         azure_openai_endpoint=os.environ.get("AZURE_OPENAI_ENDPOINT", ""),
         azure_openai_deployment=os.environ.get("AZURE_OPENAI_DEPLOYMENT", ""),
@@ -39,9 +42,17 @@ def get_settings() -> Settings:
 
 
 @lru_cache(maxsize=1)
-def get_ado_pat() -> str:
+def get_ado_pat(organization: str | None = None) -> str:
     settings = get_settings()
     if not settings.key_vault_url:
         return os.environ["ADO_PAT"]
+    secret_name = settings.ado_pat_secret_name
+    if organization and settings.ado_pat_secret_template:
+        normalized_organization = re.sub(
+            r"-+", "-", re.sub(r"[^a-z0-9-]+", "-", organization.strip().lower())
+        ).strip("-")
+        secret_name = settings.ado_pat_secret_template.format(
+            organization=normalized_organization
+        )
     client = SecretClient(vault_url=settings.key_vault_url, credential=DefaultAzureCredential())
-    return client.get_secret(settings.ado_pat_secret_name).value
+    return client.get_secret(secret_name).value

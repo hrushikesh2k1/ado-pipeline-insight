@@ -102,7 +102,8 @@ def analyze(pipeline_id: int, request: AnalyzeRequest):
 def ado_connect(request: AdoConnectRequest):
     """Discover projects and pipelines using Key Vault through Managed Identity."""
     try:
-        client = AzureDevOpsClient(request.organization.strip(), get_ado_pat())
+        organization = request.organization.strip()
+        client = AzureDevOpsClient(organization, get_ado_pat(organization))
         projects_raw = client.list_projects()
         projects = [AdoProject(id=str(p["id"]), name=p["name"]) for p in projects_raw]
         pipelines: list[AdoPipeline] = []
@@ -112,7 +113,7 @@ def ado_connect(request: AdoConnectRequest):
                     id=int(item["id"]), name=item.get("name", str(item["id"])),
                     project_id=project.id, project_name=project.name,
                 ))
-        return AdoConnectResponse(organization=request.organization.strip(), projects=projects, pipelines=pipelines)
+        return AdoConnectResponse(organization=organization, projects=projects, pipelines=pipelines)
     except requests.HTTPError as exc:
         code = exc.response.status_code if exc.response is not None else 0
         if code in {401, 403}:
