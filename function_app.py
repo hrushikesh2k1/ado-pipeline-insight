@@ -213,12 +213,21 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
         organization = str(body.get("organization", "")).strip()
         project = str(body.get("project", "")).strip()
         pipeline_id = int(body.get("pipeline_id"))
-        pat = str(body.get("pat", ""))
         days = int(body.get("days", 90))
-        if not organization or not project or not pat:
-            return func.HttpResponse("organization, project and pat are required.", status_code=400)
+
+        if not organization or not project:
+            return func.HttpResponse(
+                "organization and project are required.",
+                status_code=400
+            )
+
         if days < 1 or days > 730:
-            return func.HttpResponse("days must be between 1 and 730.", status_code=400)
+            return func.HttpResponse(
+                "days must be between 1 and 730.",
+                status_code=400
+            )
+
+        pat = get_ado_pat()
         client = AzureDevOpsClient(organization, pat)
         builds = client.list_builds(project, pipeline_id=pipeline_id, min_time=datetime.now(timezone.utc) - timedelta(days=days), top=200)
         completed = [b for b in builds if b.get("finishTime") and b.get("status") == "completed"]
