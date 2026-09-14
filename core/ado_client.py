@@ -31,7 +31,7 @@ class AzureDevOpsClient:
             timeout=30,
         )
         response.raise_for_status()
-        return response.json().get("value", [])
+        return self._json_response(response).get("value", [])
 
     def list_pipelines(self, project: str) -> list[dict[str, Any]]:
         response = self.session.get(
@@ -47,7 +47,7 @@ class AzureDevOpsClient:
             response.url,
             response.text[:1000],
         )
-        return response.json().get("value", [])
+        return self._json_response(response).get("value", [])
 
 
     def list_builds(self, project: str, pipeline_id: int | None = None, min_time: datetime | None = None, top: int = 200) -> list[dict[str, Any]]:
@@ -58,7 +58,7 @@ class AzureDevOpsClient:
             params["minTime"] = min_time.isoformat()
         response = self.session.get(self._url(project, "_apis/build/builds"), params=params, timeout=30)
         response.raise_for_status()
-        return response.json().get("value", [])
+        return self._json_response(response).get("value", [])
 
     def get_timeline(self, project: str, build_id: int) -> dict[str, Any]:
         return self._get(project, f"_apis/build/builds/{build_id}/timeline")
@@ -148,7 +148,31 @@ class AzureDevOpsClient:
     def _get(self, project: str, path: str) -> dict[str, Any]:
         response = self.session.get(self._url(project, path), params={"api-version": self.api_version}, timeout=30)
         response.raise_for_status()
-        return response.json()
+        return self._json_response(response)
+
+    @staticmethod
+    def _json_response(response: requests.Response) -> dict[str, Any]:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            logging.error(
+                "ADO_NON_JSON_RESPONSE status=%s content_type=%s url=%s body=%r",
+                response.status_code,
+                response.headers.get("Content-Type"),
+                response.url,
+                response.text[:1000],
+            )
+            raise requests.HTTPError(
+                "Azure DevOps returned a non-JSON response.",
+                response=response,
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise requests.HTTPError(
+                "Azure DevOps returned an unexpected JSON response.",
+                response=response,
+            )
+        return payload
 
     def _url(self, project: str, path: str) -> str:
         return f"https://dev.azure.com/{self.organization}/{project}/{path}"
