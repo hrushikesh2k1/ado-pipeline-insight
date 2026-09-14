@@ -210,12 +210,13 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
     """
     try:
         raw_body = req.get_body().decode("utf-8-sig").strip()
+        logging.warning("INGEST_PIPELINE_V2_RAW_BODY=%r", raw_body)
         try:
             body = json.loads(raw_body)
         except json.JSONDecodeError as exc:
-            logging.error("ingest_pipeline invalid JSON: %s", exc)
+            logging.error("INGEST_PIPELINE_V2_JSON_ERROR=%s", exc)
             return func.HttpResponse(
-                "Request body is not valid JSON.",
+                "V2_JSON_PARSE_ERROR",
                 status_code=400
             )
         organization = str(body.get("organization", "")).strip()
