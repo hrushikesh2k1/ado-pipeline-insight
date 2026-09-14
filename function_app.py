@@ -238,7 +238,9 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
 
         pat = get_ado_pat()
         client = AzureDevOpsClient(organization, pat)
+        logging.warning("INGEST_PIPELINE_V3_ADO_CALL_START")
         builds = client.list_builds(project, pipeline_id=pipeline_id, min_time=datetime.now(timezone.utc) - timedelta(days=days), top=200)
+        logging.warning("INGEST_PIPELINE_V3_ADO_CALL_SUCCESS builds=%s", len(builds))
         completed = [b for b in builds if b.get("finishTime") and b.get("status") == "completed"]
         repository = AlertRepository(get_settings().sql_connection_string)
         total_records = 0
