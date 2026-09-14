@@ -265,6 +265,7 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
         code = exc.response.status_code if exc.response is not None else 0
         return func.HttpResponse(f"Azure DevOps returned HTTP {code}.", status_code=502 if code not in {401,403} else 401)
     except (ValueError, KeyError) as exc:
+        logging.exception("ingest_pipeline failed")
         return func.HttpResponse(str(exc), status_code=400)
     except Exception:
         logging.exception("ingest_pipeline failed")
