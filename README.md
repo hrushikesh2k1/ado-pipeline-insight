@@ -1,4 +1,4 @@
-# ADO Pipeline Insight
+# ADO Pipeline Insight.
 
 ADO Pipeline Insight analyzes Azure DevOps pipeline performance, stage and task duration, failures, retries, queue time, trends and AI generated optimization recommendations.
 
