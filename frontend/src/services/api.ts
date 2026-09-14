@@ -13,7 +13,7 @@ export const api = {
   runs:(pipelineId:number|null,page=1)=>request<Runs>(`/api/v1/runs?page=${page}&page_size=25${pipelineId?`&pipeline_id=${pipelineId}`:''}`),
   recommendations:(pipelineId:number)=>request<{pipeline_id:number;findings:Recommendation[]}>(`/api/v1/pipelines/${pipelineId}/recommendations`),
   runAnalysis:(runId:number)=>request<RunAnalysis>(`/api/v1/runs/${runId}/analysis`),
-  connectAdo:(organization:string,pat:string)=>request<AdoConnection>('/api/v1/ado/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({organization,pat})}),
-  ingestAdo:(organization:string,project:string,pipelineId:number,pat:string,days:number)=>request<any>('/api/v1/ado/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({organization,project,pipeline_id:pipelineId,pat,days})}),
+  connectAdo:(organization:string)=>request<AdoConnection>('/api/v1/ado/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({organization})}),
+  ingestAdo:(organization:string,project:string,pipelineId:number,days:number)=>request<any>('/api/v1/ado/ingest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({organization,project,pipeline_id:pipelineId,days})}),
   analyze:(pipelineId:number,months:number)=>request<{pipeline_id:number;findings:Recommendation[];message?:string}>(`/api/v1/pipelines/${pipelineId}/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({months})}),
 }

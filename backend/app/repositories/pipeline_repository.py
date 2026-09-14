@@ -27,7 +27,7 @@ class PipelineRepository:
         if status: clauses.append("r.result=?"); params.append(status)
         where=" AND ".join(clauses); count=fetch_one(f"SELECT COUNT(*) total FROM dbo.pipeline_runs r WHERE {where}",tuple(params))["total"]
         params.extend([(page-1)*page_size,page_size])
-        items=fetch_all(f"""SELECT r.run_id,r.pipeline_id,p.pipeline_name,p.organization_name,p.project_name,r.source_branch,r.queue_time,r.start_time,r.finish_time,r.result,r.is_degraded,r.data_quality,DATEDIFF(second,r.start_time,r.finish_time) duration_seconds FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE {where} ORDER BY r.start_time DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY""",tuple(params))
+        items=fetch_all(f"""SELECT r.run_id,r.pipeline_id,p.pipeline_name,p.organization_name,p.project_name,r.source_branch,r.queue_time,r.start_time,r.finish_time,r.result,r.is_degraded,r.data_quality,r.build_number,DATEDIFF(second,r.start_time,r.finish_time) duration_seconds FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE {where} ORDER BY r.start_time DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY""",tuple(params))
         return {"page":page,"page_size":page_size,"total_count":int(count),"total_pages":max(1,(int(count)+page_size-1)//page_size),"items":items}
 
     def trends(self, pipeline_id: int | None, days: int) -> dict[str, Any]:
@@ -35,7 +35,7 @@ class PipelineRepository:
         if pipeline_id is not None: clauses.append("r.pipeline_id=?"); params.append(pipeline_id)
         where=" AND ".join(clauses)
         build=fetch_all(f"""SELECT r.run_id,r.start_time run_date,r.pipeline_id,p.pipeline_name,DATEDIFF(second,r.start_time,r.finish_time) duration_seconds,r.result FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE {where} ORDER BY r.start_time""",tuple(params))
-        daily=fetch_all(f"""SELECT CAST(r.start_time AS date) run_date,r.pipeline_id,p.pipeline_name,COUNT(*) run_count,AVG(DATEDIFF(second,r.start_time,r.finish_time)) avg_duration_seconds,SUM(CASE WHEN r.result='failed' THEN 1 ELSE 0 END) failed_runs FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE {where} GROUP BY CAST(r.start_time AS date),r.pipeline_id,p.pipeline_name ORDER BY run_date""",tuple(params))
+        daily=fetch_all(f"""SELECT run_date,pipeline_id,pipeline_name,AVG(avg_duration_seconds) avg_duration_seconds,MAX(p90_duration_seconds) p90_duration_seconds FROM dbo.vw_pipeline_duration_trend WHERE run_date>=CAST(? AS date) {(' AND pipeline_id=?' if pipeline_id is not None else '')} GROUP BY run_date,pipeline_id,pipeline_name ORDER BY run_date""",tuple([start.date(), *([pipeline_id] if pipeline_id is not None else [])]))
         stage=fetch_all(f"""SELECT CAST(r.start_time AS date) run_date,s.stage_name,AVG(s.duration_seconds) avg_duration_seconds FROM dbo.pipeline_runs r JOIN dbo.pipeline_stages s ON s.run_id=r.run_id WHERE {where} AND s.duration_seconds IS NOT NULL GROUP BY CAST(r.start_time AS date),s.stage_name ORDER BY run_date""",tuple(params))
         return {"build_trend":build,"daily_trend":daily,"stage_trend":stage}
 
@@ -49,7 +49,7 @@ class PipelineRepository:
         return {"run_id":run_id,"stages":stages,"jobs":jobs,"tasks":tasks}
 
     def run_analysis(self,run_id:int)->dict[str,Any]:
-        run=fetch_one("""SELECT r.run_id,r.pipeline_id,p.pipeline_name,p.organization_name,p.project_name,r.source_branch,r.source_version,r.requested_by,r.queue_time,r.start_time,r.finish_time,r.result,r.data_quality,DATEDIFF(second,r.start_time,r.finish_time) duration_seconds FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE r.run_id=?""",(run_id,))
+        run=fetch_one("""SELECT r.run_id,r.pipeline_id,p.pipeline_name,p.organization_name,p.project_name,r.source_branch,r.source_version,r.requested_by,r.queue_time,r.start_time,r.finish_time,r.result,r.data_quality,r.build_number,DATEDIFF(second,r.start_time,r.finish_time) duration_seconds FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE r.run_id=?""",(run_id,))
         if not run: raise ValueError(f"Run {run_id} was not found")
         hierarchy=self.timeline(run_id)
         stage_durations=[float(x["duration_seconds"]) for x in hierarchy["stages"] if x.get("duration_seconds") is not None]

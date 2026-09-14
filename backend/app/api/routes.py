@@ -3,9 +3,11 @@ from backend.app.core.db import fetch_one
 from backend.app.repositories.pipeline_repository import PipelineRepository
 from backend.app.services.pipeline_service import PipelineService
 from backend.app.services.ai_service import AIService
+from backend.app.core.config import get_settings
 from backend.app.schemas.api import AnalyzeRequest
 from backend.app.schemas.connection import AdoConnectRequest, AdoConnectResponse, AdoProject, AdoPipeline, AdoIngestRequest
 from core.ado_client import AzureDevOpsClient
+from core.config import get_ado_pat
 import os
 import requests
 
@@ -98,9 +100,9 @@ def analyze(pipeline_id: int, request: AnalyzeRequest):
 
 @router.post("/ado/connect", response_model=AdoConnectResponse)
 def ado_connect(request: AdoConnectRequest):
-    """Validate an ADO PAT and discover projects/pipelines without persisting the secret."""
+    """Discover projects and pipelines using Key Vault through Managed Identity."""
     try:
-        client = AzureDevOpsClient(request.organization.strip(), request.pat)
+        client = AzureDevOpsClient(request.organization.strip(), get_ado_pat())
         projects_raw = client.list_projects()
         projects = [AdoProject(id=str(p["id"]), name=p["name"]) for p in projects_raw]
         pipelines: list[AdoPipeline] = []
@@ -116,6 +118,8 @@ def ado_connect(request: AdoConnectRequest):
         if code in {401, 403}:
             raise HTTPException(status_code=401, detail="Azure DevOps authentication failed. Check the PAT permissions and organization name.") from exc
         raise HTTPException(status_code=502, detail=f"Azure DevOps returned HTTP {code}.") from exc
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Azure DevOps connection failed: {exc}") from exc
 
