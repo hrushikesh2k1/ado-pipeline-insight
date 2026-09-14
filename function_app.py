@@ -210,7 +210,7 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
     """
     try:
         raw_body = req.get_body().decode("utf-8-sig").strip()
-        logging.warning("INGEST_PIPELINE_V2_RAW_BODY=%r", raw_body)
+        logging.warning("INGEST_PIPELINE_V3_MARKER_FUNCTION_APP_ROOT")
         try:
             body = json.loads(raw_body)
         except json.JSONDecodeError as exc:
