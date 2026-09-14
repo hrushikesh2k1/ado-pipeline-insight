@@ -1,0 +1,107 @@
+trigger:
+  branches:
+    include:
+      - main
+
+variables:
+  PythonVersion: '3.11'
+  NodeVersion: '22.x'
+  WebAppName: '$(ADO_INSIGHT_DASHBOARD_APP_NAME)'
+
+stages:
+- stage: Validate
+  displayName: Validate application
+  jobs:
+  - job: Validate
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PythonVersion)
+    - script: |
+        python -m compileall backend core
+      displayName: Python compile check
+    - task: NodeTool@0
+      inputs:
+        versionSpec: $(NodeVersion)
+    - script: |
+        cd frontend
+        npm install
+        npm run build
+      displayName: Build React application
+
+- stage: Test
+  displayName: Test
+  dependsOn: Validate
+  jobs:
+  - job: PythonTests
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PythonVersion)
+    - script: |
+        python -m pip install --upgrade pip
+        pip install -r backend/requirements.txt
+        pip install pytest
+        pytest -q backend/tests
+      displayName: Run backend tests
+
+- stage: Package
+  displayName: Package dashboard
+  dependsOn: Test
+  jobs:
+  - job: Package
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(PythonVersion)
+    - task: NodeTool@0
+      inputs:
+        versionSpec: $(NodeVersion)
+    - script: |
+        python -m pip install --upgrade pip
+        cd frontend
+        npm install
+        npm run build
+        cd ..
+        mkdir -p package/frontend
+        cp -r backend core package/
+        cp -r frontend/dist package/frontend/
+        cp backend/requirements.txt package/requirements.txt
+        cp host.json package/ 2>/dev/null || true
+        cd package
+        zip -r ../ado-pipeline-insight-dashboard.zip .
+      displayName: Create App Service package
+    - publish: ado-pipeline-insight-dashboard.zip
+      artifact: dashboard-package
+
+- stage: Deploy
+  displayName: Deploy dashboard
+  dependsOn: Package
+  condition: succeeded()
+  jobs:
+  - deployment: DeployDashboard
+    environment: ado-insight-production
+    pool:
+      vmImage: ubuntu-latest
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: dashboard-package
+          - task: AzureWebApp@1
+            displayName: Deploy React + FastAPI
+            inputs:
+              azureSubscription: '$(AZURE_SERVICE_CONNECTION)'
+              appType: webAppLinux
+              appName: '$(WebAppName)'
+              package: '$(Pipeline.Workspace)/dashboard-package/ado-pipeline-insight-dashboard.zip'

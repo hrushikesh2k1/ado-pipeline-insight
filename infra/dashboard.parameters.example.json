@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "dashboardAppName": {"value": "app-ado-pipeline-insight"},
+    "dashboardPlanName": {"value": "app-ado-pipeline-insight-plan"},
+    "keyVaultName": {"value": "<existing-key-vault>"},
+    "sqlConnectionSecretName": {"value": "sql-connection-string"},
+    "sqlServerName": {"value": "<existing-sql-server>"},
+    "azureOpenAiEndpoint": {"value": "https://<openai-account>.openai.azure.com/"},
+    "azureOpenAiDeployment": {"value": "<deployment-name>"},
+    "azureOpenAiResourceId": {"value": "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<openai-account>"}
+  }
+}

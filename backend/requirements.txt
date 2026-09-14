@@ -1,0 +1,9 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.7
+pydantic-settings==2.10.1
+pyodbc==5.2.0
+azure-identity==1.19.0
+azure-keyvault-secrets==4.9.0
+openai==1.59.7
+requests==2.32.3

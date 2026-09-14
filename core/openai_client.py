@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-from openai import AzureOpenAI
+from openai import OpenAI
 
 from core.models import Finding, RecommendationResponse
 
@@ -20,28 +21,51 @@ Example output: {"findings":[{"category":"flaky_step","severity":"high","stage_n
 
 
 class PipelineRecommendationClient:
+    """Azure OpenAI client using the Azure OpenAI v1 API surface."""
+
     def __init__(self, endpoint: str, deployment: str, api_version: str, api_key: str | None = None):
+        del api_version  # Azure OpenAI v1 does not require api-version in the URL.
         self.deployment = deployment
+        base_url = endpoint.rstrip("/") + "/"
+
+        if not base_url.endswith("/openai/v1/"):
+            if "/openai/v1" not in base_url:
+                base_url = base_url.rstrip("/") + "/openai/v1/"
+
         if api_key:
-            self.client = AzureOpenAI(azure_endpoint=endpoint, api_version=api_version, api_key=api_key)
+            self.client = OpenAI(api_key=api_key, base_url=base_url)
         else:
-            token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
-            self.client = AzureOpenAI(azure_endpoint=endpoint, api_version=api_version, azure_ad_token_provider=token_provider)
+            token_provider = get_bearer_token_provider(
+                DefaultAzureCredential(),
+                "https://cognitiveservices.azure.com/.default",
+            )
+            self.client = OpenAI(api_key=token_provider, base_url=base_url)
 
     def recommend(self, summary: dict[str, Any]) -> RecommendationResponse:
         last_error: Exception | None = None
-        for _ in range(2):
+        for attempt in range(3):
             try:
                 response = self.client.chat.completions.create(
                     model=self.deployment,
                     response_format={"type": "json_object"},
-                    messages=[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": json.dumps(summary)}],
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": json.dumps(summary)},
+                    ],
                     temperature=0,
                 )
                 return parse_recommendations(response.choices[0].message.content or "")
-            except (ValueError, json.JSONDecodeError) as error:
+            except Exception as error:
                 last_error = error
-        raise ValueError("Azure OpenAI returned invalid recommendation JSON") from last_error
+                status_code = getattr(error, "status_code", None)
+                if status_code == 429 and attempt < 2:
+                    time.sleep(2**attempt)
+                    continue
+                if isinstance(error, (ValueError, json.JSONDecodeError)) and attempt < 2:
+                    time.sleep(0.5)
+                    continue
+                break
+        raise ValueError("Azure OpenAI failed after retries") from last_error
 
 
 def parse_recommendations(content: str) -> RecommendationResponse:
@@ -49,12 +73,24 @@ def parse_recommendations(content: str) -> RecommendationResponse:
     findings = payload.get("findings")
     if not isinstance(findings, list):
         raise ValueError("Response must contain a findings list")
-    allowed_categories = {"queue_capacity", "flaky_step", "regression", "parallelization_opportunity", "caching_opportunity", "other"}
+    allowed_categories = {
+        "queue_capacity",
+        "flaky_step",
+        "regression",
+        "parallelization_opportunity",
+        "caching_opportunity",
+        "other",
+    }
     allowed_severities = {"low", "medium", "high"}
     parsed = []
     for item in findings:
         required = {"category", "severity", "stage_name", "recommendation", "evidence"}
-        if not required.issubset(item) or item["category"] not in allowed_categories or item["severity"] not in allowed_severities:
+        if (
+            not isinstance(item, dict)
+            or not required.issubset(item)
+            or item["category"] not in allowed_categories
+            or item["severity"] not in allowed_severities
+        ):
             raise ValueError("Response finding does not match the required schema")
         parsed.append(Finding(**{key: item.get(key) for key in Finding.__dataclass_fields__}))
     return RecommendationResponse(findings=parsed)
