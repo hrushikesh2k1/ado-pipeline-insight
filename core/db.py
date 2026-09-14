@@ -209,7 +209,7 @@ class AlertRepository:
                 first.queue_time,
                 run_start_time,
                 run_finish_time,
-                first.result,
+                first.run_result or first.result,
                 1 if run_is_degraded else 0,
                 "degraded" if run_is_degraded else "complete",
 
@@ -222,7 +222,7 @@ class AlertRepository:
                 first.queue_time,
                 run_start_time,
                 run_finish_time,
-                first.result,
+                first.run_result or first.result,
                 1 if run_is_degraded else 0,
                 "degraded" if run_is_degraded else "complete",
             )

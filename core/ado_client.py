@@ -80,6 +80,7 @@ class AzureDevOpsClient:
         queue_time = _parse_datetime(build.get("queueTime"))
         source_branch = build.get("sourceBranch")
         source_version = build.get("sourceVersion")
+        run_result = build.get("result")
         requested_by = (build.get("requestedFor") or {}).get("displayName") if isinstance(build.get("requestedFor"), dict) else build.get("requestedFor")
         run_start_time = _parse_datetime(build.get("startTime"))
         run_finish_time = _parse_datetime(build.get("finishTime"))
@@ -133,6 +134,7 @@ class AzureDevOpsClient:
                     finish_time=_parse_datetime(record.get("finishTime")),
                     duration_seconds=_record_duration_seconds(record),
                     result=record.get("result"),
+                    run_result=run_result,
                     retry_count=_retry_count(record),
                     is_degraded=False,
                     data_quality="complete",

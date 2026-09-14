@@ -2,7 +2,7 @@ from core.ado_client import AzureDevOpsClient
 
 
 def test_flatten_timeline_derives_stage_job_and_task_names():
-    build = {"id": 42, "queueTime": "2026-08-01T10:00:00Z", "sourceBranch": "refs/heads/main", "sourceVersion": "abc123", "requestedFor": {"displayName": "Build User"}, "definition": {"id": 7, "name": "backend-ci"}}
+    build = {"id": 42, "result": "failed", "queueTime": "2026-08-01T10:00:00Z", "sourceBranch": "refs/heads/main", "sourceVersion": "abc123", "requestedFor": {"displayName": "Build User"}, "definition": {"id": 7, "name": "backend-ci"}}
     timeline = {"records": [
         {"id": "stage", "type": "Stage", "name": "Build", "duration": 600000, "result": "succeeded"},
         {"id": "job", "parentId": "stage", "type": "Job", "name": "Linux", "duration": 500000, "result": "succeeded"},
@@ -11,7 +11,7 @@ def test_flatten_timeline_derives_stage_job_and_task_names():
     metrics = AzureDevOpsClient("example", "test").flatten_timeline(build, timeline)
     task = next(metric for metric in metrics if metric.level == "task")
     assert (task.stage_name, task.job_name, task.task_name, task.retry_count, task.log_id) == ("Build", "Linux", "npm install", 1, 9)
-    assert (task.source_branch, task.source_version, task.requested_by) == ("refs/heads/main", "abc123", "Build User")
+    assert (task.source_branch, task.source_version, task.requested_by, task.run_result) == ("refs/heads/main", "abc123", "Build User", "failed")
 
 def test_flatten_timeline_carries_build_run_boundaries():
     build = {

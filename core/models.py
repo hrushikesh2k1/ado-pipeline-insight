@@ -28,6 +28,7 @@ class TimelineMetric:
     finish_time: datetime | None = None
     duration_seconds: float | None = None
     result: str | None = None
+    run_result: str | None = None
     retry_count: int = 0
     is_degraded: bool = False
     data_quality: str = "complete"
