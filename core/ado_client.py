@@ -4,6 +4,7 @@ import base64
 from datetime import datetime
 from typing import Any
 
+import logging
 import requests
 
 from core.models import TimelineMetric
@@ -39,6 +40,13 @@ class AzureDevOpsClient:
             timeout=30,
         )
         response.raise_for_status()
+        logging.warning(
+            "ADO_LIST_BUILDS_RESPONSE status=%s content_type=%s url=%s body=%r",
+            response.status_code,
+            response.headers.get("Content-Type"),
+            response.url,
+            response.text[:1000],
+        )
         return response.json().get("value", [])
 
 
