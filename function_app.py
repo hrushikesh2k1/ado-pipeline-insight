@@ -201,6 +201,7 @@ def get_recommendations(req: func.HttpRequest) -> func.HttpResponse:
     except Exception:
         logging.exception("get_recommendations failed")
         return func.HttpResponse("Unable to generate recommendations.", status_code=500)
+        
 @app.route(route="ingest_pipeline", methods=["POST"])
 def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
     """Initial historical ingestion for a user-selected ADO pipeline.

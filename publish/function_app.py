@@ -223,7 +223,7 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
         pipeline_id = int(body.get("pipeline_id"))
         days = int(body.get("days", 90))
         if not organization or not project:
-        return func.HttpResponse(
+            return func.HttpResponse(
             "organization and project are required.",
             status_code=400
         )
