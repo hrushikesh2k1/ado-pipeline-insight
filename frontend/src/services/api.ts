@@ -10,7 +10,7 @@ export const api = {
   options:()=>request<Options>('/api/v1/options'),
   summary:(pipelineId:number|null,days:number)=>request<Summary>(`/api/v1/summary?days=${days}${pipelineId?`&pipeline_id=${pipelineId}`:''}`),
   trends:(pipelineId:number|null,days:number)=>request<Trends>(`/api/v1/trends?days=${days}${pipelineId?`&pipeline_id=${pipelineId}`:''}`),
-  runs:(pipelineId:number|null,page=1)=>request<Runs>(`/api/v1/runs?page=${page}&page_size=25${pipelineId?`&pipeline_id=${pipelineId}`:''}`),
+  runs:(pipelineId:number|null,page=1)=>request<Runs>(`/api/v1/runs?page=${page}&page_size=100${pipelineId?`&pipeline_id=${pipelineId}`:''}`),
   recommendations:(pipelineId:number)=>request<{pipeline_id:number;findings:Recommendation[]}>(`/api/v1/pipelines/${pipelineId}/recommendations`),
   runAnalysis:(runId:number)=>request<RunAnalysis>(`/api/v1/runs/${runId}/analysis`),
   connectAdo:(organization:string)=>request<AdoConnection>('/api/v1/ado/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({organization})}),
