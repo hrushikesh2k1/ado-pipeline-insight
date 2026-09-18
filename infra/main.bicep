@@ -50,6 +50,7 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
         { name: 'KEY_VAULT_URL', value: keyVault.properties.vaultUri }
         { name: 'ADO_PAT_SECRET_NAME', value: 'ado-pat' }
+          { name: 'SQL_CONNECTION_SECRET_NAME', value: sqlConnectionSecretName }
         { name: 'AZURE_OPENAI_ENDPOINT', value: azureOpenAiEndpoint }
         { name: 'AZURE_OPENAI_DEPLOYMENT', value: azureOpenAiDeployment }
       ]

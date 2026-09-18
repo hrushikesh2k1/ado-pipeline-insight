@@ -19,6 +19,7 @@ load_dotenv(os.path.join(PROJECT_ROOT, "backend", ".env"))
 class Settings:
     sql_connection_string: str
     ado_pat_secret_name: str
+    sql_connection_secret_name: str
     ado_pat_secret_template: str | None
     key_vault_url: str | None
     azure_openai_endpoint: str
@@ -29,8 +30,18 @@ class Settings:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
+    sql_connection_string = os.environ.get("SQL_CONNECTION_STRING", "")
+    sql_connection_secret_name = os.environ.get("SQL_CONNECTION_SECRET_NAME", "sql-connection-string")
+    key_vault_url = os.environ.get("KEY_VAULT_URL")
+    if key_vault_url and sql_connection_string.startswith("@Microsoft.KeyVault("):
+        sql_connection_string = SecretClient(
+            vault_url=key_vault_url,
+            credential=DefaultAzureCredential(),
+        ).get_secret(sql_connection_secret_name).value
+
     return Settings(
-        sql_connection_string=os.environ["SQL_CONNECTION_STRING"],
+        sql_connection_string=sql_connection_string,
+        sql_connection_secret_name=sql_connection_secret_name,
         ado_pat_secret_name=os.environ.get("ADO_PAT_SECRET_NAME", "ado-pat"),
         ado_pat_secret_template=os.environ.get("ADO_PAT_SECRET_TEMPLATE") or None,
         key_vault_url=os.environ.get("KEY_VAULT_URL"),
