@@ -14,26 +14,29 @@ class AlertRepository:
 
     def _connect(self):
         try:
-            import pyodbc
+            import pymssql
         except ImportError as error:
             raise RuntimeError(
-                "pyodbc is not available in the function runtime. "
+                "pymssql is not available in the function runtime. "
                 "Ensure dependency install succeeded."
             ) from error
 
-        # Normalize common SQL Server connection-string aliases.
-        connection_string = self.connection_string
-        connection_string = connection_string.replace("User ID=", "UID=")
-        connection_string = connection_string.replace("Username=", "UID=")
-        connection_string = connection_string.replace("Password=", "PWD=")
+        options = _parse_connection_string(self.connection_string)
 
         try:
-            return pyodbc.connect(connection_string, timeout=30)
+            return pymssql.connect(
+                server=options["server"],
+                port=options["port"],
+                user=options["user"],
+                password=options["password"],
+                database=options["database"],
+                login_timeout=options["timeout"],
+                as_dict=False,
+            )
         except Exception as error:
             raise RuntimeError(
-                f"Unable to connect to SQL with configured ODBC settings. {error}"
+                f"Unable to connect to SQL with configured connection settings. {error}"
             ) from error
-
     def upsert_metrics(self, metrics: Iterable[TimelineMetric]) -> None:
         metrics = list(metrics)
 
@@ -64,36 +67,40 @@ class AlertRepository:
             cursor.execute(
                 """
                 EXEC dbo.UpsertPipeline
-                    @pipeline_id=?,
-                    @pipeline_name=?,
-                    @organization_name=?,
-                    @project_name=?
+                    @pipeline_id=%s,
+                    @pipeline_name=%s,
+                    @organization_name=%s,
+                    @project_name=%s
                 """,
-                first.pipeline_id,
-                first.pipeline_name,
-                first.organization_name,
-                first.project_name,
+                (
+                    first.pipeline_id,
+                    first.pipeline_name,
+                    first.organization_name,
+                    first.project_name,
+                ),
             )
 
             cursor.execute(
                 """
                 UPDATE dbo.pipelines
                 SET
-                    pipeline_name = ?,
+                    pipeline_name = %s,
                     organization_name = COALESCE(
-                        ?,
+                        %s,
                         organization_name
                     ),
                     project_name = COALESCE(
-                        ?,
+                        %s,
                         project_name
                     )
-                WHERE pipeline_id = ?
+                WHERE pipeline_id = %s
                 """,
-                first.pipeline_name,
-                first.organization_name,
-                first.project_name,
-                first.pipeline_id,
+                (
+                    first.pipeline_name,
+                    first.organization_name,
+                    first.project_name,
+                    first.pipeline_id,
+                ),
             )
 
             # ---------------------------------------------------------
@@ -126,47 +133,47 @@ class AlertRepository:
                 MERGE dbo.pipeline_runs AS target
 
                 USING (
-                    SELECT ? AS run_id
+                    SELECT %s AS run_id
                 ) AS source
 
                 ON target.run_id = source.run_id
 
                 WHEN MATCHED THEN
                     UPDATE SET
-                        pipeline_id = ?,
+                        pipeline_id = %s,
                         source_branch = COALESCE(
-                            ?,
+                            %s,
                             target.source_branch
                         ),
                         source_version = COALESCE(
-                            ?,
+                            %s,
                             target.source_version
                         ),
                         requested_by = COALESCE(
-                            ?,
+                            %s,
                             target.requested_by
                         ),
 
                         -- Queue time can remain from the original
                         -- record if the new value is unavailable.
                         queue_time = COALESCE(
-                            ?,
+                            %s,
                             target.queue_time
                         ),
 
                         -- IMPORTANT:
                         -- Always replace old timestamps when the
                         -- ADO timeline supplies them.
-                        start_time = ?,
-                        finish_time = ?,
+                        start_time = %s,
+                        finish_time = %s,
 
                         result = COALESCE(
-                            ?,
+                            %s,
                             target.result
                         ),
 
-                        is_degraded = ?,
-                        data_quality = ?
+                        is_degraded = %s,
+                        data_quality = %s
 
                 WHEN NOT MATCHED THEN
                     INSERT (
@@ -184,47 +191,45 @@ class AlertRepository:
                     )
 
                     VALUES (
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s
                     );
                 """,
 
                 # USING
-                first.run_id,
-
-                # UPDATE
-                first.pipeline_id,
-                first.source_branch,
-                first.source_version,
-                first.requested_by,
-                first.queue_time,
-                run_start_time,
-                run_finish_time,
-                first.run_result or first.result,
-                1 if run_is_degraded else 0,
-                "degraded" if run_is_degraded else "complete",
-
-                # INSERT
-                first.run_id,
-                first.pipeline_id,
-                first.source_branch,
-                first.source_version,
-                first.requested_by,
-                first.queue_time,
-                run_start_time,
-                run_finish_time,
-                first.run_result or first.result,
-                1 if run_is_degraded else 0,
-                "degraded" if run_is_degraded else "complete",
+                (
+                    first.run_id,
+                    first.pipeline_id,
+                    first.source_branch,
+                    first.source_version,
+                    first.requested_by,
+                    first.queue_time,
+                    run_start_time,
+                    run_finish_time,
+                    first.run_result or first.result,
+                    1 if run_is_degraded else 0,
+                    "degraded" if run_is_degraded else "complete",
+                    first.run_id,
+                    first.pipeline_id,
+                    first.source_branch,
+                    first.source_version,
+                    first.requested_by,
+                    first.queue_time,
+                    run_start_time,
+                    run_finish_time,
+                    first.run_result or first.result,
+                    1 if run_is_degraded else 0,
+                    "degraded" if run_is_degraded else "complete",
+                ),
             )
 
             # ---------------------------------------------------------
@@ -244,25 +249,25 @@ class AlertRepository:
                 cursor.execute(
                     """
                     DELETE FROM dbo.pipeline_tasks
-                    WHERE run_id = ?
+                    WHERE run_id = %s
                     """,
-                    first.run_id,
+                    (first.run_id,),
                 )
 
                 cursor.execute(
                     """
                     DELETE FROM dbo.pipeline_jobs
-                    WHERE run_id = ?
+                    WHERE run_id = %s
                     """,
-                    first.run_id,
+                    (first.run_id,),
                 )
 
                 cursor.execute(
                     """
                     DELETE FROM dbo.pipeline_stages
-                    WHERE run_id = ?
+                    WHERE run_id = %s
                     """,
-                    first.run_id,
+                    (first.run_id,),
                 )
 
             # ---------------------------------------------------------
@@ -287,7 +292,7 @@ class AlertRepository:
                         stage_name
                     """
 
-                    insert_values = "?"
+                    insert_values = "%s"
 
                     hierarchy_values = [
                         metric.stage_name
@@ -305,7 +310,7 @@ class AlertRepository:
                         job_name
                     """
 
-                    insert_values = "?, ?"
+                    insert_values = "%s, %s"
 
                     hierarchy_values = [
                         metric.stage_name,
@@ -326,7 +331,7 @@ class AlertRepository:
                         task_name
                     """
 
-                    insert_values = "?, ?, ?"
+                    insert_values = "%s, %s, %s"
 
                     hierarchy_values = [
                         metric.stage_name,
@@ -357,33 +362,36 @@ class AlertRepository:
                     )
                     VALUES
                     (
-                        ?,
-                        ?,
+                        %s,
+                        %s,
                         {insert_values},
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?,
-                        ?
-                    )
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s,
+                        %s
+                        )
                     """,
 
-                    metric.run_id,
-                    metric.record_id,
-                    *hierarchy_values,
-                    metric.agent_name,
-                    metric.start_time,
-                    metric.finish_time,
-                    metric.duration_seconds,
-                    metric.result,
-                    metric.retry_count,
-                    metric.failure_log_excerpt,
-                    1 if metric.is_degraded else 0,
-                    metric.data_quality,
+                        (
+                            metric.run_id,
+                            metric.record_id,
+                            *hierarchy_values,
+                            metric.agent_name,
+                            metric.start_time,
+                            metric.finish_time,
+                            metric.duration_seconds,
+                            metric.result,
+                            metric.retry_count,
+                            metric.failure_log_excerpt,
+                            1 if metric.is_degraded else 0,
+                            metric.data_quality,
+                        ),
                 )
 
             # ---------------------------------------------------------
@@ -450,28 +458,38 @@ class AlertRepository:
             LEFT JOIN pipeline_stages s ON s.run_id = r.run_id
             LEFT JOIN pipeline_jobs j ON j.run_id = r.run_id AND j.stage_name = s.stage_name
             LEFT JOIN pipeline_tasks t ON t.run_id = r.run_id AND t.job_name = j.job_name AND t.stage_name = j.stage_name
-            WHERE r.pipeline_id = ? AND r.start_time >= ?
+            WHERE r.pipeline_id = %s AND r.start_time >= %s
         """
         with self._connect() as connection:
             cursor = connection.cursor()
-            columns = [column[0] for column in cursor.execute(query, pipeline_id, start).description]
+            cursor.execute(query, (pipeline_id, start))
+            columns = [column[0] for column in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def count_runs(self, pipeline_id: int, days: int = 30) -> int:
         start = datetime.now(timezone.utc) - timedelta(days=days)
         with self._connect() as connection:
-            return connection.execute("SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_id=? AND start_time>=?", pipeline_id, start).fetchval()
+            cursor = connection.cursor()
+            cursor.execute("SELECT COUNT(*) FROM pipeline_runs WHERE pipeline_id=%s AND start_time>=%s", (pipeline_id, start))
+            return cursor.fetchone()[0]
 
     def upsert_recommendations(self, pipeline_id: int, findings: list[dict[str, Any]]) -> None:
         with self._connect() as connection:
             cursor = connection.cursor()
-            cursor.execute("DELETE FROM ai_recommendations WHERE pipeline_id=?", pipeline_id)
+            cursor.execute("DELETE FROM ai_recommendations WHERE pipeline_id=%s", (pipeline_id,))
             for finding in findings:
                 cursor.execute(
                     """INSERT INTO ai_recommendations (pipeline_id, category, severity, stage_name, task_name, recommendation, evidence, generated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, SYSUTCDATETIME())""",
-                    pipeline_id, finding["category"], finding["severity"], finding["stage_name"], finding.get("task_name"),
-                    finding["recommendation"], finding["evidence"],
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, SYSUTCDATETIME())""",
+                    (
+                        pipeline_id,
+                        finding["category"],
+                        finding["severity"],
+                        finding["stage_name"],
+                        finding.get("task_name"),
+                        finding["recommendation"],
+                        finding["evidence"],
+                    ),
                 )
             connection.commit()
 
@@ -482,17 +500,18 @@ class AlertRepository:
                    total_runs_count, successful_runs_count, failed_runs_count,
                    change_failure_rate_pct, avg_lead_time_seconds, avg_execution_duration_seconds
             FROM dbo.vw_dora_metrics
-            WHERE metric_date >= CAST(? AS date)
+            WHERE metric_date >= CAST(%s AS date)
         """
         params: list[Any] = [start]
         if pipeline_id is not None:
-            base_query += " AND pipeline_id = ?"
+            base_query += " AND pipeline_id = %s"
             params.append(pipeline_id)
         base_query += " ORDER BY metric_date DESC"
 
         with self._connect() as connection:
             cursor = connection.cursor()
-            columns = [col[0] for col in cursor.execute(base_query, *params).description]
+            cursor.execute(base_query, tuple(params))
+            columns = [col[0] for col in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def get_agent_pool_stats(self, days: int = 30) -> list[dict[str, Any]]:
@@ -501,24 +520,26 @@ class AlertRepository:
             SELECT metric_date, pool_name, total_runs, total_jobs,
                    avg_job_duration_seconds, avg_queue_wait_seconds, active_agents_count
             FROM dbo.vw_agent_pool_saturation
-            WHERE metric_date >= CAST(? AS date)
+            WHERE metric_date >= CAST(%s AS date)
             ORDER BY metric_date DESC, total_jobs DESC
         """
         with self._connect() as connection:
             cursor = connection.cursor()
-            columns = [col[0] for col in cursor.execute(query, start).description]
+            cursor.execute(query, (start,))
+            columns = [col[0] for col in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def get_failure_clusters(self, limit: int = 50) -> list[dict[str, Any]]:
         query = """
-            SELECT TOP (?) cluster_id, signature_hash, error_pattern, first_seen_at,
+            SELECT TOP (%s) cluster_id, signature_hash, error_pattern, first_seen_at,
                    last_seen_at, occurrences_count, severity, root_cause_summary, suggested_yaml_diff
             FROM dbo.failure_clusters
             ORDER BY last_seen_at DESC, occurrences_count DESC
         """
         with self._connect() as connection:
             cursor = connection.cursor()
-            columns = [col[0] for col in cursor.execute(query, limit).description]
+            cursor.execute(query, (limit,))
+            columns = [col[0] for col in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
     def get_paginated_runs(
@@ -533,10 +554,10 @@ class AlertRepository:
         params: list[Any] = []
 
         if status:
-            where_clauses.append("r.result = ?")
+            where_clauses.append("r.result = %s")
             params.append(status)
         if pipeline_id:
-            where_clauses.append("r.pipeline_id = ?")
+            where_clauses.append("r.pipeline_id = %s")
             params.append(pipeline_id)
 
         where_sql = " AND ".join(where_clauses)
@@ -550,12 +571,13 @@ class AlertRepository:
             JOIN dbo.pipelines p ON p.pipeline_id = r.pipeline_id
             WHERE {where_sql}
             ORDER BY r.start_time DESC
-            OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+            OFFSET %s ROWS FETCH NEXT %s ROWS ONLY
         """
         with self._connect() as connection:
             cursor = connection.cursor()
-            total_count = cursor.execute(count_query, *params).fetchval()
-            cursor.execute(data_query, *params, offset, page_size)
+            cursor.execute(count_query, tuple(params))
+            total_count = cursor.fetchone()[0]
+            cursor.execute(data_query, tuple([*params, offset, page_size]))
             columns = [col[0] for col in cursor.description]
             items = [dict(zip(columns, row)) for row in cursor.fetchall()]
             return {
@@ -566,6 +588,36 @@ class AlertRepository:
                 "items": items,
             }
 
+
+def _parse_connection_string(connection_string: str) -> dict[str, Any]:
+    """Parse an ADO.NET-style SQL Server connection string for pymssql."""
+    settings: dict[str, str] = {}
+    for part in connection_string.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        settings[key.strip().lower()] = value.strip()
+
+    server = (
+        settings.get("server")
+        or settings.get("data source")
+        or settings.get("addr")
+        or settings.get("address")
+        or ""
+    ).replace("tcp:", "").strip()
+    port = "1433"
+    if "," in server:
+        server, port = (part.strip() for part in server.split(",", 1))
+
+    return {
+        "server": server,
+        "port": port,
+        "user": settings.get("user id") or settings.get("uid") or settings.get("user") or "",
+        "password": settings.get("password") or settings.get("pwd") or "",
+        "database": settings.get("initial catalog") or settings.get("database") or "",
+        "timeout": int(settings.get("connection timeout", "30") or "30"),
+    }
 
 
 def build_analysis_summary(rows: list[dict[str, Any]], window_days: int = 30) -> dict[str, Any]:
