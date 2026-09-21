@@ -1,0 +1,28 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "git-commit-push-fix",
+			"type": "shell",
+			"command": "git add core/ado_client.py function_app.py && git commit -m \"Fix ingest_run null timeline log handling\" && git push",
+			"problemMatcher": []
+		},
+		{
+			"label": "commit-push-fix",
+			"type": "shell",
+			"command": "git add core/ado_client.py function_app.py; git commit -m \"Fix ingest_run null timeline log handling\"; git push",
+			"problemMatcher": []
+		},
+		{
+			"label": "git-stage-commit-push-dbpy",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-Command",
+				"Set-Location \"c:\\Users\\hboora\\Repos\\ado-pipeline-insight\"; git add core/db.py; git commit -m \"Fix timezone-aware datetime comparisons in recommendations\"; if ($LASTEXITCODE -eq 0) { git push origin main }"
+			],
+			"isBackground": false
+		}
+	]
+}

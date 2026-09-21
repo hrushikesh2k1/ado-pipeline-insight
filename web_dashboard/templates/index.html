@@ -1,0 +1,893 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ADO Pipeline Insight — Autonomous AI Enterprise Platform</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS, Lucide Icons, ECharts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            zinc: {
+              950: '#09090b',
+              900: '#121215',
+              850: '#18181b',
+              800: '#27272a',
+              700: '#3f3f46',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+
+  <style>
+    body {
+      background-color: #09090b;
+      color: #f4f4f5;
+      font-family: 'Inter', sans-serif;
+    }
+    .custom-scrollbar::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-track {
+      background: #121215;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+      background: #27272a;
+      border-radius: 3px;
+    }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+      background: #3f3f46;
+    }
+    .tab-active {
+      background-color: #27272a;
+      color: #fafafa;
+      border-color: #52525b;
+    }
+    .diff-add {
+      background-color: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+    }
+    .diff-del {
+      background-color: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col antialiased selection:bg-zinc-800 selection:text-zinc-100">
+
+  <!-- ========================================================================= -->
+  <!-- Top Global Header -->
+  <!-- ========================================================================= -->
+  <header class="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur sticky top-0 z-40 px-4 py-2.5 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <div class="w-7 h-7 rounded-md bg-gradient-to-tr from-indigo-500 to-violet-500 flex items-center justify-center font-bold text-white text-xs shadow-lg shadow-indigo-500/20">
+          ⚡
+        </div>
+        <span class="font-semibold text-sm tracking-tight text-zinc-100">ADO Pipeline Insight</span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 font-mono font-medium border border-zinc-700/60">ENTERPRISE</span>
+      </div>
+
+      <div class="h-4 w-[1px] bg-zinc-800 mx-1"></div>
+
+      <!-- Quick Command Bar Trigger -->
+      <button onclick="openCommandPalette()" class="flex items-center gap-2 px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 rounded-md transition-all shadow-sm">
+        <i data-lucide="search" class="w-3.5 h-3.5"></i>
+        <span>Search runs, pipelines, commands...</span>
+        <kbd class="font-mono text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded border border-zinc-700">Cmd+K</kbd>
+      </button>
+    </div>
+
+    <!-- Right Controls: Cascading Selectors & Global Status -->
+    <div class="flex items-center gap-2.5 text-xs">
+      <div class="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 rounded-md px-2 py-1">
+        <span class="text-zinc-400 text-[11px]">Org:</span>
+        <select id="orgSelect" onchange="onOrgChange()" class="bg-transparent text-zinc-200 font-medium focus:outline-none cursor-pointer text-xs"></select>
+      </div>
+
+      <div class="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 rounded-md px-2 py-1">
+        <span class="text-zinc-400 text-[11px]">Project:</span>
+        <select id="projectSelect" onchange="onProjectChange()" class="bg-transparent text-zinc-200 font-medium focus:outline-none cursor-pointer text-xs"></select>
+      </div>
+
+      <div class="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 rounded-md px-2 py-1">
+        <span class="text-zinc-400 text-[11px]">Pipeline:</span>
+        <select id="pipelineSelect" onchange="onPipelineChange()" class="bg-transparent text-zinc-200 font-medium focus:outline-none cursor-pointer text-xs max-w-[180px] truncate"></select>
+      </div>
+
+      <div class="flex items-center gap-1.5 bg-zinc-900 border border-zinc-800 rounded-md px-2 py-1">
+        <span class="text-zinc-400 text-[11px]">Window:</span>
+        <select id="monthsSelect" onchange="refreshAllData()" class="bg-transparent text-zinc-200 font-medium focus:outline-none cursor-pointer text-xs">
+          <option value="1">Last 1 Month</option>
+          <option value="3" selected>Last 3 Months</option>
+          <option value="6">Last 6 Months</option>
+          <option value="12">Last 1 Year</option>
+        </select>
+      </div>
+
+      <button onclick="refreshAllData()" id="refreshBtn" class="flex items-center gap-1.5 px-3 py-1 bg-zinc-100 hover:bg-white text-zinc-950 font-semibold rounded-md transition shadow text-xs">
+        <i data-lucide="refresh-cw" class="w-3 h-3"></i>
+        <span>Sync</span>
+      </button>
+
+      <div id="statusBadge" class="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-950/60 border border-emerald-800/60 text-emerald-400 font-mono text-[11px]">
+        <span id="statusIndicator" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+        <span id="statusText">CONNECTED</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ========================================================================= -->
+  <!-- Navigation Tabs -->
+  <!-- ========================================================================= -->
+  <div class="border-b border-zinc-800/80 bg-zinc-950 px-4 flex items-center justify-between text-xs">
+    <div class="flex items-center gap-1 py-1.5">
+      <button onclick="switchTab('triage')" id="tabBtn-triage" class="tab-active flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium text-zinc-300 hover:text-white border border-transparent transition">
+        <i data-lucide="inbox" class="w-3.5 h-3.5 text-violet-400"></i>
+        <span>AI Diagnostics & Triage</span>
+        <span id="triageCountBadge" class="px-1.5 py-0.2 rounded-full bg-violet-500/20 text-violet-300 font-mono text-[10px] border border-violet-500/30">0</span>
+      </button>
+
+      <button onclick="switchTab('dora')" id="tabBtn-dora" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium text-zinc-400 hover:text-white border border-transparent transition">
+        <i data-lucide="bar-chart-3" class="w-3.5 h-3.5 text-blue-400"></i>
+        <span>DORA & SLA Governance</span>
+      </button>
+
+      <button onclick="switchTab('dag')" id="tabBtn-dag" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium text-zinc-400 hover:text-white border border-transparent transition">
+        <i data-lucide="git-commit" class="w-3.5 h-3.5 text-emerald-400"></i>
+        <span>Pipeline DAG & Bottlenecks</span>
+      </button>
+
+      <button onclick="switchTab('pools')" id="tabBtn-pools" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium text-zinc-400 hover:text-white border border-transparent transition">
+        <i data-lucide="server" class="w-3.5 h-3.5 text-amber-400"></i>
+        <span>Agent Pools & Capacity</span>
+      </button>
+
+      <button onclick="switchTab('runs')" id="tabBtn-runs" class="flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium text-zinc-400 hover:text-white border border-transparent transition">
+        <i data-lucide="terminal" class="w-3.5 h-3.5 text-cyan-400"></i>
+        <span>Run Explorer & Logs</span>
+      </button>
+    </div>
+
+    <div class="flex items-center gap-2 text-zinc-500 font-mono text-[11px]">
+      <span>Hotkeys: <kbd class="px-1 bg-zinc-900 border border-zinc-800 rounded">1</kbd>-<kbd class="px-1 bg-zinc-900 border border-zinc-800 rounded">5</kbd></span>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- Main Workspace Area -->
+  <!-- ========================================================================= -->
+  <main class="flex-1 p-4 max-w-[1600px] w-full mx-auto space-y-4">
+
+    <!-- TAB 1: AI FAILURE CLUSTER TRIAGE INBOX -->
+    <div id="tabContent-triage" class="space-y-4">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-semibold text-zinc-100 flex items-center gap-2">
+            <span>Autonomous Failure Diagnostics & AI Recommendations</span>
+            <span class="text-xs px-2 py-0.5 rounded bg-violet-950/60 border border-violet-800/60 text-violet-400 font-normal">Azure OpenAI</span>
+          </h2>
+          <p class="text-xs text-zinc-400" id="aiSubtitle">Select a pipeline to analyze telemetry or view cached AI optimizations.</p>
+        </div>
+        <button onclick="triggerAiAnalysis()" id="triggerAiBtn" class="flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-medium rounded-md shadow-lg shadow-violet-600/20 text-xs transition">
+          <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+          <span id="triggerAiText">Run Azure OpenAI Analysis</span>
+        </button>
+      </div>
+
+      <div id="aiClustersContainer" class="space-y-3">
+        <!-- Dynamically rendered AI Recommendations from Azure SQL & Azure OpenAI -->
+      </div>
+    </div>
+
+    <!-- TAB 2: DORA & SLA GOVERNANCE SCORECARDS -->
+    <div id="tabContent-dora" class="hidden space-y-4">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div class="border border-zinc-800 bg-zinc-900/90 rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between text-xs text-zinc-400">
+            <span class="font-medium">Total Runs Monitored</span>
+            <i data-lucide="activity" class="w-4 h-4 text-emerald-400"></i>
+          </div>
+          <div class="flex items-baseline gap-2">
+            <span id="doraTotalRuns" class="text-2xl font-bold font-mono text-zinc-100">-</span>
+            <span class="text-xs font-mono text-zinc-400">in window</span>
+          </div>
+          <div class="text-[11px] text-zinc-500 font-mono">Status: <span id="doraHealthBadge" class="text-emerald-400 font-semibold">Active</span></div>
+        </div>
+
+        <div class="border border-zinc-800 bg-zinc-900/90 rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between text-xs text-zinc-400">
+            <span class="font-medium">Average Duration (Lead Time)</span>
+            <i data-lucide="clock" class="w-4 h-4 text-blue-400"></i>
+          </div>
+          <div class="flex items-baseline gap-2">
+            <span id="doraAvgDuration" class="text-2xl font-bold font-mono text-zinc-100">-</span>
+          </div>
+          <div class="text-[11px] text-zinc-500 font-mono">P90 Duration: <span id="doraP90Duration" class="text-blue-400 font-semibold">-</span></div>
+        </div>
+
+        <div class="border border-zinc-800 bg-zinc-900/90 rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between text-xs text-zinc-400">
+            <span class="font-medium">Success / Pass Rate</span>
+            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-400"></i>
+          </div>
+          <div class="flex items-baseline gap-2">
+            <span id="doraSuccessRate" class="text-2xl font-bold font-mono text-zinc-100">-</span>
+          </div>
+          <div class="text-[11px] text-zinc-500 font-mono">Failed Runs: <span id="doraFailedCount" class="text-red-400 font-semibold">-</span></div>
+        </div>
+
+        <div class="border border-zinc-800 bg-zinc-900/90 rounded-lg p-3.5 space-y-2">
+          <div class="flex items-center justify-between text-xs text-zinc-400">
+            <span class="font-medium">Change Failure Rate</span>
+            <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400"></i>
+          </div>
+          <div class="flex items-baseline gap-2">
+            <span id="doraFailureRate" class="text-2xl font-bold font-mono text-zinc-100">-</span>
+          </div>
+          <div class="text-[11px] text-zinc-500 font-mono">Target: <span class="text-emerald-400 font-semibold">< 5.0%</span></div>
+        </div>
+      </div>
+
+      <!-- Percentile Curve & Trends (Apache ECharts) -->
+      <div class="border border-zinc-800 bg-zinc-900/90 rounded-lg p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-zinc-100">Live Azure DevOps Run Timing History</h3>
+          <span class="text-xs text-zinc-400 font-mono" id="chartSubtitle">Loaded from Azure SQL Database</span>
+        </div>
+        <div id="doraChart" class="w-full h-72"></div>
+      </div>
+    </div>
+
+    <!-- TAB 3: INTERACTIVE PIPELINE DAG & FLAME GRAPH -->
+    <div id="tabContent-dag" class="hidden space-y-4">
+      <div class="border border-zinc-800 bg-zinc-900/90 rounded-lg p-4 space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+              <span>Pipeline Stage Execution Waterfall & Bottlenecks</span>
+              <span id="dagSelectedRunBadge" class="text-xs px-2 py-0.5 rounded bg-zinc-800 font-mono text-zinc-300">Live Telemetry</span>
+            </h3>
+            <p class="text-xs text-zinc-400">Hierarchical breakdown of stage execution durations from Azure DevOps build history.</p>
+          </div>
+          <div class="flex items-center gap-2 text-xs font-mono">
+            <span class="flex items-center gap-1 text-emerald-400"><span class="w-2 h-2 rounded bg-emerald-400"></span> Succeeded</span>
+            <span class="flex items-center gap-1 text-red-400"><span class="w-2 h-2 rounded bg-red-400"></span> Bottleneck / Failed</span>
+          </div>
+        </div>
+
+        <!-- Visual Flow Canvas -->
+        <div id="dagCanvasContainer" class="bg-zinc-950 border border-zinc-800/80 rounded-lg p-6 overflow-x-auto custom-scrollbar">
+          <!-- Dynamically populated from real run stages -->
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 4: AGENT POOLS & CAPACITY HEATMAP -->
+    <div id="tabContent-pools" class="hidden space-y-4">
+      <div class="border border-zinc-800 bg-zinc-900/90 rounded-lg p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <div>
+            <h3 class="text-sm font-semibold text-zinc-100">Agent Pool Saturation & Runner Analytics</h3>
+            <p class="text-xs text-zinc-400">Real runner utilization and active build concurrency captured across Azure DevOps pipelines.</p>
+          </div>
+          <span id="poolCountBadge" class="text-xs font-mono text-zinc-400">Loading pools...</span>
+        </div>
+
+        <div id="poolsContainer" class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+          <!-- Dynamically populated from real agent pool stats -->
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 5: RUN EXPLORER & SPLIT TERMINAL LOG VIEWER -->
+    <div id="tabContent-runs" class="hidden space-y-4">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        
+        <!-- Left Column: Virtualized Run Inventory (5 cols) -->
+        <div class="lg:col-span-5 border border-zinc-800 bg-zinc-900/90 rounded-lg p-3.5 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-sm font-semibold text-zinc-100">Live Pipeline Runs</h3>
+            <span id="runInventoryCount" class="text-xs font-mono text-zinc-400">Loading...</span>
+          </div>
+          <div id="runListContainer" class="space-y-1.5 max-h-[520px] overflow-y-auto custom-scrollbar pr-1">
+            <!-- Dynamically populated runs from Azure SQL -->
+          </div>
+        </div>
+
+        <!-- Right Column: Split-Screen Terminal Log Viewer (7 cols) -->
+        <div class="lg:col-span-7 border border-zinc-800 bg-zinc-950 rounded-lg overflow-hidden flex flex-col font-mono text-xs">
+          <div class="bg-zinc-900 px-3.5 py-2 border-b border-zinc-800 flex items-center justify-between text-zinc-300">
+            <div class="flex items-center gap-2">
+              <i data-lucide="terminal" class="w-3.5 h-3.5 text-zinc-400"></i>
+              <span id="logViewerTitle">Terminal Log Inspector</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <input type="text" id="logSearchInput" placeholder="Filter regex..." oninput="filterLogs()" class="bg-zinc-950 border border-zinc-800 text-zinc-200 px-2 py-0.5 rounded text-[11px] focus:outline-none">
+              <button onclick="copyCurrentLog()" title="Copy log" class="hover:text-white"><i data-lucide="copy" class="w-3.5 h-3.5"></i></button>
+            </div>
+          </div>
+          <div id="terminalLogBody" class="p-4 bg-zinc-950 text-zinc-300 overflow-y-auto custom-scrollbar max-h-[480px] space-y-1 select-text">
+            <span class="text-zinc-600">// Select a run from the list to view failure log excerpts or build details.</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ========================================================================= -->
+  <!-- Global Command Palette Modal (Cmd+K) -->
+  <!-- ========================================================================= -->
+  <div id="commandModal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-start justify-center pt-24">
+    <div class="w-full max-w-xl bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl overflow-hidden font-sans">
+      <div class="flex items-center gap-2 px-3 border-b border-zinc-800">
+        <i data-lucide="search" class="w-4 h-4 text-zinc-400"></i>
+        <input type="text" id="commandInput" placeholder="Type a command or jump to tab..." class="w-full bg-transparent py-3 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none font-sans">
+        <kbd onclick="closeCommandPalette()" class="text-[10px] font-mono text-zinc-500 px-1.5 py-0.5 bg-zinc-800 rounded border border-zinc-700 cursor-pointer">ESC</kbd>
+      </div>
+      <div class="p-2 text-xs space-y-1 max-h-72 overflow-y-auto custom-scrollbar">
+        <div class="px-2 py-1 text-[10px] font-mono uppercase text-zinc-500 font-semibold">Navigation</div>
+        <button onclick="switchTab('triage'); closeCommandPalette();" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-zinc-800 flex items-center justify-between text-zinc-300">
+          <span class="flex items-center gap-2"><i data-lucide="inbox" class="w-3.5 h-3.5 text-violet-400"></i> Jump to AI Triage Inbox</span>
+          <kbd class="font-mono text-[10px] text-zinc-500">1</kbd>
+        </button>
+        <button onclick="switchTab('dora'); closeCommandPalette();" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-zinc-800 flex items-center justify-between text-zinc-300">
+          <span class="flex items-center gap-2"><i data-lucide="bar-chart-3" class="w-3.5 h-3.5 text-blue-400"></i> Jump to DORA & SLA Governance</span>
+          <kbd class="font-mono text-[10px] text-zinc-500">2</kbd>
+        </button>
+        <button onclick="switchTab('dag'); closeCommandPalette();" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-zinc-800 flex items-center justify-between text-zinc-300">
+          <span class="flex items-center gap-2"><i data-lucide="git-commit" class="w-3.5 h-3.5 text-emerald-400"></i> View Pipeline DAG Canvas</span>
+          <kbd class="font-mono text-[10px] text-zinc-500">3</kbd>
+        </button>
+        <button onclick="switchTab('pools'); closeCommandPalette();" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-zinc-800 flex items-center justify-between text-zinc-300">
+          <span class="flex items-center gap-2"><i data-lucide="server" class="w-3.5 h-3.5 text-amber-400"></i> Inspect Agent Pools</span>
+          <kbd class="font-mono text-[10px] text-zinc-500">4</kbd>
+        </button>
+        <button onclick="switchTab('runs'); closeCommandPalette();" class="w-full text-left px-2.5 py-1.5 rounded hover:bg-zinc-800 flex items-center justify-between text-zinc-300">
+          <span class="flex items-center gap-2"><i data-lucide="terminal" class="w-3.5 h-3.5 text-cyan-400"></i> Open Terminal Log Viewer</span>
+          <kbd class="font-mono text-[10px] text-zinc-500">5</kbd>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- Real Data Controller & Dynamic Bindings -->
+  <!-- ========================================================================= -->
+  <script>
+    let activeTab = 'triage';
+    let currentRawLogs = '';
+    let doraChartInstance = null;
+    let allPipelines = [];
+    let currentRuns = [];
+    let currentStageTrend = [];
+
+    document.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+      initKeyboardShortcuts();
+      initDoraChart();
+      loadAllOptions();
+    });
+
+    function initKeyboardShortcuts() {
+      document.addEventListener('keydown', (e) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+          e.preventDefault();
+          openCommandPalette();
+        } else if (e.key === 'Escape') {
+          closeCommandPalette();
+        } else if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+          if (e.key === '1') switchTab('triage');
+          if (e.key === '2') switchTab('dora');
+          if (e.key === '3') switchTab('dag');
+          if (e.key === '4') switchTab('pools');
+          if (e.key === '5') switchTab('runs');
+        }
+      });
+    }
+
+    function openCommandPalette() {
+      document.getElementById('commandModal').classList.remove('hidden');
+      document.getElementById('commandInput').focus();
+    }
+
+    function closeCommandPalette() {
+      document.getElementById('commandModal').classList.add('hidden');
+    }
+
+    function switchTab(tabId) {
+      activeTab = tabId;
+      ['triage', 'dora', 'dag', 'pools', 'runs'].forEach(t => {
+        const content = document.getElementById(`tabContent-${t}`);
+        const btn = document.getElementById(`tabBtn-${t}`);
+        if (t === tabId) {
+          content.classList.remove('hidden');
+          btn.classList.add('tab-active');
+        } else {
+          content.classList.add('hidden');
+          btn.classList.remove('tab-active');
+        }
+      });
+      if (tabId === 'dora' && doraChartInstance) {
+        setTimeout(() => doraChartInstance.resize(), 50);
+      }
+    }
+
+    // =======================================================================
+    // REAL DATA FETCHING & FILTER SYNCHRONIZATION
+    // =======================================================================
+
+    async function loadAllOptions() {
+      try {
+        const res = await fetch('/api/options');
+        if (!res.ok) throw new Error('Failed to load options');
+        const data = await res.json();
+        
+        const orgSelect = document.getElementById('orgSelect');
+        const projectSelect = document.getElementById('projectSelect');
+        const pipelineSelect = document.getElementById('pipelineSelect');
+        
+        allPipelines = data.pipelines || [];
+
+        // Orgs
+        const orgs = data.organizations || [];
+        orgSelect.innerHTML = orgs.map(o => `<option value="${o}">${o}</option>`).join('') || `<option value="">(All Orgs)</option>`;
+
+        // Projects
+        const projects = data.projects || [];
+        projectSelect.innerHTML = projects.map(p => `<option value="${p}">${p}</option>`).join('') || `<option value="">(All Projects)</option>`;
+
+        // Pipelines
+        populatePipelines();
+        refreshAllData();
+      } catch (err) {
+        console.error('Error loading options:', err);
+        document.getElementById('statusText').textContent = 'OFFLINE';
+        document.getElementById('statusBadge').className = 'flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-950/60 border border-red-800/60 text-red-400 font-mono text-[11px]';
+        document.getElementById('statusIndicator').className = 'w-1.5 h-1.5 rounded-full bg-red-400';
+      }
+    }
+
+    function onOrgChange() {
+      populatePipelines();
+      refreshAllData();
+    }
+
+    function onProjectChange() {
+      populatePipelines();
+      refreshAllData();
+    }
+
+    function onPipelineChange() {
+      refreshAllData();
+    }
+
+    function populatePipelines() {
+      const selectedOrg = document.getElementById('orgSelect').value;
+      const selectedProj = document.getElementById('projectSelect').value;
+      const pipelineSelect = document.getElementById('pipelineSelect');
+
+      let filtered = allPipelines;
+      if (selectedOrg) filtered = filtered.filter(p => p.organization_name === selectedOrg);
+      if (selectedProj) filtered = filtered.filter(p => p.project_name === selectedProj);
+
+      pipelineSelect.innerHTML = `<option value="">All Pipelines (${filtered.length})</option>` + 
+        filtered.map(p => `<option value="${p.pipeline_id}">${p.pipeline_name}</option>`).join('');
+    }
+
+    async function refreshAllData() {
+      const org = document.getElementById('orgSelect').value;
+      const proj = document.getElementById('projectSelect').value;
+      const pipelineId = document.getElementById('pipelineSelect').value;
+      const months = document.getElementById('monthsSelect').value || 3;
+
+      let queryParams = `months=${months}`;
+      if (org) queryParams += `&organization=${encodeURIComponent(org)}`;
+      if (proj) queryParams += `&project=${encodeURIComponent(proj)}`;
+      if (pipelineId) queryParams += `&pipeline_id=${pipelineId}`;
+
+      loadRealTrends(queryParams);
+      loadRealRuns(pipelineId);
+      loadRealAiRecommendations(pipelineId, months);
+      loadRealPoolStats();
+    }
+
+    async function loadRealTrends(queryParams) {
+      try {
+        const res = await fetch(`/api/trends?${queryParams}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        
+        currentRuns = data.build_trend || [];
+        currentStageTrend = data.stage_trend || [];
+
+        updateDoraScorecards(currentRuns);
+        updateTrendChart(currentRuns);
+        renderDagFromStages(currentStageTrend);
+      } catch (err) {
+        console.error('Trends error:', err);
+      }
+    }
+
+    function updateDoraScorecards(runs) {
+      const total = runs.length;
+      document.getElementById('doraTotalRuns').textContent = total;
+      
+      if (!total) {
+        document.getElementById('doraAvgDuration').textContent = '-';
+        document.getElementById('doraP90Duration').textContent = '-';
+        document.getElementById('doraSuccessRate').textContent = '-';
+        document.getElementById('doraFailedCount').textContent = '-';
+        document.getElementById('doraFailureRate').textContent = '-';
+        return;
+      }
+
+      const durations = runs.map(r => r.duration_seconds).filter(d => d !== null && !isNaN(d)).sort((a,b) => a-b);
+      const avg = durations.length ? Math.round(durations.reduce((a,b)=>a+b, 0) / durations.length) : 0;
+      const p90 = durations.length ? Math.round(durations[Math.floor(durations.length * 0.9)]) : 0;
+
+      const failed = runs.filter(r => r.result === 'failed').length;
+      const success = total - failed;
+      const successPct = Math.round((success / total) * 100);
+      const failPct = (100 - successPct).toFixed(1);
+
+      document.getElementById('doraAvgDuration').textContent = formatSeconds(avg);
+      document.getElementById('doraP90Duration').textContent = formatSeconds(p90);
+      document.getElementById('doraSuccessRate').textContent = `${successPct}%`;
+      document.getElementById('doraFailedCount').textContent = `${failed} runs`;
+      document.getElementById('doraFailureRate').textContent = `${failPct}%`;
+    }
+
+    function formatSeconds(sec) {
+      if (!sec) return '0s';
+      const m = Math.floor(sec / 60);
+      const s = Math.round(sec % 60);
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+
+    function updateTrendChart(runs) {
+      if (!doraChartInstance) return;
+      if (!runs.length) {
+        doraChartInstance.clear();
+        return;
+      }
+
+      // Group runs by date
+      const byDate = {};
+      runs.forEach(r => {
+        const d = r.run_date || 'Recent';
+        if (!byDate[d]) byDate[d] = [];
+        if (r.duration_seconds) byDate[d].push(r.duration_seconds);
+      });
+
+      const dates = Object.keys(byDate).sort();
+      const avgData = dates.map(d => {
+        const arr = byDate[d];
+        return Math.round(arr.reduce((a,b)=>a+b, 0) / arr.length);
+      });
+      const p90Data = dates.map(d => {
+        const arr = byDate[d].sort((a,b)=>a-b);
+        return Math.round(arr[Math.floor(arr.length * 0.9)] || arr[arr.length - 1]);
+      });
+
+      const option = {
+        tooltip: { trigger: 'axis', backgroundColor: '#18181b', borderColor: '#27272a', textStyle: { color: '#f4f4f5', fontSize: 12 } },
+        legend: { data: ['Average Duration', 'P90 Duration'], textStyle: { color: '#a1a1aa' }, top: 0 },
+        grid: { left: '3%', right: '4%', bottom: '12%', containLabel: true },
+        xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: '#3f3f46' } } },
+        yAxis: { type: 'value', name: 'Seconds', axisLine: { lineStyle: { color: '#3f3f46' } }, splitLine: { lineStyle: { color: '#27272a' } } },
+        dataZoom: [{ type: 'inside' }, { type: 'slider', bottom: 0, borderColor: '#27272a', fillerColor: 'rgba(99, 102, 241, 0.2)' }],
+        series: [
+          { name: 'Average Duration', type: 'line', smooth: true, data: avgData, itemStyle: { color: '#3b82f6' } },
+          { name: 'P90 Duration', type: 'line', smooth: true, data: p90Data, itemStyle: { color: '#8b5cf6' } }
+        ]
+      };
+      doraChartInstance.setOption(option);
+    }
+
+    async function loadRealRuns(pipelineId) {
+      try {
+        let url = '/api/v2/runs?page_size=50';
+        if (pipelineId) url += `&pipeline_id=${pipelineId}`;
+        const res = await fetch(url);
+        if (!res.ok) return;
+        const data = await res.json();
+        const runs = data.items || [];
+        document.getElementById('runInventoryCount').textContent = `${data.total_count || runs.length} Total Runs`;
+        renderRealRunsList(runs);
+        
+        // Auto-select first failed or first run for log viewer
+        if (runs.length) {
+          const firstFail = runs.find(r => r.result === 'failed') || runs[0];
+          selectRunForLogs(firstFail.run_id, firstFail.pipeline_name, firstFail.result === 'failed');
+        }
+      } catch (err) {
+        console.error('Error loading real runs:', err);
+      }
+    }
+
+    function renderRealRunsList(runs) {
+      const container = document.getElementById('runListContainer');
+      if (!runs.length) {
+        container.innerHTML = `<div class="text-xs text-zinc-500 py-6 text-center">No runs found in database for selected filter.</div>`;
+        return;
+      }
+      container.innerHTML = runs.map(run => {
+        const isFail = run.result === 'failed';
+        const statusBadge = isFail 
+          ? `<span class="px-1.5 py-0.5 rounded bg-red-950/80 border border-red-800/80 text-red-400 font-mono text-[10px]">FAILED</span>`
+          : `<span class="px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-800/80 text-emerald-400 font-mono text-[10px]">PASS</span>`;
+        return `
+          <div onclick="selectRunForLogs(${run.run_id}, '${escapeHtml(run.pipeline_name)}', ${isFail})" class="p-2.5 rounded bg-zinc-950 border border-zinc-800 hover:border-zinc-700 cursor-pointer transition flex items-center justify-between text-xs">
+            <div class="space-y-0.5 truncate max-w-[75%]">
+              <div class="flex items-center gap-2">
+                <span class="font-mono font-semibold text-zinc-200">#${run.run_id}</span>
+                <span class="text-zinc-300 truncate">${escapeHtml(run.pipeline_name)}</span>
+              </div>
+              <div class="text-[11px] text-zinc-500 font-mono">${run.source_branch || 'main'} • ${run.duration_seconds ? Math.round(run.duration_seconds) + 's' : 'complete'}</div>
+            </div>
+            ${statusBadge}
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function selectRunForLogs(runId, pipelineName, isFailed) {
+      document.getElementById('logViewerTitle').textContent = `Run #${runId} — ${pipelineName}`;
+      const terminal = document.getElementById('terminalLogBody');
+      terminal.innerHTML = `<span class="text-zinc-500">// Fetching live logs for Run #${runId}...</span>`;
+
+      try {
+        const res = await fetch(`/api/runs/${runId}/logs`);
+        if (res.ok) {
+          const data = await res.json();
+          currentRawLogs = data.log || `// No failure log captured for Run #${runId}`;
+        } else {
+          currentRawLogs = `// Run #${runId} (${isFailed ? 'FAILED' : 'SUCCEEDED'}). Logs archived in Azure DevOps.`;
+        }
+      } catch (e) {
+        currentRawLogs = `// Error fetching logs for Run #${runId}`;
+      }
+      renderFormattedLogs(currentRawLogs);
+
+      // Also fetch real timeline for this run if DAG is viewed
+      loadRunTimelineDag(runId, pipelineName);
+    }
+
+    async function loadRunTimelineDag(runId, pipelineName) {
+      try {
+        const res = await fetch(`/api/runs/${runId}/timeline`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.stages && data.stages.length) {
+            document.getElementById('dagSelectedRunBadge').textContent = `Run #${runId} (${pipelineName})`;
+            renderDagFromStages(data.stages);
+          }
+        }
+      } catch (e) {
+        console.warn('DAG load note:', e);
+      }
+    }
+
+    function renderDagFromStages(stages) {
+      const container = document.getElementById('dagCanvasContainer');
+      if (!stages || !stages.length) {
+        container.innerHTML = `<div class="text-xs text-zinc-500 py-6 text-center">No stage telemetry records available for this pipeline.</div>`;
+        return;
+      }
+
+      const stageItems = stages.map((s, idx) => {
+        const name = s.stage_name || `Stage ${idx+1}`;
+        const duration = s.avg_duration_seconds || s.duration_seconds || 0;
+        const isFailed = (s.result || '').toLowerCase() === 'failed';
+        const isDegraded = duration > 240; // flag long stages
+
+        const borderStyle = isFailed ? 'border-2 border-red-500/80 shadow-lg shadow-red-500/10' : (isDegraded ? 'border-amber-500/80' : 'border-zinc-800');
+        const badge = isFailed ? `<span class="text-[10px] text-red-400 font-mono">FAILED</span>` : (isDegraded ? `<span class="text-[10px] text-amber-400 font-mono">BOTTLENECK</span>` : `<span class="text-[10px] text-emerald-400 font-mono">${formatSeconds(duration)}</span>`);
+
+        return `
+          <div class="w-60 p-3.5 rounded-lg bg-zinc-900 ${borderStyle} space-y-2 shadow-md flex-shrink-0">
+            <div class="flex items-center justify-between text-xs font-semibold text-zinc-200">
+              <span class="truncate max-w-[130px]">${escapeHtml(name)}</span>
+              ${badge}
+            </div>
+            <div class="text-[11px] text-zinc-400 font-mono truncate">Agent: ${escapeHtml(s.agent_name || 'Azure Agent')}</div>
+            <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+              <div class="${isFailed ? 'bg-red-500' : (isDegraded ? 'bg-amber-500' : 'bg-emerald-500')} h-full w-full"></div>
+            </div>
+          </div>
+        `;
+      }).join('<div class="text-zinc-600 font-mono text-lg flex-shrink-0">──▶</div>');
+
+      container.innerHTML = `<div class="min-w-max flex items-center gap-4 py-2">${stageItems}</div>`;
+    }
+
+    async function loadRealAiRecommendations(pipelineId, months) {
+      const container = document.getElementById('aiClustersContainer');
+      const badge = document.getElementById('triageCountBadge');
+      
+      if (!pipelineId) {
+        document.getElementById('aiSubtitle').textContent = 'Showing organization-wide insights. Select a pipeline to generate custom AI recommendations.';
+      } else {
+        document.getElementById('aiSubtitle').textContent = `AI analysis active for selected pipeline (ID: ${pipelineId}).`;
+      }
+
+      try {
+        let url = `/api/recommendations?pipeline_id=${pipelineId || (allPipelines[0] ? allPipelines[0].pipeline_id : 1)}&months=${months}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('Failed to load AI recommendations');
+        const data = await res.json();
+        const findings = data.findings || [];
+
+        badge.textContent = findings.length;
+
+        if (!findings.length) {
+          container.innerHTML = `
+            <div class="border border-zinc-800 bg-zinc-900/50 rounded-lg p-8 text-center space-y-2">
+              <i data-lucide="check-circle-2" class="w-8 h-8 text-emerald-400 mx-auto"></i>
+              <div class="font-semibold text-zinc-200 text-sm">All Monitored Pipelines Operating Efficiently</div>
+              <p class="text-xs text-zinc-400">No duration regressions, failure clusters, or cache misses detected. Click "Run Azure OpenAI Analysis" to re-scan.</p>
+            </div>
+          `;
+          lucide.createIcons();
+          return;
+        }
+
+        container.innerHTML = findings.map((f, i) => {
+          const isHigh = f.severity === 'high';
+          const sevBadge = isHigh 
+            ? `<span class="px-2 py-0.5 rounded bg-red-950/80 border border-red-800/80 text-red-400 font-mono text-[11px] font-semibold">🔴 HIGH SEVERITY</span>`
+            : `<span class="px-2 py-0.5 rounded bg-amber-950/80 border border-amber-800/80 text-amber-400 font-mono text-[11px] font-semibold">🟡 MEDIUM</span>`;
+
+          return `
+            <div class="border border-zinc-800 bg-zinc-900/90 rounded-lg p-4 space-y-3 hover:border-zinc-700 transition">
+              <div class="flex items-start justify-between">
+                <div class="flex items-center gap-2.5">
+                  ${sevBadge}
+                  <span class="font-semibold text-sm text-zinc-100">${escapeHtml(f.stage_name || 'Stage')} • ${escapeHtml(f.task_name || f.category)}</span>
+                </div>
+                <span class="text-[11px] font-mono text-violet-400">Azure OpenAI Finding</span>
+              </div>
+
+              <div class="text-xs text-zinc-300 bg-zinc-950 p-3 rounded border border-zinc-800 font-sans space-y-1">
+                <div><strong class="text-violet-400">Recommendation:</strong> ${escapeHtml(f.recommendation)}</div>
+                <div class="text-zinc-400"><strong class="text-zinc-300">Metric Evidence:</strong> ${escapeHtml(f.evidence)}</div>
+              </div>
+            </div>
+          `;
+        }).join('');
+        lucide.createIcons();
+      } catch (err) {
+        console.warn('AI Recs load note:', err);
+      }
+    }
+
+    async function triggerAiAnalysis() {
+      const pipelineId = document.getElementById('pipelineSelect').value || (allPipelines[0] ? allPipelines[0].pipeline_id : null);
+      if (!pipelineId) {
+        alert('Please select a pipeline from the dropdown first.');
+        return;
+      }
+      const btn = document.getElementById('triggerAiBtn');
+      const text = document.getElementById('triggerAiText');
+      text.textContent = 'Analyzing Azure OpenAI...';
+      btn.disabled = true;
+
+      try {
+        const months = document.getElementById('monthsSelect').value || 3;
+        await loadRealAiRecommendations(pipelineId, months);
+        text.textContent = 'Analysis Complete';
+      } catch (e) {
+        text.textContent = 'Analysis Failed';
+      } finally {
+        setTimeout(() => {
+          text.textContent = 'Run Azure OpenAI Analysis';
+          btn.disabled = false;
+        }, 2000);
+      }
+    }
+
+    async function loadRealPoolStats() {
+      try {
+        const res = await fetch('/api/v2/pools');
+        if (!res.ok) return;
+        const data = await res.json();
+        const pools = data.pools || [];
+        document.getElementById('poolCountBadge').textContent = `${pools.length || 'Default'} Pools Monitored`;
+
+        const container = document.getElementById('poolsContainer');
+        if (!pools.length) {
+          container.innerHTML = `
+            <div class="p-4 rounded-lg bg-zinc-950 border border-zinc-800 space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="font-semibold text-sm text-zinc-100">Default-Agent-Pool</span>
+                <span class="text-xs px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-mono">Active</span>
+              </div>
+              <div class="text-xs text-zinc-400 font-mono">Running Azure DevOps pipeline jobs dynamically.</div>
+            </div>
+          `;
+          return;
+        }
+
+        container.innerHTML = pools.map(p => `
+          <div class="p-4 rounded-lg bg-zinc-950 border border-zinc-800 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="font-semibold text-sm text-zinc-100">${escapeHtml(p.pool_name || 'Agent Pool')}</span>
+              <span class="text-xs px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 font-mono">Healthy</span>
+            </div>
+            <div class="space-y-1 text-xs font-mono text-zinc-400">
+              <div class="flex justify-between"><span>Active Workers:</span><span class="text-zinc-200">${p.active_agents_count || 1} agents</span></div>
+              <div class="flex justify-between"><span>Avg Duration:</span><span class="text-zinc-200">${formatSeconds(p.avg_job_duration_seconds)}</span></div>
+              <div class="flex justify-between"><span>Total Jobs:</span><span class="text-zinc-200">${p.total_jobs || p.total_runs} jobs</span></div>
+            </div>
+          </div>
+        `).join('');
+      } catch (err) {
+        console.warn('Pools load note:', err);
+      }
+    }
+
+    function renderFormattedLogs(logText) {
+      const terminal = document.getElementById('terminalLogBody');
+      const lines = logText.split('\n');
+      terminal.innerHTML = lines.map((line, index) => {
+        let colorClass = 'text-zinc-300';
+        if (line.toLowerCase().includes('error') || line.toLowerCase().includes('failed') || line.toLowerCase().includes('fatal')) {
+          colorClass = 'text-red-400 font-semibold bg-red-950/30 px-1 rounded';
+        } else if (line.toLowerCase().includes('success') || line.toLowerCase().includes('succeeded')) {
+          colorClass = 'text-emerald-400 font-semibold';
+        }
+        return `<div class="flex gap-3"><span class="text-zinc-600 select-none text-[10px] w-6 text-right">${index + 1}</span><span class="${colorClass}">${escapeHtml(line)}</span></div>`;
+      }).join('');
+    }
+
+    function filterLogs() {
+      const term = document.getElementById('logSearchInput').value.toLowerCase();
+      if (!term) {
+        renderFormattedLogs(currentRawLogs);
+        return;
+      }
+      const filtered = currentRawLogs.split('\n').filter(l => l.toLowerCase().includes(term)).join('\n');
+      renderFormattedLogs(filtered || '// No matching log lines found.');
+    }
+
+    function initDoraChart() {
+      const chartDom = document.getElementById('doraChart');
+      if (!chartDom) return;
+      doraChartInstance = echarts.init(chartDom, 'dark', { backgroundColor: 'transparent' });
+    }
+
+    function copyCurrentLog() {
+      navigator.clipboard.writeText(currentRawLogs);
+      alert('Log excerpt copied to clipboard!');
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+  </script>
+</body>
+</html>

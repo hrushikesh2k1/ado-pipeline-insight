@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "dashboardAppName": {"value": "app-ado-pipeline-insight"},
+    "dashboardPlanName": {"value": "app-ado-pipeline-insight-plan"},
+    "skuName": {"value": "B1"},
+    "skuTier": {"value": "Basic"},
+    "keyVaultName": {"value": "<existing-key-vault>"},
+    "sqlConnectionSecretName": {"value": "sql-connection-string"},
+    "ingestFunctionSecretName": {"value": "ingest-function-url"},
+    "sqlServerName": {"value": "<existing-sql-server>"},
+    "azureOpenAiEndpoint": {"value": "https://<openai-account>.openai.azure.com/"},
+    "azureOpenAiDeployment": {"value": "<deployment-name>"},
+    "azureOpenAiAccountName": {"value": "openai2k1"},
+    "azureOpenAiResourceId": {"value": "/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<openai-account>"},
+    "adoPatSecretName": {"value": "ado-pat-cicd-analysis"},
+    "adoPatSecretTemplate": {"value": "ado-pat-{organization}"}
+  }
+}

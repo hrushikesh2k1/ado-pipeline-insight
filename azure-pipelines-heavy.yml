@@ -1,0 +1,270 @@
+trigger: none
+pr: none
+
+name: heavy-$(Date:yyyyMMdd)$(Rev:.r)
+
+variables:
+  PythonVersion: '3.11'
+  EnableChaos: 'true'
+  SimulatedWorkSeconds: '25'
+
+stages:
+- stage: Validate
+  displayName: Validate Inputs
+  jobs:
+  - job: ValidateYamlAndEnv
+    displayName: Validate YAML + Environment
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(PythonVersion)'
+    - script: |
+        echo "Checking python version"
+        python --version
+        echo "Checking optional files"
+        if [ -f requirements-dev.txt ]; then
+          echo "requirements-dev.txt found"
+        else
+          echo "requirements-dev.txt not found, will use fallback dependencies"
+        fi
+        if [ -f function_app.py ]; then
+          echo "function_app.py found"
+        else
+          echo "function_app.py not found, compile step will use repository-wide scan"
+        fi
+      displayName: Validate repo shape
+    - script: |
+        python -c "import json,pathlib; p=pathlib.Path('functions/local.settings.example.json'); p=p if p.exists() else pathlib.Path('local.settings.example.json'); print('No local.settings.example.json template found; continuing') if not p.exists() else print('Values keys:', sorted((json.loads(p.read_text(encoding='utf-8')).get('Values') or {}).keys()))"
+      displayName: Validate settings template
+
+- stage: Build
+  displayName: Build + Package
+  dependsOn: Validate
+  jobs:
+  - job: BuildArtifacts
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(PythonVersion)'
+    - script: |
+        python -m pip install --upgrade pip
+        if [ -f requirements-dev.txt ]; then
+          pip install -r requirements-dev.txt
+        elif [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        else
+          pip install pytest
+        fi
+      displayName: Install dependencies
+    - script: |
+        if [ -f function_app.py ]; then
+          python -m compileall core function_app.py
+        else
+          python -m compileall .
+        fi
+      displayName: Compile check
+    - script: |
+        mkdir -p out/package
+        if [ -d core ]; then cp -r core out/package/; fi
+        if [ -f function_app.py ]; then cp function_app.py out/package/; fi
+        if [ -f requirements-dev.txt ]; then cp requirements-dev.txt out/package/; fi
+        if [ -f requirements.txt ]; then cp requirements.txt out/package/; fi
+        tar -czf out/ado-insight-package.tgz -C out package
+      displayName: Create package
+    - publish: out
+      artifact: build-output
+
+- stage: Test
+  displayName: Unit + Integration + Chaos
+  dependsOn: Build
+  jobs:
+  - job: UnitTests
+    displayName: Unit tests
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(PythonVersion)'
+    - script: |
+        python -m pip install --upgrade pip
+        if [ -f requirements-dev.txt ]; then
+          pip install -r requirements-dev.txt
+        elif [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        else
+          pip install pytest
+        fi
+        if [ -f tests/test_ado_client.py ] && [ -f tests/test_openai_client.py ]; then
+          python -m pytest -q tests/test_ado_client.py tests/test_openai_client.py
+        else
+          echo "Focused unit tests not found; running synthetic unit workload"
+          python -c "import time; [print(f'unit-work-{i}') or time.sleep(1) for i in range(5)]"
+        fi
+      displayName: Run focused unit tests
+  - job: IntegrationSim
+    displayName: Integration simulation
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(PythonVersion)'
+    - script: |
+        python -m pip install --upgrade pip
+        if [ -f requirements-dev.txt ]; then
+          pip install -r requirements-dev.txt
+        elif [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        else
+          pip install pytest
+        fi
+        if [ -f tests/test_functions.py ] && [ -f tests/test_analyze_trends.py ]; then
+          python -m pytest -q tests/test_functions.py tests/test_analyze_trends.py
+        else
+          echo "Integration tests not found; running synthetic integration workload"
+          python -c "import time; [print(f'integration-work-{i}') or time.sleep(1) for i in range(8)]"
+        fi
+      displayName: Run integration tests
+  - job: ChaosAndLoad
+    displayName: Chaos + load simulation
+    pool:
+      vmImage: ubuntu-latest
+    timeoutInMinutes: 20
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(PythonVersion)'
+    - script: |
+        seconds="${SIM_WORK:-25}"
+        echo "Simulating CPU + IO work for ${seconds}s"
+        end=$((SECONDS + seconds))
+        n=0
+        while [ $SECONDS -lt $end ]; do
+          n=$((n + 1))
+          if [ $((n % 2)) -eq 0 ]; then
+            sleep 0.05
+          fi
+        done
+        echo "Work simulation complete ${n}"
+      env:
+        SIM_WORK: $(SimulatedWorkSeconds)
+      displayName: Simulated heavy work
+    - script: |
+        if [ "$(EnableChaos)" = "true" ]; then
+          echo "Injecting random failure to test recommendation accuracy"
+          python -c "import random,sys; fail=(random.random()<0.30); print('Chaos failure triggered' if fail else 'Chaos passed this run'); sys.exit(1 if fail else 0)"
+        else
+          echo "Chaos disabled"
+        fi
+      displayName: Chaos step
+      retryCountOnTaskFailure: 2
+
+- stage: SecurityAndQuality
+  displayName: Security + Quality Gates
+  dependsOn: Test
+  condition: succeededOrFailed()
+  jobs:
+  - job: LintAndBandit
+    displayName: Lint + security scan
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '$(PythonVersion)'
+    - script: |
+        python -m pip install --upgrade pip
+        if [ -f requirements-dev.txt ]; then
+          pip install -r requirements-dev.txt
+        elif [ -f requirements.txt ]; then
+          pip install -r requirements.txt
+        fi
+        pip install bandit flake8
+        if [ -d core ] || [ -f function_app.py ]; then
+          flake8 core function_app.py || true
+          bandit -q -r core function_app.py || true
+        else
+          echo "No core/function_app targets found; skipping lint/security target scan"
+        fi
+      displayName: Non-blocking lint/security scan
+
+- stage: ReleaseCandidate
+  displayName: Publish Release Candidate
+  dependsOn: SecurityAndQuality
+  condition: succeededOrFailed()
+  jobs:
+  - job: PublishRcArtifacts
+    displayName: Publish RC artifact and summary
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - download: current
+      artifact: build-output
+    - script: |
+        ls -R
+        echo "RC prepared. Attach this run telemetry to recommendation analysis."
+      displayName: Review artifacts
+
+- stage: DeployStaging
+  displayName: Deploy to Staging (simulated)
+  dependsOn: ReleaseCandidate
+  condition: succeededOrFailed()
+  jobs:
+  - deployment: DeployToStaging
+    displayName: Staging deployment
+    environment: ado-insight-staging
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: |
+              echo "Simulating staging deployment"
+              sleep 10
+              echo "Staging smoke test"
+              sleep 8
+            displayName: Simulate deploy + smoke
+
+- stage: PostDeployChecks
+  displayName: Post-deploy verification
+  dependsOn: DeployStaging
+  condition: succeededOrFailed()
+  jobs:
+  - job: PerformanceAndStability
+    displayName: Performance + stability checks
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - script: |
+        echo "Running synthetic performance checks"
+        sleep 12
+        echo "Running synthetic stability checks"
+        sleep 12
+      displayName: Simulated perf/stability
+
+- stage: DeployProd
+  displayName: Deploy to Production (manual gate)
+  dependsOn: PostDeployChecks
+  condition: succeededOrFailed()
+  jobs:
+  - deployment: DeployToProduction
+    displayName: Production deployment
+    environment: ado-insight-production
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - script: |
+              echo "Simulating production deployment"
+              sleep 10
+            displayName: Simulated production deploy

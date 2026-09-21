@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.venv-*/
+*.log
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+local.settings.json
+functions/local.settings.json
+backend/.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Build output
+out/
+package/
+*.zip
+*.tgz
+
+# IDE
+.vscode/*
+!.vscode/tasks.json
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+local.settings.json
+*.tsbuildinfo
