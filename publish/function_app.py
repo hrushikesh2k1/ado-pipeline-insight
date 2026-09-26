@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import azure.functions as func
 import requests
@@ -221,6 +222,9 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
         project = str(body.get("project", "")).strip()
         pipeline_id = int(body.get("pipeline_id"))
         days = int(body.get("days", 90))
+        raw_max_runs = body.get("max_runs")
+        # Meaningful limit: default 300 runs. <= 0 means uncapped (up to max_builds=5000)
+        max_runs = int(raw_max_runs) if raw_max_runs is not None else 300
 
         if not organization or not project:
             return func.HttpResponse(
@@ -241,33 +245,64 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
         if not pat:
             return func.HttpResponse("A PAT is required for Azure DevOps access.", status_code=401)
         client = AzureDevOpsClient(organization, pat)
+        max_builds = 5000 if max_runs <= 0 else max(600, max_runs * 2)
         builds = client.list_builds(
             project,
             pipeline_id=pipeline_id,
             min_time=datetime.now(timezone.utc) - timedelta(days=days),
             top=200,
-            max_builds=5000,
+            max_builds=max_builds,
         )
         completed = [b for b in builds if b.get("finishTime") and b.get("status") == "completed"]
+        total_completed_found = len(completed)
+        if max_runs > 0 and len(completed) > max_runs:
+            completed = completed[:max_runs]
+
         repository = AlertRepository(get_settings().sql_connection_string)
+
+        def process_build(build: dict) -> list[TimelineMetric]:
+            build_id = int(build["id"])
+            timeline = client.get_timeline(project, build_id)
+            metrics = client.flatten_timeline(build, timeline)
+            if not metrics:
+                return []
+            metrics = [m.__class__(**{**m.__dict__, "organization_name": organization, "project_name": project}) for m in metrics]
+            for i, metric in enumerate(metrics):
+                if metric.level == "task" and str(metric.result or "").lower() == "failed" and metric.log_id:
+                    try:
+                        metrics[i] = metric.__class__(**{**metric.__dict__, "failure_log_excerpt": client.get_log_tail(project, build_id, metric.log_id)})
+                    except requests.RequestException:
+                        logging.warning("Could not retrieve failure log for run %s", build_id)
+            return metrics
+
         total_records = 0
         processed = 0
-        for build in completed:
-            build_id = int(build["id"])
-            metrics = client.flatten_timeline(build, client.get_timeline(project, build_id))
-            if metrics:
-                metrics = [m.__class__(**{**m.__dict__, "organization_name": organization, "project_name": project}) for m in metrics]
-                for i, metric in enumerate(metrics):
-                    if metric.level == "task" and str(metric.result or "").lower() == "failed" and metric.log_id:
-                        try:
-                            metrics[i] = metric.__class__(**{**metric.__dict__, "failure_log_excerpt": client.get_log_tail(project, build_id, metric.log_id)})
-                        except requests.RequestException:
-                            logging.warning("Could not retrieve failure log for run %s", build_id)
-                repository.upsert_metrics(metrics)
-                total_records += len(metrics)
-                processed += 1
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_build = {executor.submit(process_build, b): b for b in completed}
+            for future in as_completed(future_to_build):
+                try:
+                    metrics = future.result()
+                    if metrics:
+                        repository.upsert_metrics(metrics)
+                        total_records += len(metrics)
+                        processed += 1
+                except Exception as exc:
+                    b_id = future_to_build[future].get("id")
+                    logging.warning("Could not ingest run %s: %s", b_id, exc)
+
         logging.info("ingest_pipeline completed: organization=%s project=%s pipeline_id=%s runs=%s records=%s", organization, project, pipeline_id, processed, total_records)
-        return func.HttpResponse(json.dumps({"organization": organization, "project": project, "pipeline_id": pipeline_id, "completed_runs_found": len(completed), "runs_ingested": processed, "records_upserted": total_records}), mimetype="application/json")
+        return func.HttpResponse(
+            json.dumps({
+                "organization": organization,
+                "project": project,
+                "pipeline_id": pipeline_id,
+                "completed_runs_found": total_completed_found,
+                "runs_ingested": processed,
+                "records_upserted": total_records,
+                "limit_applied": max_runs if max_runs > 0 and total_completed_found > max_runs else None,
+            }),
+            mimetype="application/json"
+        )
     except requests.HTTPError as exc:
         code = exc.response.status_code if exc.response is not None else 0
         return func.HttpResponse(f"Azure DevOps returned HTTP {code}.", status_code=502 if code not in {401,403} else 401)

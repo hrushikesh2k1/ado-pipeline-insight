@@ -24,7 +24,7 @@ def sql_rows(repo,run_id):
     with repo._connect() as c:
         cur=c.cursor(); out={}
         for level,table in [("stage","pipeline_stages"),("job","pipeline_jobs"),("task","pipeline_tasks")]:
-            cur.execute("SELECT record_id,stage_name,job_name,task_name,start_time,finish_time,duration_seconds,result,retry_count,is_degraded,data_quality FROM dbo."+table+" WHERE run_id=?",run_id)
+            cur.execute("SELECT record_id,stage_name,job_name,task_name,start_time,finish_time,duration_seconds,result,retry_count,is_degraded,data_quality FROM dbo."+table+" WHERE run_id=?",run_id)  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
             cols=[x[0] for x in cur.description]; out[level]=[dict(zip(cols,r)) for r in cur.fetchall()]
         cur.execute("SELECT run_id,pipeline_id,start_time,finish_time,result,is_degraded,data_quality FROM dbo.pipeline_runs WHERE run_id=?",run_id)
         cols=[x[0] for x in cur.description]; r=cur.fetchone(); out["run"]=dict(zip(cols,r)) if r else None

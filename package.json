@@ -1,0 +1,11 @@
+{
+  "name": "ado-pipeline-insight",
+  "private": true,
+  "scripts": {
+    "test": "npm --prefix frontend test",
+    "build": "npm --prefix frontend run build",
+    "test:e2e": "npm --prefix frontend run test:e2e",
+    "test:e2e:headed": "npm --prefix frontend run test:e2e:headed",
+    "test:e2e:ui": "npm --prefix frontend run test:e2e:ui"
+  }
+}

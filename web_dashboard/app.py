@@ -205,7 +205,7 @@ def _run_trend(months: int, pipeline_ids: list[int]) -> list[dict[str, Any]]:
         WHERE COALESCE(r.start_time, r.queue_time, r.finish_time) >= DATEADD(month, -?, SYSUTCDATETIME())
         {in_sql}
         ORDER BY COALESCE(r.start_time, r.queue_time, r.finish_time), r.run_id
-    """
+    """  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
     params: list[Any] = [months]
     params.extend(in_params)
     rows = _rows(query, tuple(params))
@@ -240,7 +240,7 @@ def _stage_trend(months: int, pipeline_ids: list[int]) -> list[dict[str, Any]]:
           {in_sql}
         GROUP BY CAST(COALESCE(r.start_time, r.queue_time, r.finish_time) AS date), s.stage_name
         ORDER BY run_date, s.stage_name
-    """
+    """  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
     params: list[Any] = [months]
     params.extend(in_params)
     rows = _rows(query, tuple(params))
@@ -281,7 +281,7 @@ def _delete_stale_runs(pipeline_id: int) -> dict[str, int]:
 
     placeholders = ",".join("?" for _ in stale_run_ids)
     for table in ["pipeline_tasks", "pipeline_jobs", "pipeline_stages", "pipeline_runs"]:
-        cursor.execute(f"DELETE FROM dbo.{table} WHERE run_id IN ({placeholders})", *stale_run_ids)
+        cursor.execute(f"DELETE FROM dbo.{table} WHERE run_id IN ({placeholders})", *stale_run_ids)  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
     connection.commit()
     return {"removed_runs": len(stale_run_ids)}
 

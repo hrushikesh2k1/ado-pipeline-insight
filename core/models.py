@@ -47,6 +47,7 @@ class Finding:
         "queue_capacity",
         "flaky_step",
         "regression",
+        "bottleneck",
         "parallelization_opportunity",
         "caching_opportunity",
         "other",

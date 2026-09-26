@@ -69,7 +69,7 @@ resource dashboardApp 'Microsoft.Web/sites@2023-12-01' = {
     siteConfig: {
       linuxFxVersion: 'PYTHON|3.11'
       alwaysOn: true
-      appCommandLine: 'python -m backend.app.main'
+      appCommandLine: 'python -m uvicorn app.main:app --host 0.0.0.0 --port 8000'
       healthCheckPath: '/api/v1/health'
       minTlsVersion: '1.2'
       appSettings: [
