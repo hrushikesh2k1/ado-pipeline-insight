@@ -28,7 +28,7 @@ stages:
         versionSpec: $(NodeVersion)
     - script: |
         cd frontend
-        npm install
+        npm ci
         npm run build
       displayName: Build React application
 
@@ -46,10 +46,10 @@ stages:
         versionSpec: $(PythonVersion)
     - script: |
         python -m pip install --upgrade pip
-        pip install -r backend/requirements.txt
-        pip install pytest
-        pytest -q backend/tests
-      displayName: Run backend tests
+        pip install -r requirements.txt
+        pip install -r quality_gate/requirements.txt
+        python quality_gate/run_all.py --ci
+      displayName: Quality gate (security, dependencies, lint, tests)
 
 - stage: Package
   displayName: Package dashboard
@@ -69,13 +69,13 @@ stages:
     - script: |
         python -m pip install --upgrade pip
         cd frontend
-        npm install
+        npm ci
         npm run build
         cd ..
         mkdir -p package/frontend
-        cp -r backend core package/
+        cp -r app core package/
         cp -r frontend/dist package/frontend/
-        cp backend/requirements.txt package/requirements.txt
+        cp requirements.txt package/requirements.txt
         cp host.json package/ 2>/dev/null || true
         cd package
         zip -r ../ado-pipeline-insight-dashboard.zip .

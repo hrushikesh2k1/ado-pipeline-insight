@@ -1,0 +1,4 @@
+# Dev-only tooling for the security scan test suite (tests/security/test_security_scan.py).
+# Not required to run the application itself.
+bandit==1.8.0
+pip-audit==2.7.3

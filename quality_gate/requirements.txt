@@ -1,0 +1,11 @@
+# Tooling for the quality gate. Dev-only; never deployed.
+# Install together with the app's own requirements: run.ps1 / run.sh do this for you.
+bandit==1.8.0
+pip-audit==2.7.3
+ruff==0.16.9
+radon==6.0.1
+vulture==2.16
+mypy==2.3.1
+pytest==8.3.4
+pytest-cov==7.1.0
+httpx>=0.27

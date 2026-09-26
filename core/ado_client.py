@@ -3,11 +3,13 @@ from __future__ import annotations
 import base64
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 import logging
 import requests
 
 from core.models import TimelineMetric
+from core.validation import validate_organization
 
 
 class AzureDevOpsClient:
@@ -16,7 +18,7 @@ class AzureDevOpsClient:
     api_version = "7.1"
 
     def __init__(self, organization: str, pat: str, session: requests.Session | None = None):
-        self.organization = organization
+        self.organization = validate_organization(organization)
         self.session = session or requests.Session()
         token = base64.b64encode(f":{pat}".encode("utf-8")).decode("ascii")
         self.session.headers.update({"Authorization": f"Basic {token}"})
@@ -26,7 +28,7 @@ class AzureDevOpsClient:
 
     def list_projects(self) -> list[dict[str, Any]]:
         response = self.session.get(
-            f"https://dev.azure.com/{self.organization}/_apis/projects",
+            f"https://dev.azure.com/{quote(self.organization, safe='')}/_apis/projects",
             params={"api-version": self.api_version, "$top": 200},
             timeout=30,
         )
@@ -218,7 +220,7 @@ class AzureDevOpsClient:
         return payload
 
     def _url(self, project: str, path: str) -> str:
-        return f"https://dev.azure.com/{self.organization}/{project}/{path}"
+        return f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{path}"
 
 
 def _parent_names(record: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> tuple[str | None, str | None]:

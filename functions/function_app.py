@@ -3,6 +3,7 @@ import logging
 import os
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import azure.functions as func
 import requests
@@ -12,6 +13,7 @@ from core.config import get_ado_pat, get_settings
 from core.db import AlertRepository, build_analysis_summary
 from core.models import TimelineMetric
 from core.openai_client import PipelineRecommendationClient
+from core.validation import validate_organization, validate_pat, validate_project
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 
@@ -20,13 +22,19 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.FUNCTION)
 def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
     try:
         payload = req.get_json()
+        if not isinstance(payload, dict):
+            return func.HttpResponse("Webhook body must be a JSON object.", status_code=400)
         resource = payload.get("resource", payload)
+        if not isinstance(resource, dict):
+            return func.HttpResponse("Webhook resource must be a JSON object.", status_code=400)
         organization = _extract_organization(payload, resource)
         organization_display = _extract_organization_display(payload, resource, organization)
         project = _extract_project(payload, resource)
         build_id = resource.get("id") or resource.get("buildId") or payload.get("runId")
         if not all([organization, project, build_id]):
             return func.HttpResponse("Webhook must include organization, project, and run/build ID.", status_code=400)
+        organization = validate_organization(str(organization))
+        project = validate_project(str(project))
         build_id_int = int(build_id)
         try:
             client = AzureDevOpsClient(organization, get_ado_pat(organization))
@@ -49,7 +57,7 @@ def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
                 if metric.level == "task" and metric.result == "failed" and metric.log_id:
                     metrics[index] = metric.__class__(**{**metric.__dict__, "failure_log_excerpt": client.get_log_tail(project, build_id_int, metric.log_id)})
         except requests.HTTPError as error:
-            status_code = (error.response.status_code if error.response else 0)
+            status_code = error.response.status_code if error.response is not None else 0
             # Expected ADO API failures degrade gracefully; unknown statuses should still fail loudly.
             if status_code in {401, 403, 404, 408, 429} or status_code >= 500:
                 logging.warning(
@@ -70,7 +78,7 @@ def ingest_run(req: func.HttpRequest) -> func.HttpResponse:
         AlertRepository(get_settings().sql_connection_string).upsert_metrics(metrics)
         logging.info("ingest_run completed", extra={"run_id": build_id, "metric_count": len(metrics)})
         return func.HttpResponse(json.dumps({"run_id": build_id, "records_upserted": len(metrics)}), mimetype="application/json")
-    except (ValueError, KeyError) as error:
+    except (ValueError, KeyError, TypeError) as error:
         return func.HttpResponse(str(error), status_code=400)
     except Exception:
         logging.exception("ingest_run failed")
@@ -185,6 +193,8 @@ def _parse_resource_datetime(value: str | None) -> datetime | None:
 def get_recommendations(req: func.HttpRequest) -> func.HttpResponse:
     try:
         body = req.get_json()
+        if not isinstance(body, dict):
+            return func.HttpResponse("Request body must be a JSON object.", status_code=400)
         pipeline_id = int(body["pipeline_id"])
         settings = get_settings()
         repository = AlertRepository(settings.sql_connection_string)
@@ -217,10 +227,16 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
         except json.JSONDecodeError as exc:
             logging.error("ingest_pipeline invalid JSON: %s", exc)
             return func.HttpResponse("Request body is not valid JSON.", status_code=400)
-        organization = str(body.get("organization", "")).strip()
-        project = str(body.get("project", "")).strip()
+        if not isinstance(body, dict):
+            return func.HttpResponse("Request body must be a JSON object.", status_code=400)
+        organization = validate_organization(str(body.get("organization", "")))
+        project = validate_project(str(body.get("project", "")))
         pipeline_id = int(body.get("pipeline_id"))
         days = int(body.get("days", 90))
+        raw_max_runs = body.get("max_runs")
+        max_runs = int(raw_max_runs) if raw_max_runs is not None else 300
+        if not 1 <= max_runs <= 5000:
+            return func.HttpResponse("max_runs must be between 1 and 5000.", status_code=400)
 
         if not organization or not project:
             return func.HttpResponse(
@@ -237,41 +253,73 @@ def ingest_pipeline(req: func.HttpRequest) -> func.HttpResponse:
         # The PAT is accepted only for this HTTPS request and is never written
         # to SQL or logs. Existing team-managed deployments still work when
         # the request omits it and Key Vault/env supplies the PAT.
-        pat = str(body.get("pat") or "").strip() or get_ado_pat(organization)
+        supplied_pat = str(body.get("pat") or "").strip()
+        pat = validate_pat(supplied_pat) if supplied_pat else get_ado_pat(organization)
         if not pat:
             return func.HttpResponse("A PAT is required for Azure DevOps access.", status_code=401)
         client = AzureDevOpsClient(organization, pat)
+        max_builds = 5000 if max_runs <= 0 else max(600, max_runs * 2)
         builds = client.list_builds(
             project,
             pipeline_id=pipeline_id,
             min_time=datetime.now(timezone.utc) - timedelta(days=days),
             top=200,
-            max_builds=5000,
+            max_builds=max_builds,
         )
         completed = [b for b in builds if b.get("finishTime") and b.get("status") == "completed"]
+        total_completed_found = len(completed)
+        if max_runs > 0 and len(completed) > max_runs:
+            completed = completed[:max_runs]
+
         repository = AlertRepository(get_settings().sql_connection_string)
+
+        def process_build(build: dict) -> list[TimelineMetric]:
+            build_id = int(build["id"])
+            timeline = client.get_timeline(project, build_id)
+            metrics = client.flatten_timeline(build, timeline)
+            if not metrics:
+                return []
+            metrics = [m.__class__(**{**m.__dict__, "organization_name": organization, "project_name": project}) for m in metrics]
+            for i, metric in enumerate(metrics):
+                if metric.level == "task" and str(metric.result or "").lower() == "failed" and metric.log_id:
+                    try:
+                        metrics[i] = metric.__class__(**{**metric.__dict__, "failure_log_excerpt": client.get_log_tail(project, build_id, metric.log_id)})
+                    except requests.RequestException:
+                        logging.warning("Could not retrieve failure log for run %s", build_id)
+            return metrics
+
         total_records = 0
         processed = 0
-        for build in completed:
-            build_id = int(build["id"])
-            metrics = client.flatten_timeline(build, client.get_timeline(project, build_id))
-            if metrics:
-                metrics = [m.__class__(**{**m.__dict__, "organization_name": organization, "project_name": project}) for m in metrics]
-                for i, metric in enumerate(metrics):
-                    if metric.level == "task" and str(metric.result or "").lower() == "failed" and metric.log_id:
-                        try:
-                            metrics[i] = metric.__class__(**{**metric.__dict__, "failure_log_excerpt": client.get_log_tail(project, build_id, metric.log_id)})
-                        except requests.RequestException:
-                            logging.warning("Could not retrieve failure log for run %s", build_id)
-                repository.upsert_metrics(metrics)
-                total_records += len(metrics)
-                processed += 1
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            future_to_build = {executor.submit(process_build, b): b for b in completed}
+            for future in as_completed(future_to_build):
+                try:
+                    metrics = future.result()
+                    if metrics:
+                        repository.upsert_metrics(metrics)
+                        total_records += len(metrics)
+                        processed += 1
+                except Exception as exc:
+                    b_id = future_to_build[future].get("id")
+                    logging.warning("Could not ingest run %s: %s", b_id, exc)
+
         logging.info("ingest_pipeline completed: organization=%s project=%s pipeline_id=%s runs=%s records=%s", organization, project, pipeline_id, processed, total_records)
-        return func.HttpResponse(json.dumps({"organization": organization, "project": project, "pipeline_id": pipeline_id, "completed_runs_found": len(completed), "runs_ingested": processed, "records_upserted": total_records}), mimetype="application/json")
+        return func.HttpResponse(
+            json.dumps({
+                "organization": organization,
+                "project": project,
+                "pipeline_id": pipeline_id,
+                "completed_runs_found": total_completed_found,
+                "runs_ingested": processed,
+                "records_upserted": total_records,
+                "limit_applied": max_runs if max_runs > 0 and total_completed_found > max_runs else None,
+            }),
+            mimetype="application/json"
+        )
     except requests.HTTPError as exc:
         code = exc.response.status_code if exc.response is not None else 0
         return func.HttpResponse(f"Azure DevOps returned HTTP {code}.", status_code=502 if code not in {401,403} else 401)
-    except (ValueError, KeyError) as exc:
+    except (ValueError, KeyError, TypeError) as exc:
         return func.HttpResponse(str(exc), status_code=400)
     except Exception:
         logging.exception("ingest_pipeline failed")

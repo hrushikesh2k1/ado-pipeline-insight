@@ -1,0 +1,15 @@
+[run]
+omit =
+    */venv/*
+    */.venv*/*
+    */tests/*
+    */quality_gate/*
+    */publish/*
+    */scratch/*
+    */functions/function_app.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError

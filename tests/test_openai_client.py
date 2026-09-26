@@ -1,7 +1,7 @@
 import pytest
 
 from core.openai_client import PipelineRecommendationClient, parse_recommendations
-from backend.app.services.ai_service import _telemetry_fallback
+from app.services.ai_service import _telemetry_fallback
 
 
 def test_parse_recommendations_validates_required_schema():

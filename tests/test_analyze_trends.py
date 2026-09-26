@@ -6,7 +6,7 @@ from core.db import build_analysis_summary
 def test_summary_filters_small_normal_tasks_and_calculates_deltas():
     now = datetime.now(timezone.utc)
     rows = []
-    for days, duration in [(3, 240), (10, 150)]:
+    for days, duration in [(2, 240), (3, 240), (9, 150), (11, 150)]:  # >=2 samples per week are required for a delta
         rows.append({"pipeline_name": "backend-ci", "stage_name": "Build", "task_name": "npm install", "duration_seconds": duration, "result": "succeeded", "retry_count": 0, "start_time": now - timedelta(days=days)})
         rows.append({"pipeline_name": "backend-ci", "stage_name": "Build", "task_name": "checkout", "duration_seconds": 3, "result": "succeeded", "retry_count": 0, "start_time": now - timedelta(days=days)})
     summary = build_analysis_summary(rows)

@@ -1,0 +1,50 @@
+# Quality gate configuration. Every threshold that decides PASS/FAIL lives here.
+
+[scope]
+# Python code that ships to Azure (backend, functions, web dashboard).
+production = ["app", "core", "functions", "function_app.py", "get_recommendations", "ingest_run", "web_dashboard"]
+# Helper scripts: linted and scanned, but not held to the production bar.
+extra = ["scripts"]
+requirements = ["requirements.txt", "requirements-backend.txt", "functions/requirements.txt"]
+unit_tests = "tests"
+unit_tests_ignore = ["tests/security"]
+
+[sast]
+# Bandit. Fail when a finding is at or above this severity (any confidence).
+fail_severity = "medium"
+warn_severity = "low"
+
+[dependencies]
+fail_on_any_python_vuln = true
+# Accepted risks. Each entry needs a reason and an expiry (ISO date); expired entries are ignored.
+# ignore = [{ id = "PYSEC-0000-0000", reason = "not reachable", expires = "2026-12-31" }]
+ignore = []
+npm_fail_severity = "high"      # npm audit on frontend/ (skipped when npm is unavailable)
+
+[coverage]
+# Deployed code only. web_dashboard (legacy Flask UI) is scanned and linted but not part of the coverage target.
+sources = ["app", "core", "function_app", "functions", "get_recommendations", "ingest_run"]
+fail_under = 70                 # overall line+branch coverage % for production code
+warn_under = 80
+
+[lint]
+# Ruff rule families that block the gate. Everything else is reported as advisory.
+blocking = ["F", "E9", "B", "PLE"]
+blocking_ignore = ["B905"]
+advisory = ["E", "W", "C4", "SIM", "UP", "PLR", "B905"]
+
+[complexity]
+fail_cc = 40                    # cyclomatic complexity of a single function (radon rank F)
+warn_cc = 15
+warn_function_lines = 120
+warn_file_lines = 900
+maintainability_warn = 20       # radon MI below this is hard to maintain
+dead_code_confidence = 80
+
+[types]
+blocking = false
+
+[azure]
+# Live-deployment posture checks. Run with --azure (needs `az login`); read-only calls only.
+webapps = [{ name = "app-ado-pipeline-insight-test", resource_group = "rg-ado-pipeline-insight-test" }]
+functionapps = [{ name = "func-pipeline-insight-test", resource_group = "rg-ado-pipeline-insight-test" }]

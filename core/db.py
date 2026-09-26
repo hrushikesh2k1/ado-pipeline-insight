@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -9,8 +8,13 @@ from core.models import TimelineMetric
 
 
 class AlertRepository:
+    _columns_ensured: bool = False
+
     def __init__(self, connection_string: str):
         self.connection_string = connection_string
+
+    def connect(self):
+        return self._connect()
 
     def _connect(self):
         try:
@@ -37,376 +41,385 @@ class AlertRepository:
             raise RuntimeError(
                 f"Unable to connect to SQL with configured connection settings. {error}"
             ) from error
-    def upsert_metrics(self, metrics: Iterable[TimelineMetric]) -> None:
+
+    def get_existing_run_ids(self, pipeline_id: int) -> set[int]:
+        try:
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT run_id FROM dbo.pipeline_runs WHERE pipeline_id = %s",
+                    (pipeline_id,),
+                )
+                return {int(row[0]) for row in cursor.fetchall()}
+        except Exception:
+            return set()
+
+    def upsert_metrics(self, metrics: Iterable[TimelineMetric], connection=None) -> None:
         metrics = list(metrics)
 
         if not metrics:
             return
 
-        with self._connect() as connection:
+        if connection is not None:
+            self._do_upsert_metrics(metrics, connection)
+        else:
+            with self._connect() as conn:
+                self._do_upsert_metrics(metrics, conn)
+
+    def _do_upsert_metrics(self, metrics: list[TimelineMetric], connection) -> None:
+        if not AlertRepository._columns_ensured:
             self._ensure_quality_columns(connection)
             self._ensure_pipeline_context_columns(connection)
+            AlertRepository._columns_ensured = True
 
-            cursor = connection.cursor()
-            first = metrics[0]
+        cursor = connection.cursor()
+        first = metrics[0]
 
-            # ---------------------------------------------------------
-            # Determine whether this is real Azure DevOps telemetry
-            # or degraded/fallback telemetry.
-            # ---------------------------------------------------------
 
-            run_is_degraded = any(
-                metric.is_degraded
-                for metric in metrics
-            )
+        # ---------------------------------------------------------
+        # Determine whether this is real Azure DevOps telemetry
+        # or degraded/fallback telemetry.
+        # ---------------------------------------------------------
 
-            # ---------------------------------------------------------
-            # Make sure the pipeline exists
-            # ---------------------------------------------------------
+        run_is_degraded = any(
+            metric.is_degraded
+            for metric in metrics
+        )
 
-            cursor.execute(
-                """
-                EXEC dbo.UpsertPipeline
-                    @pipeline_id=%s,
-                    @pipeline_name=%s,
-                    @organization_name=%s,
-                    @project_name=%s
-                """,
-                (
-                    first.pipeline_id,
-                    first.pipeline_name,
-                    first.organization_name,
-                    first.project_name,
+        # ---------------------------------------------------------
+        # Make sure the pipeline exists
+        # ---------------------------------------------------------
+
+        cursor.execute(
+            """
+            EXEC dbo.UpsertPipeline
+                @pipeline_id=%s,
+                @pipeline_name=%s,
+                @organization_name=%s,
+                @project_name=%s
+            """,
+            (
+                first.pipeline_id,
+                first.pipeline_name,
+                first.organization_name,
+                first.project_name,
+            ),
+        )
+
+        cursor.execute(
+            """
+            UPDATE dbo.pipelines
+            SET
+                pipeline_name = %s,
+                organization_name = COALESCE(
+                    %s,
+                    organization_name
                 ),
-            )
+                project_name = COALESCE(
+                    %s,
+                    project_name
+                )
+            WHERE pipeline_id = %s
+            """,
+            (
+                first.pipeline_name,
+                first.organization_name,
+                first.project_name,
+                first.pipeline_id,
+            ),
+        )
 
-            cursor.execute(
-                """
-                UPDATE dbo.pipelines
-                SET
-                    pipeline_name = %s,
-                    organization_name = COALESCE(
+        # ---------------------------------------------------------
+        # IMPORTANT:
+        #
+        # Azure DevOps build.startTime and build.finishTime are
+        # the source of truth for the pipeline run timestamps.
+        #
+        # Do NOT preserve an older SQL timestamp.
+        # ---------------------------------------------------------
+
+        run_start_time = (
+            first.run_start_time
+            if first.run_start_time is not None
+            else first.start_time
+        )
+
+        run_finish_time = (
+            first.run_finish_time
+            if first.run_finish_time is not None
+            else first.finish_time
+        )
+
+        # ---------------------------------------------------------
+        # Upsert pipeline_runs
+        # ---------------------------------------------------------
+
+        cursor.execute(
+            """
+            MERGE dbo.pipeline_runs AS target
+
+            USING (
+                SELECT %s AS run_id
+            ) AS source
+
+            ON target.run_id = source.run_id
+
+            WHEN MATCHED THEN
+                UPDATE SET
+                    pipeline_id = %s,
+                    source_branch = COALESCE(
                         %s,
-                        organization_name
+                        target.source_branch
                     ),
-                    project_name = COALESCE(
+                    source_version = COALESCE(
                         %s,
-                        project_name
+                        target.source_version
+                    ),
+                    requested_by = COALESCE(
+                        %s,
+                        target.requested_by
+                    ),
+
+                    -- Queue time can remain from the original
+                    -- record if the new value is unavailable.
+                    queue_time = COALESCE(
+                        %s,
+                        target.queue_time
+                    ),
+
+                    -- IMPORTANT:
+                    -- Always replace old timestamps when the
+                    -- ADO timeline supplies them.
+                    start_time = %s,
+                    finish_time = %s,
+
+                    result = COALESCE(
+                        %s,
+                        target.result
+                    ),
+
+                    is_degraded = %s,
+                    data_quality = %s,
+
+                    build_number = COALESCE(
+                        %s,
+                        target.build_number
                     )
-                WHERE pipeline_id = %s
-                """,
-                (
-                    first.pipeline_name,
-                    first.organization_name,
-                    first.project_name,
-                    first.pipeline_id,
-                ),
-            )
 
-            # ---------------------------------------------------------
-            # IMPORTANT:
-            #
-            # Azure DevOps build.startTime and build.finishTime are
-            # the source of truth for the pipeline run timestamps.
-            #
-            # Do NOT preserve an older SQL timestamp.
-            # ---------------------------------------------------------
+            WHEN NOT MATCHED THEN
+                INSERT (
+                    run_id,
+                    pipeline_id,
+                    source_branch,
+                    source_version,
+                    requested_by,
+                    queue_time,
+                    start_time,
+                    finish_time,
+                    result,
+                    is_degraded,
+                    data_quality,
+                    build_number
+                )
 
-            run_start_time = (
-                first.run_start_time
-                if first.run_start_time is not None
-                else first.start_time
-            )
+                VALUES (
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s
+                );
+            """,
 
-            run_finish_time = (
-                first.run_finish_time
-                if first.run_finish_time is not None
-                else first.finish_time
-            )
+            # USING
+            (
+                first.run_id,
+                first.pipeline_id,
+                first.source_branch,
+                first.source_version,
+                first.requested_by,
+                first.queue_time,
+                run_start_time,
+                run_finish_time,
+                first.run_result or first.result,
+                1 if run_is_degraded else 0,
+                "degraded" if run_is_degraded else "complete",
+                first.build_number,
+                first.run_id,
+                first.pipeline_id,
+                first.source_branch,
+                first.source_version,
+                first.requested_by,
+                first.queue_time,
+                run_start_time,
+                run_finish_time,
+                first.run_result or first.result,
+                1 if run_is_degraded else 0,
+                "degraded" if run_is_degraded else "complete",
+                first.build_number,
+            ),
+        )
 
-            # ---------------------------------------------------------
-            # Upsert pipeline_runs
-            # ---------------------------------------------------------
+        # ---------------------------------------------------------
+        # REAL ADO TIMELINE = SOURCE OF TRUTH
+        #
+        # Remove everything previously stored for this run.
+        #
+        # This is what removes things such as:
+        #
+        #     fallback-36
+        #
+        # before inserting the authoritative ADO timeline.
+        # ---------------------------------------------------------
+
+        if not run_is_degraded:
 
             cursor.execute(
                 """
-                MERGE dbo.pipeline_runs AS target
-
-                USING (
-                    SELECT %s AS run_id
-                ) AS source
-
-                ON target.run_id = source.run_id
-
-                WHEN MATCHED THEN
-                    UPDATE SET
-                        pipeline_id = %s,
-                        source_branch = COALESCE(
-                            %s,
-                            target.source_branch
-                        ),
-                        source_version = COALESCE(
-                            %s,
-                            target.source_version
-                        ),
-                        requested_by = COALESCE(
-                            %s,
-                            target.requested_by
-                        ),
-
-                        -- Queue time can remain from the original
-                        -- record if the new value is unavailable.
-                        queue_time = COALESCE(
-                            %s,
-                            target.queue_time
-                        ),
-
-                        -- IMPORTANT:
-                        -- Always replace old timestamps when the
-                        -- ADO timeline supplies them.
-                        start_time = %s,
-                        finish_time = %s,
-
-                        result = COALESCE(
-                            %s,
-                            target.result
-                        ),
-
-                        is_degraded = %s,
-                        data_quality = %s,
-
-                        build_number = COALESCE(
-                            %s,
-                            target.build_number
-                        )
-
-                WHEN NOT MATCHED THEN
-                    INSERT (
-                        run_id,
-                        pipeline_id,
-                        source_branch,
-                        source_version,
-                        requested_by,
-                        queue_time,
-                        start_time,
-                        finish_time,
-                        result,
-                        is_degraded,
-                        data_quality,
-                        build_number
-                    )
-
-                    VALUES (
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s
-                    );
+                DELETE FROM dbo.pipeline_tasks
+                WHERE run_id = %s
                 """,
-
-                # USING
-                (
-                    first.run_id,
-                    first.pipeline_id,
-                    first.source_branch,
-                    first.source_version,
-                    first.requested_by,
-                    first.queue_time,
-                    run_start_time,
-                    run_finish_time,
-                    first.run_result or first.result,
-                    1 if run_is_degraded else 0,
-                    "degraded" if run_is_degraded else "complete",
-                    first.build_number,
-                    first.run_id,
-                    first.pipeline_id,
-                    first.source_branch,
-                    first.source_version,
-                    first.requested_by,
-                    first.queue_time,
-                    run_start_time,
-                    run_finish_time,
-                    first.run_result or first.result,
-                    1 if run_is_degraded else 0,
-                    "degraded" if run_is_degraded else "complete",
-                    first.build_number,
-                ),
+                (first.run_id,),
             )
 
-            # ---------------------------------------------------------
-            # REAL ADO TIMELINE = SOURCE OF TRUTH
-            #
-            # Remove everything previously stored for this run.
-            #
-            # This is what removes things such as:
-            #
-            #     fallback-36
-            #
-            # before inserting the authoritative ADO timeline.
-            # ---------------------------------------------------------
+            cursor.execute(
+                """
+                DELETE FROM dbo.pipeline_jobs
+                WHERE run_id = %s
+                """,
+                (first.run_id,),
+            )
 
-            if not run_is_degraded:
+            cursor.execute(
+                """
+                DELETE FROM dbo.pipeline_stages
+                WHERE run_id = %s
+                """,
+                (first.run_id,),
+            )
 
-                cursor.execute(
-                    """
-                    DELETE FROM dbo.pipeline_tasks
-                    WHERE run_id = %s
-                    """,
-                    (first.run_id,),
+        # ---------------------------------------------------------
+        # Insert the current authoritative timeline
+        # ---------------------------------------------------------
+
+        for metric in metrics:
+
+            table = {
+                "stage": "pipeline_stages",
+                "job": "pipeline_jobs",
+                "task": "pipeline_tasks",
+            }[metric.level]
+
+            if metric.level == "stage":
+
+
+                insert_names = """
+                    stage_name
+                """
+
+                insert_values = "%s"
+
+                hierarchy_values = [
+                    metric.stage_name
+                ]
+
+            elif metric.level == "job":
+
+
+                insert_names = """
+                    stage_name,
+                    job_name
+                """
+
+                insert_values = "%s, %s"
+
+                hierarchy_values = [
+                    metric.stage_name,
+                    metric.job_name,
+                ]
+
+            else:
+
+                insert_names = """
+                    stage_name,
+                    job_name,
+                    task_name
+                """
+
+                insert_values = "%s, %s, %s"
+
+                hierarchy_values = [
+                    metric.stage_name,
+                    metric.job_name,
+                    metric.task_name,
+                ]
+
+            # -----------------------------------------------------
+            # Use record_id as the ADO timeline identity.
+            # -----------------------------------------------------
+
+            cursor.execute(
+                f"""
+                INSERT INTO dbo.{table}
+                (
+                    run_id,
+                    record_id,
+                    {insert_names},
+                    agent_name,
+                    start_time,
+                    finish_time,
+                    duration_seconds,
+                    result,
+                    retry_count,
+                    failure_log_excerpt,
+                    is_degraded,
+                    data_quality
                 )
-
-                cursor.execute(
-                    """
-                    DELETE FROM dbo.pipeline_jobs
-                    WHERE run_id = %s
-                    """,
-                    (first.run_id,),
-                )
-
-                cursor.execute(
-                    """
-                    DELETE FROM dbo.pipeline_stages
-                    WHERE run_id = %s
-                    """,
-                    (first.run_id,),
-                )
-
-            # ---------------------------------------------------------
-            # Insert the current authoritative timeline
-            # ---------------------------------------------------------
-
-            for metric in metrics:
-
-                table = {
-                    "stage": "pipeline_stages",
-                    "job": "pipeline_jobs",
-                    "task": "pipeline_tasks",
-                }[metric.level]
-
-                if metric.level == "stage":
-
-                    column_names = """
-                        stage_name
-                    """
-
-                    insert_names = """
-                        stage_name
-                    """
-
-                    insert_values = "%s"
-
-                    hierarchy_values = [
-                        metric.stage_name
-                    ]
-
-                elif metric.level == "job":
-
-                    column_names = """
-                        stage_name,
-                        job_name
-                    """
-
-                    insert_names = """
-                        stage_name,
-                        job_name
-                    """
-
-                    insert_values = "%s, %s"
-
-                    hierarchy_values = [
-                        metric.stage_name,
-                        metric.job_name,
-                    ]
-
-                else:
-
-                    column_names = """
-                        stage_name,
-                        job_name,
-                        task_name
-                    """
-
-                    insert_names = """
-                        stage_name,
-                        job_name,
-                        task_name
-                    """
-
-                    insert_values = "%s, %s, %s"
-
-                    hierarchy_values = [
-                        metric.stage_name,
-                        metric.job_name,
-                        metric.task_name,
-                    ]
-
-                # -----------------------------------------------------
-                # Use record_id as the ADO timeline identity.
-                # -----------------------------------------------------
-
-                cursor.execute(
-                    f"""
-                    INSERT INTO dbo.{table}
-                    (
-                        run_id,
-                        record_id,
-                        {insert_names},
-                        agent_name,
-                        start_time,
-                        finish_time,
-                        duration_seconds,
-                        result,
-                        retry_count,
-                        failure_log_excerpt,
-                        is_degraded,
-                        data_quality
+                VALUES
+                (
+                    %s,
+                    %s,
+                    {insert_values},
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s
                     )
-                    VALUES
+                """,  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
+
                     (
-                        %s,
-                        %s,
-                        {insert_values},
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s,
-                        %s
-                        )
-                    """,
+                        metric.run_id,
+                        metric.record_id,
+                        *hierarchy_values,
+                        metric.agent_name,
+                        metric.start_time,
+                        metric.finish_time,
+                        metric.duration_seconds,
+                        metric.result,
+                        metric.retry_count,
+                        metric.failure_log_excerpt,
+                        1 if metric.is_degraded else 0,
+                        metric.data_quality,
+                    ),
+            )
 
-                        (
-                            metric.run_id,
-                            metric.record_id,
-                            *hierarchy_values,
-                            metric.agent_name,
-                            metric.start_time,
-                            metric.finish_time,
-                            metric.duration_seconds,
-                            metric.result,
-                            metric.retry_count,
-                            metric.failure_log_excerpt,
-                            1 if metric.is_degraded else 0,
-                            metric.data_quality,
-                        ),
-                )
+        # ---------------------------------------------------------
+        # Commit everything together.
+        # ---------------------------------------------------------
 
-            # ---------------------------------------------------------
-            # Commit everything together.
-            # ---------------------------------------------------------
-
-            connection.commit()
+        connection.commit()
 
     @staticmethod
     def _ensure_quality_columns(connection) -> None:
@@ -576,7 +589,7 @@ class AlertRepository:
             params.append(pipeline_id)
 
         where_sql = " AND ".join(where_clauses)
-        count_query = f"SELECT COUNT(*) FROM dbo.pipeline_runs r WHERE {where_sql}"
+        count_query = f"SELECT COUNT(*) FROM dbo.pipeline_runs r WHERE {where_sql}"  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
         data_query = f"""
             SELECT r.run_id, r.pipeline_id, p.pipeline_name, p.organization_name, p.project_name,
                    r.source_branch, r.source_version, r.requested_by,
@@ -587,7 +600,7 @@ class AlertRepository:
             WHERE {where_sql}
             ORDER BY r.start_time DESC
             OFFSET %s ROWS FETCH NEXT %s ROWS ONLY
-        """
+        """  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
         with self._connect() as connection:
             cursor = connection.cursor()
             cursor.execute(count_query, tuple(params))
@@ -635,6 +648,49 @@ def _parse_connection_string(connection_string: str) -> dict[str, Any]:
     }
 
 
+def _extract_error_snippet(rows: list[dict[str, Any]], max_chars: int = 400) -> str | None:
+    """Extract a concise, high-signal error log snippet from failed run rows."""
+    candidates = []
+    for r in rows:
+        log = r.get("failure_log_excerpt")
+        if log and isinstance(log, str) and log.strip():
+            priority = 0 if r.get("result") == "failed" else 1
+            candidates.append((priority, log))
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda c: c[0])
+    raw_text = candidates[0][1]
+
+    lines = []
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("##[section]") or line.startswith("======================================"):
+            continue
+        if len(line) > 28 and line[10] == "T" and (line[27] == "Z" or line[28] == "Z"):
+            parts = line.split("Z ", 1)
+            if len(parts) == 2:
+                line = parts[1].strip()
+            elif line[27] == "Z":
+                line = line[28:].strip()
+        if line:
+            lines.append(line)
+
+    if not lines:
+        return None
+
+    error_keywords = ("error", "failed", "timeout", "exception", "fatal", "denied", "refused", "cannot", "not found", "err:", "stderr:", "exit code")
+    matched = [line for line in lines if any(kw in line.lower() for kw in error_keywords)]
+
+    chosen_lines = matched[-4:] if matched else lines[-4:]
+    snippet = " ".join(chosen_lines).strip()
+    if len(snippet) > max_chars:
+        snippet = snippet[:max_chars - 3] + "..."
+    return snippet or None
+
+
 def build_analysis_summary(rows: list[dict[str, Any]], window_days: int = 30) -> dict[str, Any]:
     """Aggregate rows into the deliberately small payload sent to Azure OpenAI."""
     if not rows:
@@ -658,6 +714,7 @@ def build_analysis_summary(rows: list[dict[str, Any]], window_days: int = 30) ->
                     "start_time": row.get("stage_start_time") or row.get("start_time"),
                     "result": row.get("stage_result") or row.get("result"),
                     "retry_count": 0,
+                    "failure_log_excerpt": row.get("failure_log_excerpt"),
                 }
 
         stage_records = list(stage_run_map.values())
@@ -670,6 +727,11 @@ def build_analysis_summary(rows: list[dict[str, Any]], window_days: int = 30) ->
             stage_average = _average(stage_durations)
             stage_stats = _stats(stage_records)
 
+        if stage_stats.get("failure_rate_pct", 0) > 0:
+            stage_err = _extract_error_snippet(stage_rows)
+            if stage_err:
+                stage_stats["error_excerpt"] = stage_err
+
         task_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in stage_rows:
             if row.get("task_name"):
@@ -680,6 +742,10 @@ def build_analysis_summary(rows: list[dict[str, Any]], window_days: int = 30) ->
             stats["name"] = task_name
             task_avg = _average(_durations(task_rows))
             stats["pct_of_parent_duration"] = round(100 * task_avg / stage_average, 1) if stage_average else 0
+            if stats["failure_rate_pct"] > 0 or stats["retry_rate_pct"] > 0:
+                task_err = _extract_error_snippet(task_rows)
+                if task_err:
+                    stats["error_excerpt"] = task_err
             if stats["pct_of_parent_duration"] >= 5 or stats["failure_rate_pct"] > 0 or stats["retry_rate_pct"] > 0:
                 tasks.append(stats)
         stage_stats.update({"name": stage_name, "tasks": sorted(tasks, key=lambda item: item["avg_duration_s"], reverse=True)})
@@ -699,7 +765,10 @@ def _stats(rows: list[dict[str, Any]]) -> dict[str, float]:
         if _as_utc(row.get("start_time")) and previous_start <= _as_utc(row.get("start_time")) < latest_start
     ]
     current_average, previous_average = _average(_durations(latest)), _average(_durations(previous))
-    delta = round((current_average - previous_average) / previous_average * 100, 1) if previous_average else 0
+    delta = 0.0
+    if previous_average >= 3.0 and len(latest) >= 2 and len(previous) >= 2:
+        raw_delta = (current_average - previous_average) / previous_average * 100
+        delta = round(max(-100.0, min(500.0, raw_delta)), 1)
     return {
         "avg_duration_s": round(_average(durations), 1), "p90_duration_s": round(_percentile(durations, 0.9), 1),
         "delta_vs_prior_week_pct": delta,
