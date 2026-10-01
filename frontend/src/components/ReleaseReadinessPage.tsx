@@ -22,7 +22,7 @@ import {
   ShieldAlert,
   Info,
   Check,
-  Filter,
+  FolderGit2,
 } from 'lucide-react'
 import { api } from '../services/api'
 import type {
@@ -32,6 +32,7 @@ import type {
   ReleaseBranchCandidate,
   ReleaseDimension,
   Pipeline,
+  AdoRepository,
 } from '../types/api'
 
 interface ReleaseReadinessPageProps {
@@ -60,10 +61,16 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
   const [loadingScorecard, setLoadingScorecard] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Repositories state
+  const [repositories, setRepositories] = useState<AdoRepository[]>([])
+  const [loadingRepos, setLoadingRepos] = useState(false)
+
   // Create Release Modal state
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [newName, setNewName] = useState('')
-  const [newPipelineId, setNewPipelineId] = useState<number>(0)
+  const [newRepoId, setNewRepoId] = useState('')
+  const [newRepoName, setNewRepoName] = useState('')
+  const [newPipelineId, setNewPipelineId] = useState<number | undefined>(undefined)
   const [branchCandidates, setBranchCandidates] = useState<ReleaseBranchCandidate[]>([])
   const [loadingBranches, setLoadingBranches] = useState(false)
   const [newTargetBranch, setNewTargetBranch] = useState('')
@@ -83,6 +90,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
   useEffect(() => {
     if (!organization || !project) return
     loadReleases()
+    loadRepositories()
   }, [organization, project])
 
   // Load scorecard whenever selected release changes
@@ -94,18 +102,39 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
     loadScorecard(selectedReleaseId)
   }, [selectedReleaseId])
 
-  // Load branch candidates whenever pipeline changes in create modal
+  // When repository changes in create modal, load that repository's respective branches!
   useEffect(() => {
-    if (!isCreateOpen || !newPipelineId || !organization || !project) return
-    loadBranchCandidates(newPipelineId)
-  }, [isCreateOpen, newPipelineId, organization, project])
+    if (!isCreateOpen || !newRepoId || !organization || !project) return
+    loadBranchCandidates(newRepoId, newPipelineId)
+  }, [isCreateOpen, newRepoId, newPipelineId, organization, project])
 
-  // Initialize pipeline in modal
+  // When create modal opens, ensure repos are loaded
   useEffect(() => {
-    if (isCreateOpen && pipelines.length > 0 && !newPipelineId) {
-      setNewPipelineId(pipelines[0].pipeline_id)
+    if (isCreateOpen) {
+      if (repositories.length === 0) {
+        loadRepositories()
+      } else if (!newRepoId) {
+        setNewRepoId(repositories[0].id)
+        setNewRepoName(repositories[0].name)
+      }
     }
-  }, [isCreateOpen, pipelines, newPipelineId])
+  }, [isCreateOpen, repositories, newRepoId])
+
+  const loadRepositories = async () => {
+    try {
+      setLoadingRepos(true)
+      const list = await api.repositories(organization, project, pat)
+      setRepositories(list)
+      if (list.length > 0 && !newRepoId) {
+        setNewRepoId(list[0].id)
+        setNewRepoName(list[0].name)
+      }
+    } catch (err) {
+      console.warn('Could not load repositories:', err)
+    } finally {
+      setLoadingRepos(false)
+    }
+  }
 
   const loadReleases = async () => {
     try {
@@ -139,19 +168,20 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
     }
   }
 
-  const loadBranchCandidates = async (pipeId: number) => {
+  const loadBranchCandidates = async (repoId: string, pipeId?: number) => {
     try {
       setLoadingBranches(true)
-      const candidates = await api.releaseBranchCandidates(organization, project, pipeId)
+      const candidates = await api.releaseBranchCandidates(organization, project, repoId, pipeId, pat)
       setBranchCandidates(candidates)
       if (candidates.length > 0) {
-        // Pre-select the most recently built branch as a convenience default
-        setNewTargetBranch(candidates[0].branch)
+        // Pre-select top candidate or default branch
+        const defaultCandidate = candidates.find(c => c.is_default) || candidates[0]
+        setNewTargetBranch(defaultCandidate.branch)
       } else {
         setNewTargetBranch('refs/heads/main')
       }
     } catch (err) {
-      console.warn('Could not load branch candidates:', err)
+      console.warn('Could not load branch candidates for repository:', err)
       setBranchCandidates([])
       setNewTargetBranch('refs/heads/main')
     } finally {
@@ -161,7 +191,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
 
   const handleCreateRelease = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newName.trim() || !newPipelineId || !newTargetBranch.trim()) return
+    if (!newName.trim() || !newRepoId || !newTargetBranch.trim()) return
 
     try {
       setCreating(true)
@@ -169,7 +199,9 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
         name: newName.trim(),
         organization_name: organization,
         project_name: project,
-        pipeline_id: newPipelineId,
+        repository_id: newRepoId,
+        repository_name: newRepoName || undefined,
+        pipeline_id: newPipelineId || undefined,
         target_branch: newTargetBranch.trim(),
         scope_feature_title: newScopeFeature.trim() ? newScopeFeature.trim() : null,
         target_ship_date: newTargetShipDate ? newTargetShipDate : null,
@@ -209,7 +241,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
   }
 
   const formatLastBuilt = (dateStr: string | null) => {
-    if (!dateStr) return 'Never'
+    if (!dateStr) return 'No runs recorded'
     try {
       const d = new Date(dateStr)
       return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
@@ -316,7 +348,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                 Release Readiness Scorecard
               </h1>
               <p style={{ fontSize: '12px', color: '#9ca3af', margin: '3px 0 0' }}>
-                Composite go/no-go quality evaluation combining pipeline health, blocker defects, sprint delivery, and review backlog.
+                Composite go/no-go quality evaluation combining repository branch health, blocker defects, sprint delivery, and review backlog.
               </p>
             </div>
           </div>
@@ -328,6 +360,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
             className="sync"
             onClick={() => {
               loadReleases()
+              loadRepositories()
               if (selectedReleaseId) loadScorecard(selectedReleaseId)
             }}
             disabled={loadingList || loadingScorecard}
@@ -402,7 +435,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
             <Rocket size={32} style={{ margin: '0 auto 10px', opacity: 0.5, color: '#00fbfb' }} />
             <h3 style={{ margin: '0 0 6px', color: '#f4f4f5', fontSize: '15px' }}>No Release Definitions Found</h3>
             <p style={{ margin: '0 0 14px', fontSize: '12px', maxWidth: '480px', marginInline: 'auto' }}>
-              Create a release definition to monitor live branch build telemetry, sprint progress, blocker bugs, and pull requests in one composite scorecard.
+              Create a release definition to monitor live repository branch telemetry, sprint progress, blocker bugs, and pull requests in one composite scorecard.
             </p>
             <button
               type="button"
@@ -430,8 +463,8 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                   key={rel.release_id}
                   onClick={() => setSelectedReleaseId(rel.release_id)}
                   style={{
-                    minWidth: '220px',
-                    maxWidth: '280px',
+                    minWidth: '240px',
+                    maxWidth: '300px',
                     padding: '14px 16px',
                     borderRadius: '10px',
                     backgroundColor: isSelected ? '#252630' : '#1c1c22',
@@ -465,6 +498,13 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                     </button>
                   </div>
 
+                  {rel.repository_name && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#a78bfa', marginBottom: '4px' }}>
+                      <FolderGit2 size={12} />
+                      <span style={{ fontWeight: 600 }}>{rel.repository_name}</span>
+                    </div>
+                  )}
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#00fbfb', marginBottom: '6px' }}>
                     <GitBranch size={12} />
                     <span style={{ fontFamily: 'ui-monospace,SFMono-Regular,Menlo,monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -490,7 +530,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
         <div style={{ padding: '60px', textAlign: 'center', color: '#9ca3af' }}>
           <RefreshCw size={28} className="spin" style={{ margin: '0 auto 12px', color: '#00fbfb' }} />
           <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5' }}>Computing Release Readiness Scorecard...</div>
-          <div style={{ fontSize: '12px', marginTop: '4px' }}>Evaluating pipeline runs, open blocker bugs, delivery milestone, and pull requests.</div>
+          <div style={{ fontSize: '12px', marginTop: '4px' }}>Evaluating repository branch health, open blocker bugs, delivery milestone, and pull requests.</div>
         </div>
       ) : scorecard ? (
         <div>
@@ -547,6 +587,12 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '16px', fontSize: '12px', color: '#9ca3af' }}>
+                {scorecard.release.repository_name && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <FolderGit2 size={13} style={{ color: '#a78bfa' }} />
+                    <span style={{ fontWeight: 600, color: '#f4f4f5' }}>{scorecard.release.repository_name}</span>
+                  </div>
+                )}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                   <GitBranch size={13} style={{ color: '#00fbfb' }} />
                   <span style={{ fontFamily: 'ui-monospace,monospace', color: '#f4f4f5' }}>{scorecard.release.target_branch}</span>
@@ -721,40 +767,74 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                 />
               </div>
 
-              {/* Pipeline Picker */}
+              {/* Repository Picker */}
               <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#9ca3af', marginBottom: '6px' }}>
-                  Deployment Pipeline *
+                  Repository *
                 </label>
-                <select
-                  value={newPipelineId}
-                  onChange={e => setNewPipelineId(Number(e.target.value))}
-                  style={{
-                    width: '100%',
-                    padding: '8px 12px',
-                    borderRadius: '8px',
-                    backgroundColor: '#262630',
-                    border: '1px solid #3f3f4e',
-                    color: '#ffffff',
-                    fontSize: '12.5px',
-                  }}
-                >
-                  {pipelines.map(p => (
-                    <option key={p.pipeline_id} value={p.pipeline_id}>
-                      {p.pipeline_name} (ID: {p.pipeline_id})
-                    </option>
-                  ))}
-                </select>
+                {loadingRepos ? (
+                  <div style={{ fontSize: '11.5px', color: '#9ca3af', padding: '8px 0' }}>
+                    Loading repositories...
+                  </div>
+                ) : repositories.length > 0 ? (
+                  <select
+                    value={newRepoId}
+                    onChange={e => {
+                      const rId = e.target.value
+                      const found = repositories.find(r => r.id === rId)
+                      setNewRepoId(rId)
+                      setNewRepoName(found ? found.name : '')
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: '#262630',
+                      border: '1px solid #00fbfb',
+                      color: '#ffffff',
+                      fontSize: '12.5px',
+                    }}
+                  >
+                    {repositories.map(repo => (
+                      <option key={repo.id} value={repo.id}>
+                        {repo.name} {repo.default_branch ? `(default: ${repo.default_branch})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    required
+                    placeholder="Repository ID or name"
+                    value={newRepoId}
+                    onChange={e => {
+                      setNewRepoId(e.target.value)
+                      setNewRepoName(e.target.value)
+                    }}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: '#262630',
+                      border: '1px solid #3f3f4e',
+                      color: '#ffffff',
+                      fontSize: '12.5px',
+                    }}
+                  />
+                )}
+                <div style={{ fontSize: '10.5px', color: '#71717a', marginTop: '4px' }}>
+                  Select the Azure DevOps Git repository for this release.
+                </div>
               </div>
 
-              {/* Target Branch Dropdown - Live Candidate Ingestion */}
+              {/* Target Branch Dropdown - Live Branches from Selected Repository */}
               <div style={{ marginBottom: '14px' }}>
                 <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#9ca3af', marginBottom: '6px' }}>
-                  Target Release Branch * (observed from telemetry)
+                  Target Release Branch * (from selected repository)
                 </label>
                 {loadingBranches ? (
                   <div style={{ fontSize: '11.5px', color: '#9ca3af', padding: '8px 0' }}>
-                    Loading observed branches from build history...
+                    Loading branches from repository...
                   </div>
                 ) : branchCandidates.length > 0 ? (
                   <select
@@ -771,11 +851,15 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                       fontFamily: 'ui-monospace,monospace',
                     }}
                   >
-                    {branchCandidates.map(c => (
-                      <option key={c.branch} value={c.branch}>
-                        {c.branch} ({c.run_count} runs, last built: {formatLastBuilt(c.last_built)})
-                      </option>
-                    ))}
+                    {branchCandidates.map(c => {
+                      const branchLabel = c.branch.replace('refs/heads/', '')
+                      const runText = c.run_count > 0 ? `(${c.run_count} runs, last: ${formatLastBuilt(c.last_built)})` : '(no builds recorded)'
+                      return (
+                        <option key={c.branch} value={c.branch}>
+                          {c.branch} {runText}
+                        </option>
+                      )
+                    })}
                   </select>
                 ) : (
                   <input
@@ -799,6 +883,35 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                   Every observed branch is treated equally. Select whichever branch your team cuts releases from.
                 </div>
               </div>
+
+              {/* Optional Deployment Pipeline */}
+              {pipelines.length > 0 && (
+                <div style={{ marginBottom: '14px' }}>
+                  <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#9ca3af', marginBottom: '6px' }}>
+                    Deployment Pipeline (optional)
+                  </label>
+                  <select
+                    value={newPipelineId || 0}
+                    onChange={e => setNewPipelineId(Number(e.target.value) || undefined)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: '#262630',
+                      border: '1px solid #3f3f4e',
+                      color: '#ffffff',
+                      fontSize: '12.5px',
+                    }}
+                  >
+                    <option value={0}>All project pipelines / Auto-detect</option>
+                    {pipelines.map(p => (
+                      <option key={p.pipeline_id} value={p.pipeline_id}>
+                        {p.pipeline_name} (ID: {p.pipeline_id})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Optional Feature / Epic Scope */}
               <div style={{ marginBottom: '14px' }}>

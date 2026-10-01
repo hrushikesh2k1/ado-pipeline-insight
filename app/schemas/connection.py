@@ -247,13 +247,16 @@ class ReleaseBranchCandidate(BaseModel):
     branch: str
     last_built: str | None = None
     run_count: int = 0
+    is_default: bool = False
 
 
 class ReleaseDefinitionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=256)
     organization_name: str = Field(min_length=1, max_length=256)
     project_name: str = Field(min_length=1, max_length=256)
-    pipeline_id: int = Field(ge=1)
+    repository_id: str | None = Field(default=None, max_length=256)
+    repository_name: str | None = Field(default=None, max_length=256)
+    pipeline_id: int | None = Field(default=None, ge=1)
     target_branch: str = Field(min_length=1, max_length=512)
     scope_feature_title: str | None = Field(default=None, max_length=512)
     target_ship_date: str | None = Field(default=None, max_length=32)
@@ -264,7 +267,9 @@ class ReleaseDefinition(BaseModel):
     name: str
     organization_name: str
     project_name: str
-    pipeline_id: int
+    repository_id: str | None = None
+    repository_name: str | None = None
+    pipeline_id: int | None = None
     target_branch: str
     scope_feature_title: str | None = None
     target_ship_date: str | None = None

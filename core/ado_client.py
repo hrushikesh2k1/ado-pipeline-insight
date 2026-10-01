@@ -53,6 +53,15 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response).get("value", [])
 
+    def list_repository_branches(self, project: str, repository_id: str) -> list[dict[str, Any]]:
+        response = self.session.get(
+            self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/refs"),
+            params={"filter": "heads/", "api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
     def list_pull_requests(
         self, project: str, repository_id: str, status: str = "active", top: int = 100
     ) -> list[dict[str, Any]]:

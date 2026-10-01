@@ -558,6 +558,7 @@ def generate_scorecard_narrative(
         prompt = (
             f"Release Definition:\n"
             f"- Name: {release.name}\n"
+            f"- Repository: {release.repository_name or release.repository_id or 'Project Repository'}\n"
             f"- Target Branch: {release.target_branch}\n"
             f"- Target Ship Date: {release.target_ship_date or 'Not specified'}\n"
             f"- Scope Feature: {release.scope_feature_title or 'All sprint items'}\n"
@@ -613,13 +614,22 @@ class ReleaseService:
         # 1. Fetch Pipeline Telemetry from dbo.pipeline_runs
         pipeline_runs: list[dict[str, Any]] = []
         try:
-            sql = """
-                SELECT run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
-                FROM dbo.pipeline_runs
-                WHERE pipeline_id = ?
-                ORDER BY start_time DESC
-            """
-            pipeline_runs = fetch_all(sql, (release.pipeline_id,))
+            if release.pipeline_id:
+                sql = """
+                    SELECT run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
+                    FROM dbo.pipeline_runs
+                    WHERE pipeline_id = ?
+                    ORDER BY start_time DESC
+                """
+                pipeline_runs = fetch_all(sql, (release.pipeline_id,))
+            else:
+                sql = """
+                    SELECT run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
+                    FROM dbo.pipeline_runs
+                    WHERE LOWER(organization_name) = LOWER(?) AND LOWER(project_name) = LOWER(?)
+                    ORDER BY start_time DESC
+                """
+                pipeline_runs = fetch_all(sql, (release.organization_name, release.project_name))
         except Exception as e:
             logger.debug("Could not query dbo.pipeline_runs for release: %s", e)
 
@@ -698,26 +708,44 @@ class ReleaseService:
                 logger.debug("Could not fetch ADO sprint items for scorecard: %s", e)
 
             try:
-                # Fetch PRs across repositories in the project
-                repos = client.list_repositories(release.project_name)
-                for repo in repos[:5]:
-                    repo_id = repo.get("id")
-                    if repo_id:
-                        repo_prs = client.list_pull_requests(release.project_name, repo_id, status="active")
-                        for pr in repo_prs:
-                            pr_id = pr.get("pullRequestId")
-                            web_url = pr.get("_links", {}).get("web", {}).get("href")
-                            if not web_url and repo.get("name"):
-                                web_url = f"https://dev.azure.com/{quote(release.organization_name, safe='')}/{quote(release.project_name, safe='')}/_git/{quote(repo['name'], safe='')}/pullrequest/{pr_id}"
-                            all_prs.append({
-                                "id": pr_id,
-                                "title": pr.get("title", ""),
-                                "status": pr.get("status", "active"),
-                                "target_branch": pr.get("targetRefName", ""),
-                                "creation_date": pr.get("creationDate"),
-                                "created_by_name": pr.get("createdBy", {}).get("displayName", "Unknown"),
-                                "web_url": web_url,
-                            })
+                # If repository_id is set, fetch PRs specifically for this repository
+                if release.repository_id:
+                    repo_prs = client.list_pull_requests(release.project_name, release.repository_id, status="active")
+                    for pr in repo_prs:
+                        pr_id = pr.get("pullRequestId")
+                        web_url = pr.get("_links", {}).get("web", {}).get("href")
+                        if not web_url and release.repository_name:
+                            web_url = f"https://dev.azure.com/{quote(release.organization_name, safe='')}/{quote(release.project_name, safe='')}/_git/{quote(release.repository_name, safe='')}/pullrequest/{pr_id}"
+                        all_prs.append({
+                            "id": pr_id,
+                            "title": pr.get("title", ""),
+                            "status": pr.get("status", "active"),
+                            "target_branch": pr.get("targetRefName", ""),
+                            "creation_date": pr.get("creationDate"),
+                            "created_by_name": pr.get("createdBy", {}).get("displayName", "Unknown"),
+                            "web_url": web_url,
+                        })
+                else:
+                    # Fetch PRs across repositories in the project
+                    repos = client.list_repositories(release.project_name)
+                    for repo in repos[:5]:
+                        repo_id = repo.get("id")
+                        if repo_id:
+                            repo_prs = client.list_pull_requests(release.project_name, repo_id, status="active")
+                            for pr in repo_prs:
+                                pr_id = pr.get("pullRequestId")
+                                web_url = pr.get("_links", {}).get("web", {}).get("href")
+                                if not web_url and repo.get("name"):
+                                    web_url = f"https://dev.azure.com/{quote(release.organization_name, safe='')}/{quote(release.project_name, safe='')}/_git/{quote(repo['name'], safe='')}/pullrequest/{pr_id}"
+                                all_prs.append({
+                                    "id": pr_id,
+                                    "title": pr.get("title", ""),
+                                    "status": pr.get("status", "active"),
+                                    "target_branch": pr.get("targetRefName", ""),
+                                    "creation_date": pr.get("creationDate"),
+                                    "created_by_name": pr.get("createdBy", {}).get("displayName", "Unknown"),
+                                    "web_url": web_url,
+                                })
             except Exception as e:
                 logger.debug("Could not fetch ADO pull requests for scorecard: %s", e)
 

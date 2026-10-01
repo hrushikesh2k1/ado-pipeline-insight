@@ -197,13 +197,16 @@ export type ReleaseBranchCandidate = {
   branch: string
   last_built: string | null
   run_count: number
+  is_default?: boolean
 }
 
 export type ReleaseDefinitionCreate = {
   name: string
   organization_name: string
   project_name: string
-  pipeline_id: number
+  repository_id?: string | null
+  repository_name?: string | null
+  pipeline_id?: number | null
   target_branch: string
   scope_feature_title?: string | null
   target_ship_date?: string | null
@@ -214,7 +217,9 @@ export type ReleaseDefinition = {
   name: string
   organization_name: string
   project_name: string
-  pipeline_id: number
+  repository_id?: string | null
+  repository_name?: string | null
+  pipeline_id?: number | null
   target_branch: string
   scope_feature_title?: string | null
   target_ship_date?: string | null

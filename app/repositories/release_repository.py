@@ -22,7 +22,9 @@ _FALLBACK_HISTORY: list[dict[str, Any]] = []
 
 
 def _ensure_tables_exist() -> None:
-    """Ensure dbo.release_definitions and dbo.release_scorecard_history exist in SQL Server or SQLite."""
+    """Ensure dbo.release_definitions and dbo.release_scorecard_history exist in SQL Server,
+    with columns for repository_id, repository_name, and optional pipeline_id.
+    """
     sql = """
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'release_definitions' AND schema_id = SCHEMA_ID('dbo'))
     BEGIN
@@ -31,13 +33,24 @@ def _ensure_tables_exist() -> None:
             name NVARCHAR(256) NOT NULL,
             organization_name NVARCHAR(256) NOT NULL,
             project_name NVARCHAR(256) NOT NULL,
-            pipeline_id INT NOT NULL,
+            pipeline_id INT NULL,
+            repository_id NVARCHAR(256) NULL,
+            repository_name NVARCHAR(256) NULL,
             target_branch NVARCHAR(512) NOT NULL,
             scope_feature_title NVARCHAR(512) NULL,
             target_ship_date NVARCHAR(32) NULL,
             created_by NVARCHAR(256) NULL,
             created_at DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME()
         );
+    END;
+    ELSE
+    BEGIN
+        IF COL_LENGTH('dbo.release_definitions', 'repository_id') IS NULL
+            ALTER TABLE dbo.release_definitions ADD repository_id NVARCHAR(256) NULL;
+        IF COL_LENGTH('dbo.release_definitions', 'repository_name') IS NULL
+            ALTER TABLE dbo.release_definitions ADD repository_name NVARCHAR(256) NULL;
+        IF COL_LENGTH('dbo.release_definitions', 'pipeline_id') IS NOT NULL
+            ALTER TABLE dbo.release_definitions ALTER COLUMN pipeline_id INT NULL;
     END;
 
     IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'release_scorecard_history' AND schema_id = SCHEMA_ID('dbo'))
@@ -68,43 +81,106 @@ def ensure_schema() -> None:
 
 
 class ReleaseRepository:
-    def get_branch_candidates(self, organization: str, project: str, pipeline_id: int) -> list[ReleaseBranchCandidate]:
-        """Query distinct source_branch values observed in dbo.pipeline_runs for pipeline_id,
-        ordered by most-recently-built first (MAX(start_time) DESC).
+    def get_branch_candidates(
+        self,
+        organization: str,
+        project: str,
+        repository_id: str | None = None,
+        pipeline_id: int | None = None,
+        pat: str | None = None,
+    ) -> list[ReleaseBranchCandidate]:
+        """Query branches for a repository or observed branches in dbo.pipeline_runs.
+        If repository_id is provided, queries Azure DevOps repository refs API to return
+        the real repository branches, cross-referenced with pipeline run telemetry.
+        If pipeline_id is provided, queries distinct source_branch values in dbo.pipeline_runs.
         Every observed branch is returned without any filtering or naming assumptions.
         """
-        query = """
+        candidates_map: dict[str, ReleaseBranchCandidate] = {}
+
+        # 1. If repository_id is provided, query Git refs directly from Azure DevOps
+        if repository_id and organization:
+            try:
+                from core.ado_client import AzureDevOpsClient
+                from core.config import get_ado_pat
+                resolved_pat = pat
+                if not resolved_pat:
+                    try:
+                        resolved_pat = get_ado_pat(organization)
+                    except Exception:
+                        resolved_pat = ""
+                if resolved_pat:
+                    client = AzureDevOpsClient(organization, resolved_pat)
+                    raw_refs = client.list_repository_branches(project, repository_id)
+                    for r in raw_refs:
+                        name = r.get("name") or ""
+                        if name.startswith("refs/heads/"):
+                            candidates_map[name] = ReleaseBranchCandidate(
+                                branch=name,
+                                last_built=None,
+                                run_count=0,
+                                is_default=False,
+                            )
+            except Exception as e:
+                logger.debug("Could not query git refs from ADO repository: %s", e)
+
+        # 2. Cross-reference or query from dbo.pipeline_runs
+        where_clauses = ["source_branch IS NOT NULL", "source_branch != ''"]
+        params: list[Any] = []
+        if pipeline_id:
+            where_clauses.append("pipeline_id = ?")
+            params.append(pipeline_id)
+
+        where_sql = " AND ".join(where_clauses)
+        query = f"""
             SELECT source_branch, MAX(start_time) as last_built, COUNT(*) as run_count
             FROM dbo.pipeline_runs
-            WHERE pipeline_id = ? AND source_branch IS NOT NULL AND source_branch != ''
+            WHERE {where_sql}
             GROUP BY source_branch
             ORDER BY MAX(start_time) DESC
         """
-        candidates: list[ReleaseBranchCandidate] = []
         try:
-            rows = fetch_all(query, (pipeline_id,))
+            rows = fetch_all(query, tuple(params))
             for r in rows:
                 sb = str(r.get("source_branch") or "").strip()
                 if not sb:
                     continue
                 lb = r.get("last_built")
                 lb_str = lb.isoformat() if hasattr(lb, "isoformat") else str(lb) if lb else None
-                candidates.append(ReleaseBranchCandidate(
-                    branch=sb,
-                    last_built=lb_str,
-                    run_count=int(r.get("run_count") or 0),
-                ))
+                count = int(r.get("run_count") or 0)
+
+                # Match with or without refs/heads/
+                matched_key = sb if sb in candidates_map else (
+                    f"refs/heads/{sb}" if f"refs/heads/{sb}" in candidates_map else (
+                        sb.replace("refs/heads/", "") if sb.replace("refs/heads/", "") in candidates_map else None
+                    )
+                )
+
+                if matched_key and matched_key in candidates_map:
+                    candidates_map[matched_key].last_built = lb_str
+                    candidates_map[matched_key].run_count = count
+                else:
+                    candidates_map[sb] = ReleaseBranchCandidate(
+                        branch=sb,
+                        last_built=lb_str,
+                        run_count=count,
+                        is_default=False,
+                    )
         except Exception as e:
             logger.debug("Could not query branch candidates from DB: %s", e)
 
-        # If DB query returned rows, return them
-        if candidates:
-            return candidates
+        if candidates_map:
+            # Sort: branches with builds first by last_built desc, then alphabetic
+            sorted_candidates = sorted(
+                candidates_map.values(),
+                key=lambda x: (x.last_built or "", x.run_count, x.branch),
+                reverse=True,
+            )
+            return sorted_candidates
 
-        # Fallback for pipelines with no recorded branch runs or during mock tests
+        # Fallback for empty repo/pipeline or during mock tests
         return [
-            ReleaseBranchCandidate(branch="refs/heads/main", last_built=datetime.now(timezone.utc).isoformat(), run_count=1),
-            ReleaseBranchCandidate(branch="refs/heads/dev", last_built=datetime.now(timezone.utc).isoformat(), run_count=1),
+            ReleaseBranchCandidate(branch="refs/heads/main", last_built=datetime.now(timezone.utc).isoformat(), run_count=1, is_default=True),
+            ReleaseBranchCandidate(branch="refs/heads/dev", last_built=datetime.now(timezone.utc).isoformat(), run_count=1, is_default=False),
         ]
 
     def create_release(self, data: ReleaseDefinitionCreate, created_by: str | None = None) -> ReleaseDefinition:
@@ -118,6 +194,8 @@ class ReleaseRepository:
             "organization_name": data.organization_name.strip(),
             "project_name": data.project_name.strip(),
             "pipeline_id": data.pipeline_id,
+            "repository_id": data.repository_id.strip() if data.repository_id else None,
+            "repository_name": data.repository_name.strip() if data.repository_name else None,
             "target_branch": data.target_branch.strip(),
             "scope_feature_title": data.scope_feature_title.strip() if data.scope_feature_title else None,
             "target_ship_date": data.target_ship_date.strip() if data.target_ship_date else None,
@@ -128,8 +206,9 @@ class ReleaseRepository:
         sql = """
             INSERT INTO dbo.release_definitions (
                 release_id, name, organization_name, project_name, pipeline_id,
-                target_branch, scope_feature_title, target_ship_date, created_by, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                repository_id, repository_name, target_branch, scope_feature_title,
+                target_ship_date, created_by, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
         params = (
             row["release_id"],
@@ -137,6 +216,8 @@ class ReleaseRepository:
             row["organization_name"],
             row["project_name"],
             row["pipeline_id"],
+            row["repository_id"],
+            row["repository_name"],
             row["target_branch"],
             row["scope_feature_title"],
             row["target_ship_date"],
@@ -156,7 +237,8 @@ class ReleaseRepository:
         ensure_schema()
         sql = """
             SELECT release_id, name, organization_name, project_name, pipeline_id,
-                   target_branch, scope_feature_title, target_ship_date, created_by, created_at
+                   repository_id, repository_name, target_branch, scope_feature_title,
+                   target_ship_date, created_by, created_at
             FROM dbo.release_definitions
             WHERE LOWER(organization_name) = LOWER(?) AND LOWER(project_name) = LOWER(?)
             ORDER BY created_at DESC
@@ -170,7 +252,9 @@ class ReleaseRepository:
                         name=str(r["name"]),
                         organization_name=str(r["organization_name"]),
                         project_name=str(r["project_name"]),
-                        pipeline_id=int(r["pipeline_id"]),
+                        pipeline_id=int(r["pipeline_id"]) if r.get("pipeline_id") is not None else None,
+                        repository_id=r.get("repository_id"),
+                        repository_name=r.get("repository_name"),
                         target_branch=str(r["target_branch"]),
                         scope_feature_title=r.get("scope_feature_title"),
                         target_ship_date=r.get("target_ship_date"),
@@ -195,7 +279,8 @@ class ReleaseRepository:
         ensure_schema()
         sql = """
             SELECT release_id, name, organization_name, project_name, pipeline_id,
-                   target_branch, scope_feature_title, target_ship_date, created_by, created_at
+                   repository_id, repository_name, target_branch, scope_feature_title,
+                   target_ship_date, created_by, created_at
             FROM dbo.release_definitions
             WHERE release_id = ?
         """
@@ -207,7 +292,9 @@ class ReleaseRepository:
                     name=str(row["name"]),
                     organization_name=str(row["organization_name"]),
                     project_name=str(row["project_name"]),
-                    pipeline_id=int(row["pipeline_id"]),
+                    pipeline_id=int(row["pipeline_id"]) if row.get("pipeline_id") is not None else None,
+                    repository_id=row.get("repository_id"),
+                    repository_name=row.get("repository_name"),
                     target_branch=str(row["target_branch"]),
                     scope_feature_title=row.get("scope_feature_title"),
                     target_ship_date=row.get("target_ship_date"),

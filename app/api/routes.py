@@ -1412,15 +1412,30 @@ def ado_ingest_status(
 def get_release_branch_candidates(
     organization: str = Query(..., min_length=1, max_length=256),
     project: str = Query(..., min_length=1, max_length=256),
-    pipeline_id: int = Query(..., ge=1, le=MAX_ID),
+    repository_id: str | None = Query(None),
+    pipeline_id: int | None = Query(None, ge=1, le=MAX_ID),
+    pat: str | None = Query(None),
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
 ) -> list[ReleaseBranchCandidate]:
-    """Return distinct source_branch values observed in dbo.pipeline_runs for pipeline_id,
-    ordered by most-recently-built first. No pattern-matching or branch-name assumptions are applied.
+    """Return Git branches for a repository or observed branches in dbo.pipeline_runs.
+    Ordered by most-recently-built first. No pattern-matching or branch-name assumptions are applied.
     """
     org_clean = validate_organization(organization)
     proj_clean = validate_project(project)
+    resolved_pat = None
+    try:
+        resolved_pat = _resolve_pat(org_clean, pat or x_ado_pat)
+    except HTTPException:
+        resolved_pat = None
+
     repo = ReleaseRepository()
-    return repo.get_branch_candidates(org_clean, proj_clean, pipeline_id)
+    return repo.get_branch_candidates(
+        org_clean,
+        proj_clean,
+        repository_id=repository_id,
+        pipeline_id=pipeline_id,
+        pat=resolved_pat,
+    )
 
 
 @router.post("/releases", response_model=ReleaseDefinition)

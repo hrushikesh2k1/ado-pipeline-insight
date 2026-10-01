@@ -111,8 +111,11 @@ export const api = {
       return { authenticated: false, userId: null, email: null, name: null, provider: null }
     }
   },
-  releaseBranchCandidates: (organization: string, project: string, pipelineId: number) => {
-    const p = new URLSearchParams({ organization, project, pipeline_id: String(pipelineId) })
+  releaseBranchCandidates: (organization: string, project: string, repositoryId?: string, pipelineId?: number, pat?: string) => {
+    const p = new URLSearchParams({ organization, project })
+    if (repositoryId) p.set('repository_id', repositoryId)
+    if (pipelineId) p.set('pipeline_id', String(pipelineId))
+    if (pat) p.set('pat', pat)
     return request<ReleaseBranchCandidate[]>(`/api/v1/releases/branch-candidates?${p.toString()}`)
   },
   createRelease: (payload: ReleaseDefinitionCreate) => {

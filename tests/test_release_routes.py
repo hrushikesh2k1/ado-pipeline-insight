@@ -15,7 +15,7 @@ def client():
 
 def test_release_branch_candidates_endpoint(client, monkeypatch):
     """Ensure branch-candidates returns distinct observed branches without heuristics."""
-    resp = client.get("/api/v1/releases/branch-candidates?organization=org&project=proj&pipeline_id=3")
+    resp = client.get("/api/v1/releases/branch-candidates?organization=org&project=proj&repository_id=repo-1&pipeline_id=3")
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
@@ -29,6 +29,8 @@ def test_release_crud_and_scorecard_lifecycle(client):
         "name": "Release v2.4.0",
         "organization_name": "FabrikamFiber",
         "project_name": "WebServices",
+        "repository_id": "repo-checkout",
+        "repository_name": "CheckoutRepo",
         "pipeline_id": 42,
         "target_branch": "refs/heads/release/2.4",
         "scope_feature_title": "Checkout Redesign",
@@ -40,6 +42,7 @@ def test_release_crud_and_scorecard_lifecycle(client):
     assert create_resp.status_code == 200, create_resp.text
     created = create_resp.json()
     assert created["name"] == "Release v2.4.0"
+    assert created["repository_name"] == "CheckoutRepo"
     assert created["target_branch"] == "refs/heads/release/2.4"
     assert "release_id" in created
     rel_id = created["release_id"]
