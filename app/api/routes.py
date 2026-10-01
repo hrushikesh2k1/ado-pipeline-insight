@@ -291,6 +291,8 @@ def ado_repositories(
                 web_url=r.get("webUrl") or r.get("_links", {}).get("web", {}).get("href"),
             ))
         return repos
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except requests.HTTPError as exc:
         code = exc.response.status_code if exc.response is not None else 0
         if code in {401, 403, 203}:

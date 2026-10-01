@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   Rocket,
   CheckCircle2,
@@ -52,6 +52,10 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
   project,
   pat,
   pipelines = [],
+  projects = [],
+  onOrganizationChange,
+  onProjectChange,
+  onPatChange,
 }) => {
   // State
   const [releases, setReleases] = useState<ReleaseDefinition[]>([])
@@ -61,9 +65,30 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
   const [loadingScorecard, setLoadingScorecard] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Local editable PAT & organization fallback logic
+  const [localPat, setLocalPat] = useState(pat || '')
+  useEffect(() => {
+    if (pat !== undefined) setLocalPat(pat)
+  }, [pat])
+
+  // If organization has spaces or is an alias (e.g. "Deepak login"), auto-resolve to matching pipeline's organization_name
+  const effectiveOrg = useMemo(() => {
+    if (organization && !organization.includes(' ')) {
+      return organization
+    }
+    const match = pipelines.find(
+      p => p.project_name?.toLowerCase() === project?.toLowerCase() && p.organization_name && !p.organization_name.includes(' ')
+    )
+    if (match?.organization_name) {
+      return match.organization_name
+    }
+    return organization ? organization.replace(/\s+/g, '-') : ''
+  }, [organization, project, pipelines])
+
   // Repositories state
   const [repositories, setRepositories] = useState<AdoRepository[]>([])
   const [loadingRepos, setLoadingRepos] = useState(false)
+  const [reposError, setReposError] = useState<string | null>(null)
 
   // Create Release Modal state
   const [isCreateOpen, setIsCreateOpen] = useState(false)
@@ -88,10 +113,10 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
 
   // Load saved releases on org/project change
   useEffect(() => {
-    if (!organization || !project) return
+    if (!effectiveOrg || !project) return
     loadReleases()
-    loadRepositories()
-  }, [organization, project])
+    loadRepositories(localPat, effectiveOrg)
+  }, [effectiveOrg, project])
 
   // Load scorecard whenever selected release changes
   useEffect(() => {
@@ -104,33 +129,54 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
 
   // When repository changes in create modal, load that repository's respective branches!
   useEffect(() => {
-    if (!isCreateOpen || !newRepoId || !organization || !project) return
+    if (!isCreateOpen || !newRepoId || !effectiveOrg || !project) return
     loadBranchCandidates(newRepoId, newPipelineId)
-  }, [isCreateOpen, newRepoId, newPipelineId, organization, project])
+  }, [isCreateOpen, newRepoId, newPipelineId, effectiveOrg, project])
 
   // When create modal opens, ensure repos are loaded
   useEffect(() => {
     if (isCreateOpen) {
       if (repositories.length === 0) {
-        loadRepositories()
+        loadRepositories(localPat, effectiveOrg)
       } else if (!newRepoId) {
         setNewRepoId(repositories[0].id)
         setNewRepoName(repositories[0].name)
       }
     }
-  }, [isCreateOpen, repositories, newRepoId])
+  }, [isCreateOpen, repositories, newRepoId, effectiveOrg, localPat])
 
-  const loadRepositories = async () => {
+  const loadRepositories = async (customPat?: string, customOrg?: string) => {
+    const orgToUse = customOrg || effectiveOrg
+    const patToUse = customPat !== undefined ? customPat : localPat
+    if (!orgToUse || !project) return
     try {
       setLoadingRepos(true)
-      const list = await api.repositories(organization, project, pat)
+      setReposError(null)
+      const list = await api.repositories(orgToUse, project, patToUse)
       setRepositories(list)
       if (list.length > 0 && !newRepoId) {
         setNewRepoId(list[0].id)
         setNewRepoName(list[0].name)
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Could not load repositories:', err)
+      const msg = err instanceof Error ? err.message : 'Could not fetch repositories'
+      setReposError(msg)
+      // Provide project name as fallback repository option if empty
+      if (repositories.length === 0 && project) {
+        setRepositories([
+          {
+            id: project,
+            name: project,
+            default_branch: 'main',
+            web_url: null,
+          },
+        ])
+        if (!newRepoId) {
+          setNewRepoId(project)
+          setNewRepoName(project)
+        }
+      }
     } finally {
       setLoadingRepos(false)
     }
@@ -140,7 +186,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
     try {
       setLoadingList(true)
       setError(null)
-      const list = await api.listReleases(organization, project)
+      const list = await api.listReleases(effectiveOrg, project)
       setReleases(list)
       if (list.length > 0 && !selectedReleaseId) {
         setSelectedReleaseId(list[0].release_id)
@@ -159,7 +205,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
     try {
       setLoadingScorecard(true)
       setError(null)
-      const card = await api.getReleaseScorecard(relId, pat)
+      const card = await api.getReleaseScorecard(relId, localPat || pat)
       setScorecard(card)
     } catch (err: any) {
       setError(err.message || 'Failed to compute release scorecard.')
@@ -171,7 +217,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
   const loadBranchCandidates = async (repoId: string, pipeId?: number) => {
     try {
       setLoadingBranches(true)
-      const candidates = await api.releaseBranchCandidates(organization, project, repoId, pipeId, pat)
+      const candidates = await api.releaseBranchCandidates(effectiveOrg, project, repoId, pipeId, localPat || pat)
       setBranchCandidates(candidates)
       if (candidates.length > 0) {
         // Pre-select top candidate or default branch
@@ -197,7 +243,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
       setCreating(true)
       const payload: ReleaseDefinitionCreate = {
         name: newName.trim(),
-        organization_name: organization,
+        organization_name: effectiveOrg,
         project_name: project,
         repository_id: newRepoId,
         repository_name: newRepoName || undefined,
@@ -325,6 +371,80 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
 
   return (
     <div style={{ padding: '24px 32px 60px', maxWidth: '1440px', margin: '0 auto', color: '#f4f4f5' }}>
+      {/* 0. Top Connection & Discovery Toolbar */}
+      <div className="adoConnectBar" style={{ marginBottom: '20px' }}>
+        <div className="adoConnectBarLeft">
+          <div className="adoConnectItem">
+            <span className="adoConnectLabel">Org:</span>
+            <input
+              type="text"
+              className="adoConnectInput"
+              placeholder="Organization"
+              value={effectiveOrg}
+              onChange={(e) => {
+                const val = e.target.value
+                onOrganizationChange?.(val)
+              }}
+              onBlur={() => {
+                loadRepositories(localPat, effectiveOrg)
+                loadReleases()
+              }}
+            />
+          </div>
+
+          <div className="adoConnectItem">
+            <span className="adoConnectLabel">PAT:</span>
+            <input
+              type="password"
+              className="adoConnectInput"
+              placeholder={localPat ? '••••••••••••••••' : 'PAT Token (optional)'}
+              value={localPat}
+              onChange={(e) => {
+                const val = e.target.value
+                setLocalPat(val)
+                onPatChange?.(val)
+                sessionStorage.setItem('ado_session_pat', val)
+              }}
+              onBlur={() => {
+                loadRepositories(localPat, effectiveOrg)
+              }}
+              autoComplete="off"
+            />
+          </div>
+
+          {projects.length > 0 && (
+            <div className="adoConnectItem">
+              <span className="adoConnectLabel">Project:</span>
+              <div className="adoSelectWrapper">
+                <select
+                  className="adoConnectSelect"
+                  value={project}
+                  onChange={(e) => onProjectChange?.(e.target.value)}
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={14} className="adoSelectArrow" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="adoConnectBarRight">
+          <span style={{ fontSize: '11px', color: repositories.length > 0 ? '#4ade80' : '#facc15', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <FolderGit2 size={13} />
+            {loadingRepos
+              ? 'Loading repos...'
+              : repositories.length > 0
+              ? `${repositories.length} repo${repositories.length > 1 ? 's' : ''} available`
+              : 'Manual repo mode'}
+          </span>
+        </div>
+      </div>
+
       {/* Page Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '24px' }}>
         <div>
@@ -769,21 +889,25 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
 
               {/* Repository Picker */}
               <div style={{ marginBottom: '14px' }}>
-                <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#9ca3af', marginBottom: '6px' }}>
-                  Repository *
-                </label>
-                {loadingRepos ? (
-                  <div style={{ fontSize: '11.5px', color: '#9ca3af', padding: '8px 0' }}>
-                    Loading repositories...
-                  </div>
-                ) : repositories.length > 0 ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <label style={{ fontSize: '11px', fontWeight: 600, color: '#9ca3af' }}>
+                    Repository *
+                  </label>
+                  {loadingRepos && (
+                    <span style={{ fontSize: '11px', color: '#00fbfb', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <RefreshCw size={11} className="spin" /> Loading repositories...
+                    </span>
+                  )}
+                </div>
+
+                {repositories.length > 0 ? (
                   <select
                     value={newRepoId}
                     onChange={e => {
                       const rId = e.target.value
                       const found = repositories.find(r => r.id === rId)
                       setNewRepoId(rId)
-                      setNewRepoName(found ? found.name : '')
+                      setNewRepoName(found ? found.name : rId)
                     }}
                     style={{
                       width: '100%',
@@ -802,26 +926,107 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                     ))}
                   </select>
                 ) : (
-                  <input
-                    type="text"
-                    required
-                    placeholder="Repository ID or name"
-                    value={newRepoId}
-                    onChange={e => {
-                      setNewRepoId(e.target.value)
-                      setNewRepoName(e.target.value)
-                    }}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      borderRadius: '8px',
-                      backgroundColor: '#262630',
-                      border: '1px solid #3f3f4e',
-                      color: '#ffffff',
-                      fontSize: '12.5px',
-                    }}
-                  />
+                  <div>
+                    <input
+                      type="text"
+                      required
+                      placeholder={`e.g. ${project || 'MyRepo'}`}
+                      value={newRepoName}
+                      onChange={e => {
+                        setNewRepoName(e.target.value)
+                        setNewRepoId(e.target.value)
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        backgroundColor: '#262630',
+                        border: '1px solid #3f3f4e',
+                        color: '#ffffff',
+                        fontSize: '12.5px',
+                        marginBottom: '8px',
+                      }}
+                    />
+                    {project && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewRepoId(project)
+                          setNewRepoName(project)
+                          loadBranchCandidates(project, newPipelineId)
+                        }}
+                        style={{
+                          backgroundColor: 'rgba(0, 251, 251, 0.12)',
+                          color: '#00fbfb',
+                          border: '1px solid rgba(0, 251, 251, 0.3)',
+                          borderRadius: '6px',
+                          padding: '4px 10px',
+                          fontSize: '11px',
+                          cursor: 'pointer',
+                          marginBottom: '8px',
+                        }}
+                      >
+                        Use Project Default ({project})
+                      </button>
+                    )}
+                  </div>
                 )}
+
+                {/* Inline PAT connect box if repos couldn't be loaded automatically */}
+                {repositories.length <= 1 && (
+                  <div style={{ marginTop: '8px', padding: '10px 12px', borderRadius: '8px', backgroundColor: '#18181f', border: '1px solid #2e2f38', fontSize: '11.5px' }}>
+                    <div style={{ color: '#d1d5db', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <FolderGit2 size={13} style={{ color: '#00fbfb' }} />
+                      <span>Connect Azure DevOps PAT to load all project repositories:</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <input
+                        type="password"
+                        placeholder="Azure DevOps PAT with Code (Read)..."
+                        value={localPat}
+                        onChange={e => {
+                          const val = e.target.value
+                          setLocalPat(val)
+                          onPatChange?.(val)
+                          sessionStorage.setItem('ado_session_pat', val)
+                        }}
+                        style={{
+                          flex: 1,
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          backgroundColor: '#262630',
+                          border: '1px solid #3f3f4e',
+                          color: '#ffffff',
+                          fontSize: '11.5px',
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => loadRepositories(localPat, effectiveOrg)}
+                        disabled={loadingRepos}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: '6px',
+                          backgroundColor: '#00fbfb',
+                          color: '#09090b',
+                          border: 'none',
+                          fontSize: '11px',
+                          fontWeight: 700,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {loadingRepos ? 'Loading...' : 'Load Repos'}
+                      </button>
+                    </div>
+                    {reposError && (
+                      <div style={{ color: '#fca5a5', marginTop: '6px', fontSize: '10.5px' }}>
+                        {reposError}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div style={{ fontSize: '10.5px', color: '#71717a', marginTop: '4px' }}>
                   Select the Azure DevOps Git repository for this release.
                 </div>
