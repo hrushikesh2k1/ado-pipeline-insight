@@ -201,6 +201,15 @@ def evaluate_sprint_work_items(
                         if item_id not in flagged_item_ids:
                             flagged_item_ids.append(item_id)
 
+        # Extract severity & priority for quality gates & defect burden
+        severity_raw = fields.get("Microsoft.VSTS.Common.Severity") or fields.get("Severity")
+        priority_raw = fields.get("Microsoft.VSTS.Common.Priority") or fields.get("Priority")
+        severity = str(severity_raw).strip() if severity_raw else None
+        try:
+            priority = int(priority_raw) if priority_raw is not None else None
+        except (ValueError, TypeError):
+            priority = None
+
         parsed_items.append({
             "id": item_id,
             "title": title,
@@ -222,6 +231,8 @@ def evaluate_sprint_work_items(
             "acceptance_criteria": acceptance_criteria or None,
             "tags": tags_raw,
             "area_path": area_path_leaf,
+            "severity": severity,
+            "priority": priority,
         })
 
     checks_summary = {
@@ -316,8 +327,8 @@ def calculate_sprint_milestones(
     total_delivered_hours = 0.0
 
     for item in closed_story_items:
-        item_id = item["id"]
-        title = item["title"]
+        item_id = item.get("id")
+        title = item.get("title", "")
         w_type = str(item.get("work_item_type", "User Story"))
         state = str(item.get("state", "Done"))
         assignee = item.get("assigned_to_name")

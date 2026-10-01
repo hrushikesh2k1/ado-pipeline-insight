@@ -10,6 +10,7 @@ import { NavSidebar } from './components/NavSidebar'
 import type { NavPage } from './components/NavSidebar'
 import { PullRequestsPage } from './components/PullRequestsPage'
 import { SprintBoardPage } from './components/SprintBoardPage'
+import { ReleaseReadinessPage } from './components/ReleaseReadinessPage'
 import { PluginManagerModal } from './components/PluginManagerModal'
 import octaveLogo from './assets/octave-logo.png'
 import type { Recommendation } from './types/api'
@@ -1217,6 +1218,25 @@ function App() {
             organization={adoOrg || org}
             project={project}
             pat={adoPat}
+            projects={adoProjects.length > 0 ? adoProjects : projects.map(p => ({ id: p, name: p }))}
+            onOrganizationChange={v => {
+              updateOrg(v)
+              setAdoOrg(v)
+              localStorage.setItem('ado_connected_org', v)
+            }}
+            onProjectChange={updateProject}
+            onPatChange={v => {
+              setAdoPat(v)
+              sessionStorage.setItem('ado_session_pat', v)
+            }}
+            theme={theme}
+          />
+        ) : activePage === 'releases' ? (
+          <ReleaseReadinessPage
+            organization={adoOrg || org}
+            project={project}
+            pat={adoPat}
+            pipelines={pipelines}
             projects={adoProjects.length > 0 ? adoProjects : projects.map(p => ({ id: p, name: p }))}
             onOrganizationChange={v => {
               updateOrg(v)

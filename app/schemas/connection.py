@@ -146,6 +146,8 @@ class AdoWorkItem(BaseModel):
     description: str | None = None
     acceptance_criteria: str | None = None
     area_path: str | None = None
+    severity: str | None = None
+    priority: int | None = None
 
 
 class AdoSprintChecksSummary(BaseModel):
@@ -235,3 +237,75 @@ class MilestoneAiSummaryResponse(BaseModel):
     issues_summary: list[dict[str, str]] = Field(default_factory=list)
     achievements_summary: list[dict[str, str]] = Field(default_factory=list)
     graph_data: MilestoneGraphData | None = None
+
+
+# ============================================================================
+# Release Readiness Scorecard Schemas
+# ============================================================================
+
+class ReleaseBranchCandidate(BaseModel):
+    branch: str
+    last_built: str | None = None
+    run_count: int = 0
+
+
+class ReleaseDefinitionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=256)
+    organization_name: str = Field(min_length=1, max_length=256)
+    project_name: str = Field(min_length=1, max_length=256)
+    pipeline_id: int = Field(ge=1)
+    target_branch: str = Field(min_length=1, max_length=512)
+    scope_feature_title: str | None = Field(default=None, max_length=512)
+    target_ship_date: str | None = Field(default=None, max_length=32)
+
+
+class ReleaseDefinition(BaseModel):
+    release_id: str
+    name: str
+    organization_name: str
+    project_name: str
+    pipeline_id: int
+    target_branch: str
+    scope_feature_title: str | None = None
+    target_ship_date: str | None = None
+    created_by: str | None = None
+    created_at: str
+
+
+class ReleaseDimensionEvidenceItem(BaseModel):
+    id: str | int
+    title: str
+    item_type: str
+    status_or_result: str
+    severity: str | None = None
+    web_url: str | None = None
+    details: str | None = None
+
+
+class ReleaseDimension(BaseModel):
+    key: str
+    name: str
+    status: str  # "green" | "yellow" | "red"
+    score_text: str
+    summary: str
+    evidence_items: list[ReleaseDimensionEvidenceItem] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReleaseScorecard(BaseModel):
+    release: ReleaseDefinition
+    overall_status: str  # "green" | "yellow" | "red" (worst dimension wins)
+    computed_at: str
+    dimensions: dict[str, ReleaseDimension]
+    ai_narrative: str
+    ai_generated: bool = False
+    recommendations: list[str] = Field(default_factory=list)
+
+
+class ReleaseScorecardHistoryItem(BaseModel):
+    history_id: int | None = None
+    release_id: str
+    computed_at: str
+    overall_status: str
+    dimension_statuses: dict[str, str] = Field(default_factory=dict)
+

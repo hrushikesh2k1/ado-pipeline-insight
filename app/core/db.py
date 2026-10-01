@@ -81,3 +81,11 @@ def fetch_all(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
 def fetch_one(query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | None:
     rows = fetch_all(query, params)
     return rows[0] if rows else None
+
+
+def execute_commit(query: str, params: tuple[Any, ...] = ()) -> None:
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, *params)
+        conn.commit()
+

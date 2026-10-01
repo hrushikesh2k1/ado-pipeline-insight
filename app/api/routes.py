@@ -2,7 +2,7 @@ import base64
 import json
 import re
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Header
 from fastapi import Path as ApiPath
@@ -36,7 +36,14 @@ from app.schemas.connection import (
     MilestoneAiSummaryRequest,
     MilestoneAiSummaryResponse,
     MilestoneGraphData,
+    ReleaseBranchCandidate,
+    ReleaseDefinitionCreate,
+    ReleaseDefinition,
+    ReleaseScorecard,
+    ReleaseScorecardHistoryItem,
 )
+from app.repositories.release_repository import ReleaseRepository
+from app.services.release_service import ReleaseService
 from app.services.board_service import (
     evaluate_sprint_work_items,
     calculate_remaining_work_days,
@@ -1395,4 +1402,98 @@ def ado_ingest_status(
             return list(_ingestion_jobs.values())[-1]
 
         return {"status": "idle", "processed_runs": 0, "total_runs": 0}
+
+
+# ============================================================================
+# Release Readiness Scorecard Endpoints
+# ============================================================================
+
+@router.get("/releases/branch-candidates", response_model=list[ReleaseBranchCandidate])
+def get_release_branch_candidates(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    pipeline_id: int = Query(..., ge=1, le=MAX_ID),
+) -> list[ReleaseBranchCandidate]:
+    """Return distinct source_branch values observed in dbo.pipeline_runs for pipeline_id,
+    ordered by most-recently-built first. No pattern-matching or branch-name assumptions are applied.
+    """
+    org_clean = validate_organization(organization)
+    proj_clean = validate_project(project)
+    repo = ReleaseRepository()
+    return repo.get_branch_candidates(org_clean, proj_clean, pipeline_id)
+
+
+@router.post("/releases", response_model=ReleaseDefinition)
+def create_release(
+    data: ReleaseDefinitionCreate,
+    request: Request,
+) -> ReleaseDefinition:
+    """Create a new Release definition saved entity."""
+    org_clean = validate_organization(data.organization_name)
+    proj_clean = validate_project(data.project_name)
+    data.organization_name = org_clean
+    data.project_name = proj_clean
+
+    repo = ReleaseRepository()
+    created_by = request.client.host if request.client else "user"
+    return repo.create_release(data, created_by=created_by)
+
+
+@router.get("/releases", response_model=list[ReleaseDefinition])
+def list_releases(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+) -> list[ReleaseDefinition]:
+    """List saved Release definitions for an organization and project."""
+    org_clean = validate_organization(organization)
+    proj_clean = validate_project(project)
+    repo = ReleaseRepository()
+    return repo.list_releases(org_clean, proj_clean)
+
+
+@router.get("/releases/{release_id}", response_model=ReleaseScorecard)
+def get_release_scorecard(
+    release_id: str,
+    pat: str | None = Query(None),
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
+) -> ReleaseScorecard:
+    """Return the Release definition plus its live-computed 4-dimension scorecard."""
+    repo = ReleaseRepository()
+    release = repo.get_release(release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail=f"Release '{release_id}' was not found.")
+
+    resolved_pat = None
+    try:
+        resolved_pat = _resolve_pat(release.organization_name, pat or x_ado_pat)
+    except HTTPException:
+        resolved_pat = None
+
+    service = ReleaseService(repo)
+    return service.compute_scorecard(release, pat=resolved_pat)
+
+
+@router.delete("/releases/{release_id}")
+def delete_release(release_id: str) -> dict[str, Any]:
+    """Delete a saved Release definition and its scorecard history."""
+    repo = ReleaseRepository()
+    release = repo.get_release(release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail=f"Release '{release_id}' was not found.")
+    deleted = repo.delete_release(release_id)
+    return {"success": deleted, "release_id": release_id, "message": "Release deleted successfully."}
+
+
+@router.get("/releases/{release_id}/history", response_model=list[ReleaseScorecardHistoryItem])
+def get_release_scorecard_history(
+    release_id: str,
+    limit: int = Query(20, ge=1, le=100),
+) -> list[ReleaseScorecardHistoryItem]:
+    """Get chronological scorecard snapshot history for a release definition."""
+    repo = ReleaseRepository()
+    release = repo.get_release(release_id)
+    if not release:
+        raise HTTPException(status_code=404, detail=f"Release '{release_id}' was not found.")
+    return repo.get_scorecard_history(release_id, limit=limit)
+
 

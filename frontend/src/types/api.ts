@@ -193,4 +193,71 @@ export type AdoSprintBoardResponse = {
   milestone?: AdoSprintMilestoneSummary | null
 }
 
+export type ReleaseBranchCandidate = {
+  branch: string
+  last_built: string | null
+  run_count: number
+}
+
+export type ReleaseDefinitionCreate = {
+  name: string
+  organization_name: string
+  project_name: string
+  pipeline_id: number
+  target_branch: string
+  scope_feature_title?: string | null
+  target_ship_date?: string | null
+}
+
+export type ReleaseDefinition = {
+  release_id: string
+  name: string
+  organization_name: string
+  project_name: string
+  pipeline_id: number
+  target_branch: string
+  scope_feature_title?: string | null
+  target_ship_date?: string | null
+  created_by?: string | null
+  created_at: string
+}
+
+export type ReleaseDimensionEvidenceItem = {
+  id: string | number
+  title: string
+  item_type: string
+  status_or_result: string
+  severity?: string | null
+  web_url?: string | null
+  details?: string | null
+}
+
+export type ReleaseDimension = {
+  key: string
+  name: string
+  status: 'green' | 'yellow' | 'red'
+  score_text: string
+  summary: string
+  evidence_items: ReleaseDimensionEvidenceItem[]
+  metrics: Record<string, any>
+}
+
+export type ReleaseScorecard = {
+  release: ReleaseDefinition
+  overall_status: 'green' | 'yellow' | 'red'
+  computed_at: string
+  dimensions: Record<string, ReleaseDimension>
+  ai_narrative: string
+  ai_generated: boolean
+  recommendations: string[]
+}
+
+export type ReleaseScorecardHistoryItem = {
+  history_id?: number | null
+  release_id: string
+  computed_at: string
+  overall_status: string
+  dimension_statuses: Record<string, string>
+}
+
 

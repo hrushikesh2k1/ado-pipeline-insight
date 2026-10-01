@@ -1,8 +1,8 @@
 import React from 'react'
-import { Activity, GitPullRequest, FolderKanban, Puzzle } from 'lucide-react'
+import { Activity, GitPullRequest, FolderKanban, Puzzle, Rocket } from 'lucide-react'
 import { usePlugins } from '../context/PluginContext'
 
-export type NavPage = 'pipelines' | 'pull-requests' | 'sprints'
+export type NavPage = 'pipelines' | 'pull-requests' | 'sprints' | 'releases'
 
 interface NavSidebarProps {
   activePage: NavPage
@@ -52,6 +52,19 @@ export const NavSidebar: React.FC<NavSidebarProps> = ({ activePage, onSelectPage
             <FolderKanban size={20} strokeWidth={2.2} />
           </div>
           <span className="navTooltip">Sprint Boards</span>
+        </button>
+
+        <button
+          type="button"
+          className={`navSidebarBtn ${activePage === 'releases' ? 'active' : ''}`}
+          onClick={() => onSelectPage('releases')}
+          aria-label="Release Readiness Scorecard"
+        >
+          <div className="navSidebarActiveIndicator" />
+          <div className="navIconWrapper">
+            <Rocket size={20} strokeWidth={2.2} />
+          </div>
+          <span className="navTooltip">Release Readiness</span>
         </button>
       </div>
 

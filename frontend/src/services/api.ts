@@ -1,4 +1,4 @@
-import type { Options, Recommendation, Runs, Summary, Trends, RunAnalysis, AdoConnection, UserProfile, AdoRepository, AdoPullRequest, PullRequestReviewResponse, AdoTeam, AdoIteration, AdoSprintBoardResponse, MilestoneAiSummaryResponse } from '../types/api'
+import type { Options, Recommendation, Runs, Summary, Trends, RunAnalysis, AdoConnection, UserProfile, AdoRepository, AdoPullRequest, PullRequestReviewResponse, AdoTeam, AdoIteration, AdoSprintBoardResponse, MilestoneAiSummaryResponse, ReleaseBranchCandidate, ReleaseDefinition, ReleaseDefinitionCreate, ReleaseScorecard, ReleaseScorecardHistoryItem } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 async function request<T>(path:string, init?:RequestInit):Promise<T>{
@@ -110,6 +110,35 @@ export const api = {
     } catch {
       return { authenticated: false, userId: null, email: null, name: null, provider: null }
     }
+  },
+  releaseBranchCandidates: (organization: string, project: string, pipelineId: number) => {
+    const p = new URLSearchParams({ organization, project, pipeline_id: String(pipelineId) })
+    return request<ReleaseBranchCandidate[]>(`/api/v1/releases/branch-candidates?${p.toString()}`)
+  },
+  createRelease: (payload: ReleaseDefinitionCreate) => {
+    return request<ReleaseDefinition>('/api/v1/releases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  },
+  listReleases: (organization: string, project: string) => {
+    const p = new URLSearchParams({ organization, project })
+    return request<ReleaseDefinition[]>(`/api/v1/releases?${p.toString()}`)
+  },
+  getReleaseScorecard: (releaseId: string, pat?: string) => {
+    const p = new URLSearchParams()
+    if (pat) p.set('pat', pat)
+    const qs = p.toString() ? `?${p.toString()}` : ''
+    return request<ReleaseScorecard>(`/api/v1/releases/${releaseId}${qs}`)
+  },
+  deleteRelease: (releaseId: string) => {
+    return request<{ success: boolean; release_id: string; message: string }>(`/api/v1/releases/${releaseId}`, {
+      method: 'DELETE',
+    })
+  },
+  getReleaseHistory: (releaseId: string, limit = 20) => {
+    return request<ReleaseScorecardHistoryItem[]>(`/api/v1/releases/${releaseId}/history?limit=${limit}`)
   },
 }
 
