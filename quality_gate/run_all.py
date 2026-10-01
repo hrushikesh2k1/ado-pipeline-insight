@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qg import report  # noqa: E402
-from qg.checks import api_security, azure_posture, config_audit, deps, lint, sast, secrets, smells, tests_cov, types  # noqa: E402
+from qg.checks import api_security, azure_posture, config_audit, deps, functional, lint, sast, secrets, smells, tests_cov, types, ui_accuracy  # noqa: E402
 from qg.model import CheckResult, ERROR, FAIL, PASS, SKIP  # noqa: E402
 from qg.util import GATE_DIR, REPORTS_DIR, REPO_ROOT, git, tool_version  # noqa: E402
 
@@ -34,6 +34,8 @@ CHECKS = {
     "deps": deps.run_check,
     "secrets": secrets.run_check,
     "api_security": api_security.run_check,
+    "functional": functional.run_check,
+    "ui_accuracy": ui_accuracy.run_check,
     "config": config_audit.run_check,
     "lint": lint.run_check,
     "smells": smells.run_check,
@@ -45,6 +47,7 @@ CHECKS = {
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--no-live", action="store_true", help="skip the live functional and browser accuracy tests against the deployed site")
     ap.add_argument("--no-azure", action="store_true", help="skip the read-only inspection of the live Azure deployment")
     ap.add_argument("--ci", action="store_true", help="strict mode for pipelines: skipped checks fail the gate")
     ap.add_argument("--only", help="comma-separated check ids: " + ",".join(CHECKS))
@@ -55,7 +58,8 @@ def main() -> int:
 
     with open(args.config, "rb") as fh:
         cfg = tomllib.load(fh)
-    selected = [c for c in CHECKS if (not args.only or c in args.only.split(",")) and c not in (args.skip or "").split(",")]
+    skipped_ids = (args.skip or "").split(",") + (["functional", "ui_accuracy"] if args.no_live else [])
+    selected = [c for c in CHECKS if (not args.only or c in args.only.split(",")) and c not in skipped_ids]
 
     os.chdir(REPO_ROOT)
     print(f"Quality gate: {len(selected)} checks on {REPO_ROOT.name}\n")

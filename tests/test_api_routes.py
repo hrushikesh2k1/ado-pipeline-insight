@@ -210,3 +210,240 @@ def test_background_ingestion_failure_is_recorded_without_details(monkeypatch, t
     routes._run_historical_ingestion("myorg", "pat", "Proj", 3, 30, "k")
     job = routes._ingestion_jobs["k"]
     assert job["status"] == "failed" and "hunter2" not in job["error"]
+
+
+def test_auth_me_anonymous(api):
+    client, _ = api
+    r = client.get("/api/v1/auth/me")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["authenticated"] is False
+    assert data["userId"] is None
+    assert data["email"] is None
+
+
+def test_auth_me_authenticated(api):
+    client, _ = api
+    import base64
+    import json
+    claims = json.dumps({"claims": [{"typ": "name", "val": "Hrushikesh Boora"}]})
+    encoded = base64.b64encode(claims.encode("utf-8")).decode("utf-8")
+    headers = {
+        "x-ms-client-principal-id": "usr-12345",
+        "x-ms-client-principal-name": "hrushikesh.boora@octave.com",
+        "x-ms-client-principal": encoded,
+    }
+    r = client.get("/api/v1/auth/me", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["authenticated"] is True
+    assert data["userId"] == "usr-12345"
+    assert data["email"] == "hrushikesh.boora@octave.com"
+    assert data["name"] == "Hrushikesh Boora"
+    assert data["provider"] == "Microsoft Entra ID"
+
+
+def test_ado_repositories(api, monkeypatch):
+    client, _ = api
+    class MockClient:
+        def __init__(self, org, pat):
+            pass
+        def list_repositories(self, project):
+            return [
+                {"id": "repo-1", "name": "cldops-customer", "defaultBranch": "refs/heads/main", "webUrl": "https://dev.azure.com/org/p/_git/cldops-customer"}
+            ]
+
+    monkeypatch.setattr(routes, "AzureDevOpsClient", MockClient)
+    monkeypatch.setattr(routes, "_resolve_pat", lambda org, pat: "test-pat")
+    r = client.get("/api/v1/ado/repositories?organization=myorg&project=myproj")
+    assert r.status_code == 200
+    repos = r.json()
+    assert len(repos) == 1
+    assert repos[0]["name"] == "cldops-customer"
+    assert repos[0]["default_branch"] == "main"
+
+
+def test_ado_pull_requests(api, monkeypatch):
+    client, _ = api
+    class MockClient:
+        def __init__(self, org, pat):
+            pass
+        def list_pull_requests(self, project, repository_id, status="active", top=100):
+            return [
+                {
+                    "pullRequestId": 101,
+                    "title": "Add health check monitoring",
+                    "description": "Implements automated ping",
+                    "status": "active",
+                    "creationDate": "2026-09-30T10:00:00Z",
+                    "sourceRefName": "refs/heads/feature/health",
+                    "targetRefName": "refs/heads/main",
+                    "isDraft": False,
+                    "mergeStatus": "succeeded",
+                    "createdBy": {"displayName": "Alice Smith", "imageUrl": "https://img.test/alice"},
+                    "reviewers": [
+                        {"id": "rev-1", "displayName": "Bob Jones", "vote": 10, "isRequired": True}
+                    ],
+                    "repository": {"id": "repo-1", "name": "cldops-customer"},
+                    "_links": {"web": {"href": "https://dev.azure.com/org/p/_git/cldops-customer/pullrequest/101"}}
+                }
+            ]
+
+    monkeypatch.setattr(routes, "AzureDevOpsClient", MockClient)
+    monkeypatch.setattr(routes, "_resolve_pat", lambda org, pat: "test-pat")
+    r = client.get("/api/v1/ado/pullrequests?organization=myorg&project=myproj&repository_id=repo-1")
+    assert r.status_code == 200
+    prs = r.json()
+    assert len(prs) == 1
+    assert prs[0]["id"] == 101
+    assert prs[0]["title"] == "Add health check monitoring"
+    assert prs[0]["source_branch"] == "feature/health"
+    assert prs[0]["target_branch"] == "main"
+    assert prs[0]["created_by_name"] == "Alice Smith"
+    assert len(prs[0]["reviewers"]) == 1
+    assert prs[0]["reviewers"][0]["vote"] == 10
+
+
+def test_ado_pull_request_review(api, monkeypatch):
+    client, _ = api
+    class MockClient:
+        def __init__(self, organization, pat):
+            pass
+        def get_pull_request(self, project, repository_id, pull_request_id):
+            return {
+                "pullRequestId": pull_request_id,
+                "title": "Fix memory leak in subscriber",
+                "description": "Patches unclosed client connection",
+                "sourceRefName": "refs/heads/fix/leak",
+                "targetRefName": "refs/heads/main",
+                "createdBy": {"displayName": "Dev User"},
+                "mergeStatus": "succeeded",
+            }
+        def get_pull_request_commits(self, project, repository_id, pull_request_id):
+            return [{"commitId": "abc1234", "comment": "Close socket on termination"}]
+        def get_pull_request_iterations(self, project, repository_id, pull_request_id):
+            return [{"id": 1}]
+        def get_pull_request_iteration_changes(self, project, repository_id, pull_request_id, iteration_id):
+            return [
+                {"item": {"path": "/app/subscriber.py"}, "changeType": "edit"},
+                {"item": {"path": "/tests/test_subscriber.py"}, "changeType": "add"},
+            ]
+
+    monkeypatch.setattr(routes, "AzureDevOpsClient", MockClient)
+    monkeypatch.setattr(routes, "get_ado_pat", lambda org: "test-pat")
+
+    payload = {
+        "organization": "myorg",
+        "project": "myproj",
+        "repository_id": "repo-1",
+        "pull_request_id": 101,
+        "pat": "fake-pat",
+    }
+    r = client.post("/api/v1/ado/pullrequests/review", json=payload)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["pull_request_id"] == 101
+    assert data["posted_to_ado"] is False
+    assert "verdict" in data
+    assert "summary" in data
+    assert "scorecard" in data
+    assert "clarifications" in data
+    assert isinstance(data["comments"], list)
+
+
+def test_ado_teams(api):
+    client, _ = api
+    r = client.get("/api/v1/ado/teams?organization=myorg&project=myproj")
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    assert any("Team" in t["name"] or "Engineering" in t["name"] for t in data)
+
+
+def test_version_metadata(api):
+    client, _ = api
+    r = client.get("/api/v1/version")
+    assert r.status_code == 200
+    data = r.json()
+    assert "version" in data
+    assert "git_commit" in data
+    assert data["service"] == "ADO Pipeline Insight"
+
+
+def test_ado_sprints(api):
+    client, _ = api
+    r = client.get("/api/v1/ado/sprints?organization=myorg&project=myproj&team=CloudOps-Monitoring")
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    assert len(data) > 0
+    assert any("Work" in s["name"] for s in data)
+
+
+def test_ado_sprint_board(api):
+    client, _ = api
+    r = client.get("/api/v1/ado/sprints/board?organization=myorg&project=myproj&team=CloudOps-Monitoring")
+    assert r.status_code == 200
+    data = r.json()
+    assert "team" in data
+    assert "iteration" in data
+    assert "work_items" in data
+    assert "checks_summary" in data
+    assert len(data["work_items"]) > 0
+
+    # Verify Check 1 and Check 2 are evaluated
+    summary = data["checks_summary"]
+    assert summary["tasks_closed_without_hours_count"] >= 1
+    assert summary["stories_in_review_stale_count"] >= 1
+    assert len(summary["flagged_item_ids"]) >= 2
+
+    # Verify Milestone summary is populated
+    assert "milestone" in data
+    assert data["milestone"] is not None
+    assert "total_stories" in data["milestone"]
+    assert "closed_stories_count" in data["milestone"]
+
+
+def test_ado_sprint_board_sprint_selection(api):
+    client, _ = api
+    # Query specific sprint (iter-prev)
+    r = client.get("/api/v1/ado/sprints/board?organization=myorg&project=myproj&team=CloudOps-Monitoring&iteration_id=iter-prev")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["iteration"]["id"] == "iter-prev"
+    # Should contain items 8001, 8002, 8003
+    item_ids = [w["id"] for w in data["work_items"]]
+    assert 8001 in item_ids
+    assert 8002 in item_ids
+    assert 8003 in item_ids
+    assert 9001 not in item_ids
+
+
+def test_milestone_ai_summary(api):
+    client, _ = api
+    payload = {
+        "sprint_name": "Sprint 26-09",
+        "team_name": "CloudOps Team",
+        "achieved_items": [
+            {
+                "id": 9001,
+                "title": "Data Ingestion Optimization",
+                "work_item_type": "User Story",
+                "assigned_to_name": "DevOps Engineer",
+                "category": "Technical & Infrastructure",
+            }
+        ],
+        "total_stories": 5,
+        "closed_stories_count": 3,
+        "total_delivered_hours": 32.5,
+    }
+    r = client.post("/api/v1/sprint-board/milestone-ai-summary", json=payload)
+    assert r.status_code == 200
+    data = r.json()
+    assert "summary" in data
+    assert "highlights" in data
+    assert len(data["highlights"]) >= 2
+    assert "9001" in data["summary"] or "Data Ingestion" in data["summary"] or "CloudOps" in data["summary"]
+
+
+

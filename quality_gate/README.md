@@ -15,7 +15,7 @@ One command runs every security and quality check on this project and writes a s
 ./quality_gate/run.sh [--no-azure] [--ci]      # Linux / macOS / CI agents
 ```
 
-Useful options: `--only sast,deps` (run some checks), `--skip types`, `--open` (open report in browser).
+Useful options: `--only sast,deps` (run some checks), `--skip types`, `--no-live` (skip the checks that call the deployed site), `--open`.
 
 Output (all in `quality_gate/reports/`, git-ignored):
 
@@ -41,6 +41,8 @@ Exit code is `0` unless a **blocking** check failed, so it can gate a pipeline.
 | `smells` | **radon** complexity / maintainability, long functions and files, **vulture** dead code, duplicated blocks | a function above the complexity limit; the rest are warnings |
 | `types` | **mypy** on `app/` and `core/` | never (advisory) |
 | `tests` | Runs `tests/` under **pytest-cov** with branch coverage | a failing test, or coverage below `fail_under` |
+| `functional` | **Live data accuracy** (read-only, ~5 min because the API is slow): recomputes every summary card from the raw runs; checks Recent Runs order, durations and paging; proves the per-run and daily build-duration trends reconcile with the runs; checks run detail against its stages/jobs/tasks and that the deployed site is hardened. With database access it also reconciles against independent SQL and checks data integrity (negative durations, orphans, duplicates) | any figure that is wrong or inconsistent |
+| `ui_accuracy` | **Playwright** opens the deployed dashboard in headless Chromium and checks every card, the trend tab counts, the Recent Runs rows and the run drawer equal what the API returned to the page | any mismatch |
 | `azure` (automatic when logged in with `az login`; read-only) | Live App Service / Function App posture: HTTPS-only, TLS, FTPS, remote debugging, authentication in front of the app, managed identity, IP restrictions, CORS, secrets not stored as Key Vault references | any medium+ misconfiguration |
 
 The `azure` check matters: whether the deployed site requires a login is an Azure setting, not something the code can prove.
@@ -70,3 +72,21 @@ Python 3.11 (same as Azure). `run.ps1` / `run.sh` create `.venv-quality` and ins
 
 `tests/security/test_security_scan.py` (Bandit + pip-audit only) is superseded by `sast` and `deps` here. It is left
 untouched; delete it once you are happy with this gate.
+
+## Data-accuracy tests in detail
+
+Three layers, each catching a different kind of wrong number:
+
+1. **`tests/test_trends_and_runs_logic.py`** (offline, milliseconds): the arithmetic on rows and the exact SQL parameters for summary,
+   recent runs, trends and run detail. Runs with the normal unit tests.
+2. **`quality_gate/functional_tests/`** (live, read-only): the deployed API against itself. `test_data_consistency.py` recomputes each
+   figure from the raw run list; `test_deployment_smoke.py` checks the deployed site is hardened and its files are served;
+   `test_db_reconciliation.py` compares against independent SQL and checks table integrity.
+3. **`frontend/playwright/tests/accuracy.spec.ts`**: what is drawn on screen versus what the API returned.
+
+**Database reconciliation needs database access.** It reads the connection string from `QG_SQL_CONNECTION_STRING`, or from Key Vault with your
+`az login`, and needs your IP allowed on the Azure SQL firewall. Without that the scenarios are reported as **not run** (never as passed) and the
+check ends as a warning. Only `SELECT` statements are ever executed.
+
+If the site is behind App Service Authentication, set `QG_BEARER_TOKEN`; otherwise the live checks report that they need sign-in.
+Override the target with `QG_BASE_URL`.

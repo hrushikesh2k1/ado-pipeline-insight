@@ -39,7 +39,7 @@ class PipelineRepository:
         where = " AND ".join(clauses)
         count = fetch_one(f"SELECT COUNT(*) total FROM dbo.pipeline_runs r WHERE {where}", tuple(params))["total"]  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
         params.extend([(page - 1) * page_size, page_size])
-        items = fetch_all(f"""SELECT r.run_id,r.pipeline_id,p.pipeline_name,p.organization_name,p.project_name,r.source_branch,r.queue_time,r.start_time,r.finish_time,r.result,r.is_degraded,r.data_quality,r.build_number,DATEDIFF(second,r.start_time,r.finish_time) duration_seconds FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE {where} ORDER BY r.start_time DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY""", tuple(params))  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
+        items = fetch_all(f"""SELECT r.run_id,r.pipeline_id,p.pipeline_name,p.organization_name,p.project_name,r.source_branch,r.queue_time,r.start_time,r.finish_time,r.result,r.is_degraded,r.data_quality,r.build_number,DATEDIFF(second,r.start_time,r.finish_time) duration_seconds,(SELECT TOP 1 s.stage_name FROM dbo.pipeline_stages s WHERE s.run_id=r.run_id AND s.result != 'skipped' ORDER BY s.duration_seconds DESC) stage_name FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE {where} ORDER BY r.start_time DESC OFFSET ? ROWS FETCH NEXT ? ROWS ONLY""", tuple(params))  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
         return {"page": page, "page_size": page_size, "total_count": int(count), "total_pages": max(1, (int(count) + page_size - 1) // page_size), "items": items}
 
     def trends(self, pipeline_id: int | None, days: int) -> dict[str, Any]:
@@ -47,8 +47,8 @@ class PipelineRepository:
         if pipeline_id is not None: clauses.append("r.pipeline_id=?"); params.append(pipeline_id)
         where=" AND ".join(clauses)
         build=fetch_all(f"""SELECT r.run_id,r.build_number,r.start_time run_date,r.pipeline_id,p.pipeline_name,DATEDIFF(second,r.start_time,r.finish_time) duration_seconds,r.result FROM dbo.pipeline_runs r JOIN dbo.pipelines p ON p.pipeline_id=r.pipeline_id WHERE {where} ORDER BY r.start_time""",tuple(params))  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
-        daily=fetch_all(f"""SELECT run_date,pipeline_id,pipeline_name,AVG(avg_duration_seconds) avg_duration_seconds,MAX(p90_duration_seconds) p90_duration_seconds FROM dbo.vw_pipeline_duration_trend WHERE run_date>=CAST(? AS date) {(' AND pipeline_id=?' if pipeline_id is not None else '')} GROUP BY run_date,pipeline_id,pipeline_name ORDER BY run_date""",tuple([start.date(), *([pipeline_id] if pipeline_id is not None else [])]))  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
-        stage=fetch_all(f"""SELECT CAST(r.start_time AS date) run_date,s.stage_name,AVG(s.duration_seconds) avg_duration_seconds FROM dbo.pipeline_runs r JOIN dbo.pipeline_stages s ON s.run_id=r.run_id WHERE {where} AND s.duration_seconds IS NOT NULL GROUP BY CAST(r.start_time AS date),s.stage_name ORDER BY run_date""",tuple(params))  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
+        daily=daily_build_trend(build)
+        stage=fetch_all(f"""SELECT CAST(r.start_time AS date) run_date,s.stage_name,AVG(s.duration_seconds) avg_duration_seconds FROM dbo.pipeline_runs r JOIN dbo.pipeline_stages s ON s.run_id=r.run_id WHERE {where} AND r.is_degraded=0 AND s.duration_seconds IS NOT NULL GROUP BY CAST(r.start_time AS date),s.stage_name ORDER BY run_date""",tuple(params))  # nosec B608 - only constant SQL fragments are interpolated; every value is bound as a parameter
         return {"build_trend":build,"daily_trend":daily,"stage_trend":stage}
 
     def recommendations(self,pipeline_id:int,limit:int=50)->list[dict[str,Any]]:
@@ -83,3 +83,21 @@ class PipelineRepository:
 def percentile(values:list[float],p:float)->float|None:
     if not values:return None
     values=sorted(values); pos=(len(values)-1)*p; low=int(pos); high=min(low+1,len(values)-1); return round(values[low]+(values[high]-values[low])*(pos-low),2)
+
+
+def daily_build_trend(build_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Average and p90 build duration per day and pipeline, from the same run rows the per-run trend and summary use."""
+    groups: dict[tuple[str, int], dict[str, Any]] = {}
+    for row in build_rows:
+        duration, started = row.get("duration_seconds"), row.get("run_date")
+        if duration is None or started is None:
+            continue
+        day = started.date().isoformat() if hasattr(started, "date") else str(started)[:10]
+        group = groups.setdefault((day, row["pipeline_id"]), {"pipeline_name": row.get("pipeline_name"), "durations": []})
+        group["durations"].append(float(duration))
+    return [
+        {"run_date": day, "pipeline_id": pipeline_id, "pipeline_name": g["pipeline_name"],
+         "avg_duration_seconds": round(sum(g["durations"]) / len(g["durations"]), 2),
+         "p90_duration_seconds": percentile(g["durations"], 0.9)}
+        for (day, pipeline_id), g in sorted(groups.items())
+    ]

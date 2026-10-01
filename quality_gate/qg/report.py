@@ -58,7 +58,7 @@ def _table(rows: list[dict]) -> str:
         for c in cols:
             v = r[c]
             if c in ("result", "severity", "rank") and str(v):
-                cls = {"pass": "PASS", "FAIL": "FAIL"}.get(str(v), str(v))
+                cls = {"pass": "PASS", "FAIL": "FAIL", "not run": "SKIP"}.get(str(v), str(v))
                 cells.append(f'<td><span class="pill {cls}">{_e(v)}</span></td>')
             elif c == "coverage %":
                 cls = "" if v >= 80 else ("mid" if v >= 60 else "low")

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -65,6 +65,29 @@ class RecommendationResponse:
 
 
 @dataclass(frozen=True)
+class PullRequestReviewComment:
+    id: str
+    category: Literal["correctness", "security", "performance", "maintainability", "test_coverage"]
+    severity: Literal["critical", "warning", "suggestion", "praise"]
+    title: str
+    comment: str
+    file_path: str | None = None
+    line_number: int | None = None
+    suggestion_code: str | None = None
+
+
+@dataclass(frozen=True)
+class PullRequestReviewResponse:
+    pull_request_id: int
+    verdict: str  # "APPROVED", "APPROVED_WITH_SUGGESTIONS", "CHANGES_REQUESTED"
+    summary: str
+    scorecard: dict[str, str]
+    comments: list[PullRequestReviewComment]
+    clarifications: list[str] = field(default_factory=list)
+    posted_to_ado: bool = False
+
+
+@dataclass(frozen=True)
 class DoraMetric:
     metric_date: str
     pipeline_id: int
@@ -112,4 +135,41 @@ class YamlDiffProposal:
     diff_patch: str
     explanation: str
     estimated_time_saved_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class SprintTeam:
+    id: str
+    name: str
+    description: str | None = None
+
+
+@dataclass(frozen=True)
+class SprintIteration:
+    id: str
+    name: str
+    path: str
+    start_date: str | None = None
+    finish_date: str | None = None
+    time_frame: str | None = None
+
+
+@dataclass(frozen=True)
+class SprintWorkItem:
+    id: int
+    title: str
+    work_item_type: str
+    state: str
+    assigned_to_name: str | None = None
+    assigned_to_avatar: str | None = None
+    remaining_work: float | None = None
+    completed_work: float | None = None
+    original_estimate: float | None = None
+    parent_id: int | None = None
+    state_change_date: str | None = None
+    changed_date: str | None = None
+    web_url: str | None = None
+    business_days_in_review: int | None = None
+    is_closed_without_hours: bool = False
+    is_stale_in_review: bool = False
 

@@ -48,3 +48,10 @@ blocking = false
 # Live-deployment posture checks. Run with --azure (needs `az login`); read-only calls only.
 webapps = [{ name = "app-ado-pipeline-insight-test", resource_group = "rg-ado-pipeline-insight-test" }]
 functionapps = [{ name = "func-pipeline-insight-test", resource_group = "rg-ado-pipeline-insight-test" }]
+
+[functional]
+# Live, read-only functional checks against the deployed site (override with QG_BASE_URL). Set to "" to disable.
+base_url = "https://app-ado-pipeline-insight-test.azurewebsites.net"
+window_days = 90
+# Optional: lets the reconciliation tests read the SQL connection string with your `az login`. Never put secrets here.
+key_vault_url = ""

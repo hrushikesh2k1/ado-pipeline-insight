@@ -48,7 +48,14 @@ def create_app() -> FastAPI:
     def root():
         index = frontend_dist / "index.html"
         if index.exists():
-            return FileResponse(index)
+            return FileResponse(
+                index,
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
         return {"name": "ADO Pipeline Insight API"}
 
     return app

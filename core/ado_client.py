@@ -44,6 +44,237 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response).get("value", [])
 
+    def list_repositories(self, project: str) -> list[dict[str, Any]]:
+        response = self.session.get(
+            self._url(project, "_apis/git/repositories"),
+            params={"api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def list_pull_requests(
+        self, project: str, repository_id: str, status: str = "active", top: int = 100
+    ) -> list[dict[str, Any]]:
+        response = self.session.get(
+            self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/pullrequests"),
+            params={"searchCriteria.status": status, "$top": top, "api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def get_pull_request(
+        self, project: str, repository_id: str, pull_request_id: int
+    ) -> dict[str, Any]:
+        response = self.session.get(
+            self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/pullrequests/{pull_request_id}"),
+            params={"api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response)
+
+    def get_pull_request_commits(
+        self, project: str, repository_id: str, pull_request_id: int, top: int = 50
+    ) -> list[dict[str, Any]]:
+        response = self.session.get(
+            self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/pullrequests/{pull_request_id}/commits"),
+            params={"$top": top, "api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def get_pull_request_iterations(
+        self, project: str, repository_id: str, pull_request_id: int
+    ) -> list[dict[str, Any]]:
+        response = self.session.get(
+            self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/pullrequests/{pull_request_id}/iterations"),
+            params={"api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def get_pull_request_iteration_changes(
+        self, project: str, repository_id: str, pull_request_id: int, iteration_id: int, top: int = 100
+    ) -> list[dict[str, Any]]:
+        response = self.session.get(
+            self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/pullrequests/{pull_request_id}/iterations/{iteration_id}/changes"),
+            params={"$top": top, "api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("changeEntries", [])
+
+    def get_blob_content(self, project: str, repository_id: str, object_id: str) -> str | None:
+        """Fetch the text content of a Git blob by its object ID."""
+        try:
+            response = self.session.get(
+                self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/blobs/{object_id}"),
+                params={"api-version": self.api_version},
+                headers={"Accept": "text/plain"},
+                timeout=20,
+            )
+            if response.status_code == 200:
+                return response.text
+        except Exception as e:
+            logging.debug("Could not fetch blob %s: %s", object_id, e)
+        return None
+
+    def get_item_content(
+        self, project: str, repository_id: str, path: str, version: str | None = None
+    ) -> str | None:
+        """Fetch the text content of an item/file in a Git repo."""
+        try:
+            params = {"api-version": self.api_version, "includeContent": "true"}
+            if version:
+                params["versionDescriptor.version"] = version
+                params["versionDescriptor.versionType"] = "commit" if len(version) == 40 else "branch"
+            response = self.session.get(
+                self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/items"),
+                params=params,
+                timeout=20,
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("content")
+        except Exception as e:
+            logging.debug("Could not fetch item %s: %s", path, e)
+        return None
+
+    def list_teams(self, project: str, top: int = 100) -> list[dict[str, Any]]:
+        """List all teams within a project."""
+        url = f"https://dev.azure.com/{quote(self.organization, safe='')}/_apis/projects/{quote(project, safe='')}/teams"
+        try:
+            response = self.session.get(
+                url,
+                params={"$top": top, "api-version": self.api_version},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return self._json_response(response).get("value", [])
+        except Exception:
+            # Fallback to alternate route
+            url_alt = self._url(project, "_apis/teams")
+            response = self.session.get(
+                url_alt,
+                params={"$top": top, "api-version": self.api_version},
+                timeout=30,
+            )
+            response.raise_for_status()
+            return self._json_response(response).get("value", [])
+
+    def list_team_iterations(
+        self, project: str, team: str, timeframe: str | None = None
+    ) -> list[dict[str, Any]]:
+        """List all iterations (sprints) assigned to a team."""
+        url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/iterations"
+        params: dict[str, Any] = {"api-version": self.api_version}
+        if timeframe:
+            params["$timeframe"] = timeframe
+        response = self.session.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def get_iteration_work_items(
+        self, project: str, team: str, iteration_id: str
+    ) -> list[dict[str, Any]]:
+        """Get work item relations for a team sprint iteration."""
+        url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/iterations/{quote(iteration_id, safe='')}/workitems"
+        response = self.session.get(url, params={"api-version": self.api_version}, timeout=30)
+        response.raise_for_status()
+        data = self._json_response(response)
+        if "workItemRelations" in data:
+            return data["workItemRelations"]
+        if "workItems" in data:
+            return data["workItems"]
+        if "value" in data:
+            return data["value"]
+        return []
+
+    def query_wiql(self, project: str, wiql_query: str) -> list[int]:
+        """Execute a WIQL query and return a list of matching work item IDs."""
+        url = self._url(project, "_apis/wit/wiql")
+        payload = {"query": wiql_query}
+        response = self.session.post(url, json=payload, params={"api-version": self.api_version}, timeout=30)
+        response.raise_for_status()
+        data = self._json_response(response)
+
+        item_ids: list[int] = []
+        if "workItems" in data and isinstance(data["workItems"], list):
+            for item in data["workItems"]:
+                if isinstance(item, dict) and "id" in item:
+                    try:
+                        item_ids.append(int(item["id"]))
+                    except (ValueError, TypeError):
+                        pass
+        elif "workItemRelations" in data and isinstance(data["workItemRelations"], list):
+            for rel in data["workItemRelations"]:
+                if isinstance(rel, dict):
+                    target = rel.get("target")
+                    if isinstance(target, dict) and "id" in target:
+                        try:
+                            item_ids.append(int(target["id"]))
+                        except (ValueError, TypeError):
+                            pass
+                    source = rel.get("source")
+                    if isinstance(source, dict) and "id" in source:
+                        try:
+                            item_ids.append(int(source["id"]))
+                        except (ValueError, TypeError):
+                            pass
+        return list(dict.fromkeys(item_ids))
+
+    def get_team_iteration(
+        self, project: str, team: str, iteration_id: str
+    ) -> dict[str, Any]:
+        """Fetch details of a single team iteration by ID."""
+        url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/iterations/{quote(iteration_id, safe='')}"
+        response = self.session.get(url, params={"api-version": self.api_version}, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response)
+
+    def get_work_items_batch(
+        self, project: str, ids: list[int], fields: list[str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Batch fetch work items by their IDs."""
+        if not ids:
+            return []
+        url = self._url(project, "_apis/wit/workitemsbatch")
+        default_fields = [
+            "System.Id",
+            "System.Title",
+            "System.State",
+            "System.WorkItemType",
+            "System.AssignedTo",
+            "System.ChangedDate",
+            "System.CreatedDate",
+            "System.IterationPath",
+            "System.AreaPath",
+            "System.Parent",
+            "Microsoft.VSTS.Scheduling.RemainingWork",
+            "Microsoft.VSTS.Scheduling.CompletedWork",
+            "Microsoft.VSTS.Scheduling.OriginalEstimate",
+            "Microsoft.VSTS.Common.StateChangeDate",
+            "System.BoardColumn",
+            "System.Description",
+            "Microsoft.VSTS.Common.AcceptanceCriteria",
+            "Microsoft.VSTS.TCM.ReproSteps",
+            "System.Tags",
+        ]
+        results: list[dict[str, Any]] = []
+        for i in range(0, len(ids), 200):
+            chunk = ids[i : i + 200]
+            payload = {
+                "ids": chunk,
+                "fields": fields or default_fields,
+            }
+            response = self.session.post(url, json=payload, params={"api-version": self.api_version}, timeout=30)
+            response.raise_for_status()
+            results.extend(self._json_response(response).get("value", []))
+        return results
 
     def list_builds(
         self,

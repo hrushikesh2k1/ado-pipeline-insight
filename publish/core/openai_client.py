@@ -27,7 +27,7 @@ Guidelines for World-Class Findings:
    Format every recommendation with three distinct markdown sections:
    **Diagnosis**: Precise root cause explanation (referencing the error excerpt if present).
    **Remediation**: Concrete, actionable engineering fix (provide specific YAML keys, CLI flags like `--validate=false` or `--timeout`, retry policies, or cache task configurations).
-   **Impact**: Quantified expected benefit (e.g., "Eliminates ~25% failure rate in Monitoring stage", "Saves ~4.5 minutes per pipeline run").
+   **Impact**: Quantified expected benefit (e.g., "Eliminates ~25% failure rate in Build / Test stage", "Saves ~4.5 minutes per pipeline run").
 4. Structure of `evidence`:
    Concise summary of measured metrics (duration, failure rate, retry rate, % of stage). If `error_excerpt` is provided, quote the relevant log snippet cleanly (e.g., 'Error Log: "dial tcp 13.77.233.102:443: i/o timeout"').
 5. Severity Guidelines:

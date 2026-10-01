@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import xml.etree.ElementTree as ET
-
-from qg.model import CheckResult, Finding, FAIL, PASS, SKIP
+from qg.checks._junit import summarize
+from qg.model import CheckResult, FAIL, PASS, SKIP
 from qg.util import GATE_DIR, REPO_ROOT, WORK_DIR, module_available, py
 
 ID, NAME, CATEGORY = "api_security", "Application security tests (attack simulation)", "Security"
@@ -30,34 +29,7 @@ def run_check(cfg: dict) -> CheckResult:
         res.status, res.summary = FAIL, f"security tests could not run: {(r.stderr or r.stdout)[-400:]}"
         return res
 
-    groups: dict[str, dict] = {}
-    for case in ET.parse(junit).getroot().iter("testcase"):
-        props = {p.get("name"): p.get("value") for p in case.iter("property")}
-        bad = case.find("failure") if case.find("failure") is not None else case.find("error")
-        if bad is None and case.find("skipped") is not None:
-            continue
-        title = props.get("title") or case.get("name", "").split("[")[0]
-        g = groups.setdefault(title, {"severity": props.get("severity", "medium"), "area": props.get("area", "api"), "fix": props.get("fix", ""),
-                                      "cases": 0, "failed": 0, "first": "", "where": ""})
-        g["cases"] += 1
-        if bad is not None:
-            g["failed"] += 1
-            if not g["first"]:
-                msg = (bad.get("message") or "").strip().splitlines()
-                g["first"] = (msg[0] if msg else "")[:300]
-                g["where"] = case.get("classname", "").split(".")[-1] + "::" + case.get("name", "")
-
-    order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-    rows = []
-    for title, g in groups.items():
-        rows.append({"result": "FAIL" if g["failed"] else "pass", "severity": g["severity"], "attack scenario": title,
-                     "area": g["area"], "cases run": g["cases"], "cases that succeeded": g["failed"]})
-        if g["failed"]:
-            res.findings.append(Finding(g["severity"], title, g["where"], f"{g['failed']} of {g['cases']} attack cases succeeded. First: {g['first']}",
-                                        g["area"], g["fix"]))
-    res.findings.sort(key=lambda f: order.get(f.severity, 5))
-    rows.sort(key=lambda x: (x["result"] != "FAIL", order.get(x["severity"], 5), x["area"]))
-    res.tables["Every attack scenario executed"] = rows
+    groups = summarize(junit, res, "Every attack scenario executed")
     vulnerable = sum(1 for g in groups.values() if g["failed"])
     res.metrics = {"attack scenarios": len(groups), "resisted": len(groups) - vulnerable, "vulnerable": vulnerable,
                    "individual attack cases": sum(g["cases"] for g in groups.values())}

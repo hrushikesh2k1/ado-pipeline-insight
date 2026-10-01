@@ -56,3 +56,8 @@ publish.xml
 function-openai-setting.json
 .coverage
 logs-extracted/
+scratch/logs/
+scratch/logs2/
+scratch/*.png
+scratch/*.txt
+
