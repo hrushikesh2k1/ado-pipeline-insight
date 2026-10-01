@@ -41,10 +41,16 @@ def normalize_branch(branch: str | None) -> str:
 def is_high_or_blocker_severity(severity: str | None, priority: int | None = None) -> bool:
     """Determine if a Bug has high severity or blocker impact from Microsoft.VSTS.Common.Severity
     or Microsoft.VSTS.Common.Priority fields. Never infer severity from work item titles.
+    Uses exact-prefix matching against known ADO severity values to avoid false positives.
     """
     if severity:
         s = str(severity).strip().lower()
-        if any(keyword in s for keyword in ("1", "critical", "blocker", "urgent", "2 - high", "high")):
+        # ADO severity values: "1 - Critical", "2 - High", or freeform "critical", "blocker", "urgent"
+        high_severity_values = (
+            "1 - critical", "2 - high",
+            "critical", "blocker", "urgent", "high",
+        )
+        if any(s == val or s.startswith(val) for val in high_severity_values):
             return True
     if priority == 1:
         return True
@@ -156,7 +162,8 @@ def evaluate_defect_burden(
     normal_bugs: list[dict[str, Any]] = []
 
     for b in open_bugs:
-        sev = b.get("severity") or b.get("fields", {}).get("Microsoft.VSTS.Common.Severity")
+        # Items are already flattened by compute_scorecard; severity is a top-level key.
+        sev = b.get("severity")
         prio = b.get("priority")
         if is_high_or_blocker_severity(sev, prio):
             blocker_bugs.append(b)
@@ -616,7 +623,7 @@ class ReleaseService:
         try:
             if release.pipeline_id:
                 sql = """
-                    SELECT run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
+                    SELECT TOP (200) run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
                     FROM dbo.pipeline_runs
                     WHERE pipeline_id = ?
                     ORDER BY start_time DESC
@@ -624,7 +631,7 @@ class ReleaseService:
                 pipeline_runs = fetch_all(sql, (release.pipeline_id,))
             else:
                 sql = """
-                    SELECT run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
+                    SELECT TOP (200) run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
                     FROM dbo.pipeline_runs
                     WHERE LOWER(organization_name) = LOWER(?) AND LOWER(project_name) = LOWER(?)
                     ORDER BY start_time DESC
@@ -652,58 +659,191 @@ class ReleaseService:
 
         if client:
             try:
-                # Get current team iteration & items
-                teams = client.list_teams(release.project_name, top=5)
-                if teams:
-                    team_id = teams[0]["id"]
-                    iterations = client.list_team_iterations(release.project_name, team_id)
-                    current_iter = next((it for it in iterations if it.get("attributes", {}).get("timeFrame") == "current"), None)
-                    if not current_iter and iterations:
-                        current_iter = iterations[-1]
-                    if current_iter:
-                        raw_iter_items = client.get_iteration_work_items(
-                            release.project_name, team_id, current_iter["id"]
+                # Find team iteration matching target_ship_date or current
+                teams = client.list_teams(release.project_name, top=10)
+                selected_iter = None
+                team_id = None
+                target_date_str = (release.target_ship_date or "").strip()[:10]
+
+                for t in (teams or []):
+                    tid = t.get("id")
+                    if not tid:
+                        continue
+                    try:
+                        iterations = client.list_team_iterations(release.project_name, tid)
+                    except Exception:
+                        continue
+                    if not iterations:
+                        continue
+
+                    # 1. Match by target_ship_date if provided
+                    if target_date_str:
+                        # Try exact date range match
+                        for it in iterations:
+                            attrs = it.get("attributes", {})
+                            s_str = (attrs.get("startDate") or "")[:10]
+                            f_str = (attrs.get("finishDate") or "")[:10]
+                            if s_str and f_str and s_str <= target_date_str <= f_str:
+                                selected_iter = it
+                                team_id = tid
+                                break
+                            elif s_str and not f_str and s_str <= target_date_str:
+                                selected_iter = it
+                                team_id = tid
+                                break
+                            elif f_str and not s_str and target_date_str <= f_str:
+                                selected_iter = it
+                                team_id = tid
+                                break
+
+                        # Try month-level or name-level match (e.g. "2026-09" or "sep")
+                        if not selected_iter:
+                            month_prefix = target_date_str[:7]
+                            for it in iterations:
+                                attrs = it.get("attributes", {})
+                                s_str = (attrs.get("startDate") or "")[:7]
+                                f_str = (attrs.get("finishDate") or "")[:7]
+                                it_name = (it.get("name") or "").lower()
+                                it_path = (it.get("path") or "").lower()
+                                if (s_str and s_str == month_prefix) or (f_str and f_str == month_prefix):
+                                    selected_iter = it
+                                    team_id = tid
+                                    break
+                                elif month_prefix and (month_prefix in it_name or month_prefix in it_path):
+                                    selected_iter = it
+                                    team_id = tid
+                                    break
+
+                    # 2. Match current iteration if no date match
+                    if not selected_iter:
+                        current_it = next((it for it in iterations if it.get("attributes", {}).get("timeFrame") == "current"), None)
+                        if current_it:
+                            selected_iter = current_it
+                            team_id = tid
+                            break
+
+                    # 3. Fallback to latest iteration
+                    if not selected_iter and iterations:
+                        selected_iter = iterations[-1]
+                        team_id = tid
+
+                    if selected_iter and (not target_date_str or (target_date_str and (selected_iter.get("attributes", {}).get("startDate") or "")[:10] <= target_date_str <= (selected_iter.get("attributes", {}).get("finishDate") or "")[:10])):
+                        break
+
+                if selected_iter and team_id:
+                    raw_iter_items = client.get_iteration_work_items(
+                        release.project_name, team_id, selected_iter["id"]
+                    )
+                    relations = raw_iter_items if isinstance(raw_iter_items, list) else (
+                        raw_iter_items.get("workItemRelations")
+                        or raw_iter_items.get("work_item_relations")
+                        or raw_iter_items.get("workItems")
+                        or raw_iter_items.get("value")
+                        or []
+                    )
+                    wi_ids: list[int] = []
+                    for r in relations:
+                        if isinstance(r, dict):
+                            target = r.get("target") or {}
+                            tid = target.get("id") if isinstance(target, dict) else None
+                            if tid is None and isinstance(r.get("id"), int):
+                                tid = r.get("id")
+                            if tid and isinstance(tid, int) and tid not in wi_ids:
+                                wi_ids.append(tid)
+
+                            source = r.get("source") or {}
+                            sid = source.get("id") if isinstance(source, dict) else None
+                            if sid and isinstance(sid, int) and sid not in wi_ids:
+                                wi_ids.append(sid)
+                        elif isinstance(r, (int, str)):
+                            try:
+                                wid_int = int(r)
+                                if wid_int not in wi_ids:
+                                    wi_ids.append(wid_int)
+                            except (ValueError, TypeError):
+                                pass
+
+                    # Fallback: If relations returned 0 items, query via WIQL by iteration path
+                    if not wi_ids and selected_iter:
+                        iter_path = selected_iter.get("path") or selected_iter.get("name")
+                        if iter_path:
+                            clean_path = iter_path.strip().replace("'", "''")
+                            if not clean_path.startswith(release.project_name) and not clean_path.startswith("\\"):
+                                clean_path = f"{release.project_name}\\{clean_path}"
+                            clean_path = clean_path.lstrip("\\")
+                            wiql = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{release.project_name}' AND ([System.IterationPath] = '{clean_path}' OR [System.IterationPath] UNDER '{clean_path}')"
+                            try:
+                                wiql_ids = client.query_wiql(release.project_name, wiql)
+                                if wiql_ids:
+                                    for wid in wiql_ids:
+                                        if wid not in wi_ids:
+                                            wi_ids.append(wid)
+                            except Exception as e_wiql:
+                                logger.debug("WIQL fallback query failed: %s", e_wiql)
+
+                    if wi_ids:
+                        # Batch load work items
+                        work_items_raw = client.get_work_items_batch(
+                            release.project_name,
+                            wi_ids[:200],
+                            fields=[
+                                "System.Id",
+                                "System.Title",
+                                "System.WorkItemType",
+                                "System.State",
+                                "System.AssignedTo",
+                                "Microsoft.VSTS.Common.Severity",
+                                "Microsoft.VSTS.Common.Priority",
+                                "Microsoft.VSTS.Scheduling.CompletedWork",
+                                "System.Parent",
+                                "System.AreaPath",
+                                "System.Tags",
+                            ],
                         )
-                        wi_ids = [w["id"] for w in raw_iter_items.get("work_item_relations", []) if w.get("id")]
-                        if not wi_ids:
-                            wi_ids = [w["target"]["id"] for w in raw_iter_items.get("work_item_relations", []) if w.get("target", {}).get("id")]
-                        if wi_ids:
-                            # Batch load work items
-                            work_items_raw = client.get_work_items_batch(
-                                release.project_name,
-                                wi_ids[:200],
-                                fields=[
-                                    "System.Id",
-                                    "System.Title",
-                                    "System.WorkItemType",
-                                    "System.State",
-                                    "System.AssignedTo",
-                                    "Microsoft.VSTS.Common.Severity",
-                                    "Microsoft.VSTS.Common.Priority",
-                                    "Microsoft.VSTS.Scheduling.CompletedWork",
-                                    "System.Parent",
-                                    "System.AreaPath",
-                                    "System.Tags",
-                                ],
-                            )
-                            # Parse into lightweight dicts
-                            for w in work_items_raw:
-                                f = w.get("fields", {})
-                                wid = int(w["id"])
-                                parsed_items.append({
-                                    "id": wid,
-                                    "title": f.get("System.Title", ""),
-                                    "work_item_type": f.get("System.WorkItemType", "Story"),
-                                    "state": f.get("System.State", "New"),
-                                    "severity": f.get("Microsoft.VSTS.Common.Severity"),
-                                    "priority": f.get("Microsoft.VSTS.Common.Priority"),
-                                    "assigned_to_name": f.get("System.AssignedTo", {}).get("displayName") if isinstance(f.get("System.AssignedTo"), dict) else str(f.get("System.AssignedTo") or ""),
-                                    "parent_id": f.get("System.Parent"),
-                                    "area_path": f.get("System.AreaPath"),
-                                    "tags": f.get("System.Tags"),
-                                    "completed_work": f.get("Microsoft.VSTS.Scheduling.CompletedWork", 0.0),
-                                    "web_url": w.get("_links", {}).get("html", {}).get("href") or f"https://dev.azure.com/{quote(release.organization_name, safe='')}/{quote(release.project_name, safe='')}/_workitems/edit/{wid}",
-                                })
+                        # Parse into lightweight dicts
+                        for w in work_items_raw:
+                            f = w.get("fields", {})
+                            wid = int(w["id"])
+                            parsed_items.append({
+                                "id": wid,
+                                "title": f.get("System.Title", ""),
+                                "work_item_type": f.get("System.WorkItemType", "Story"),
+                                "state": f.get("System.State", "New"),
+                                "severity": f.get("Microsoft.VSTS.Common.Severity"),
+                                "priority": f.get("Microsoft.VSTS.Common.Priority"),
+                                "assigned_to_name": f.get("System.AssignedTo", {}).get("displayName") if isinstance(f.get("System.AssignedTo"), dict) else str(f.get("System.AssignedTo") or ""),
+                                "parent_id": f.get("System.Parent"),
+                                "area_path": f.get("System.AreaPath"),
+                                "tags": f.get("System.Tags"),
+                                "completed_work": f.get("Microsoft.VSTS.Scheduling.CompletedWork", 0.0),
+                                "web_url": w.get("_links", {}).get("html", {}).get("href") or f"https://dev.azure.com/{quote(release.organization_name, safe='')}/{quote(release.project_name, safe='')}/_workitems/edit/{wid}",
+                            })
+
+                        # Resolve parents for milestone streams & scoping
+                        by_id = {it["id"]: it for it in parsed_items}
+                        for it in parsed_items:
+                            pid = it.get("parent_id")
+                            if pid is not None and pid in by_id:
+                                parent_lookup[pid] = (by_id[pid]["title"], by_id[pid]["work_item_type"])
+
+                        missing_parent_ids = sorted({
+                            it["parent_id"] for it in parsed_items
+                            if it.get("parent_id") is not None and it["parent_id"] not in parent_lookup
+                        })
+                        if missing_parent_ids:
+                            try:
+                                parent_items = client.get_work_items_batch(
+                                    release.project_name,
+                                    missing_parent_ids[:100],
+                                    fields=["System.Id", "System.Title", "System.WorkItemType"]
+                                )
+                                for p in parent_items:
+                                    pf = p.get("fields") or {}
+                                    pid = int(p.get("id") or pf.get("System.Id") or 0)
+                                    if pid:
+                                        parent_lookup[pid] = (str(pf.get("System.Title") or ""), str(pf.get("System.WorkItemType") or ""))
+                            except Exception as e_parent:
+                                logger.debug("Could not resolve parent items for scorecard: %s", e_parent)
             except Exception as e:
                 logger.debug("Could not fetch ADO sprint items for scorecard: %s", e)
 
@@ -726,9 +866,9 @@ class ReleaseService:
                             "web_url": web_url,
                         })
                 else:
-                    # Fetch PRs across repositories in the project
+                    # Fetch PRs across all repositories in the project (no cap).
                     repos = client.list_repositories(release.project_name)
-                    for repo in repos[:5]:
+                    for repo in repos:
                         repo_id = repo.get("id")
                         if repo_id:
                             repo_prs = client.list_pull_requests(release.project_name, repo_id, status="active")

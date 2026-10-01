@@ -177,11 +177,10 @@ class ReleaseRepository:
             )
             return sorted_candidates
 
-        # Fallback for empty repo/pipeline or during mock tests
-        return [
-            ReleaseBranchCandidate(branch="refs/heads/main", last_built=datetime.now(timezone.utc).isoformat(), run_count=1, is_default=True),
-            ReleaseBranchCandidate(branch="refs/heads/dev", last_built=datetime.now(timezone.utc).isoformat(), run_count=1, is_default=False),
-        ]
+        # No observed branches found — return empty list.
+        # TRUST PRINCIPLE: Never fabricate branch data that looks real.
+        # The frontend handles this case by allowing manual branch input.
+        return []
 
     def create_release(self, data: ReleaseDefinitionCreate, created_by: str | None = None) -> ReleaseDefinition:
         ensure_schema()
@@ -199,6 +198,8 @@ class ReleaseRepository:
             "target_branch": data.target_branch.strip(),
             "scope_feature_title": data.scope_feature_title.strip() if data.scope_feature_title else None,
             "target_ship_date": data.target_ship_date.strip() if data.target_ship_date else None,
+            # NOTE: created_by is currently the request client IP address (no auth).
+            # Once authentication is implemented, replace with the authenticated user identity.
             "created_by": created_by or "system",
             "created_at": now_iso,
         }
@@ -228,7 +229,7 @@ class ReleaseRepository:
         try:
             execute_commit(sql, params)
         except Exception as e:
-            logger.debug("DB insert failed, storing in fallback memory cache: %s", e)
+            logger.warning("DB insert for release '%s' failed, storing in fallback memory cache: %s", release_id, e)
             _FALLBACK_RELEASES[release_id] = row
 
         return ReleaseDefinition(**row)
@@ -318,7 +319,7 @@ class ReleaseRepository:
             execute_commit(del_def, (release_id.strip(),))
             deleted = True
         except Exception as e:
-            logger.debug("DB delete_release failed: %s", e)
+            logger.error("DB delete_release failed for '%s': %s", release_id, e)
 
         if release_id in _FALLBACK_RELEASES:
             del _FALLBACK_RELEASES[release_id]
@@ -346,7 +347,7 @@ class ReleaseRepository:
         try:
             execute_commit(sql, (release_id, now_dt, overall_status, payload))
         except Exception as e:
-            logger.debug("DB record_scorecard_history failed: %s", e)
+            logger.warning("DB record_scorecard_history failed for release '%s': %s", release_id, e)
             _FALLBACK_HISTORY.append({
                 "history_id": len(_FALLBACK_HISTORY) + 1,
                 "release_id": release_id,

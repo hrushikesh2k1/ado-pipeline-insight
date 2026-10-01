@@ -224,12 +224,13 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
         const defaultCandidate = candidates.find(c => c.is_default) || candidates[0]
         setNewTargetBranch(defaultCandidate.branch)
       } else {
-        setNewTargetBranch('refs/heads/main')
+        // No branches discovered — let the user type one manually.
+        setNewTargetBranch('')
       }
     } catch (err) {
       console.warn('Could not load branch candidates for repository:', err)
       setBranchCandidates([])
-      setNewTargetBranch('refs/heads/main')
+      setNewTargetBranch('')
     } finally {
       setLoadingBranches(false)
     }
@@ -1067,22 +1068,27 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                     })}
                   </select>
                 ) : (
-                  <input
-                    type="text"
-                    required
-                    placeholder="refs/heads/main or dev"
-                    value={newTargetBranch}
-                    onChange={e => setNewTargetBranch(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      borderRadius: '8px',
-                      backgroundColor: '#262630',
-                      border: '1px solid #3f3f4e',
-                      color: '#ffffff',
-                      fontSize: '12.5px',
-                    }}
-                  />
+                  <div>
+                    <div style={{ fontSize: '10.5px', color: '#f59e0b', padding: '4px 0 8px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Info size={12} /> No branches discovered for this repository. Type your branch name below.
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. refs/heads/main, dev, release/2.4"
+                      value={newTargetBranch}
+                      onChange={e => setNewTargetBranch(e.target.value)}
+                      style={{
+                        width: '100%',
+                        padding: '8px 12px',
+                        borderRadius: '8px',
+                        backgroundColor: '#262630',
+                        border: '1px solid #3f3f4e',
+                        color: '#ffffff',
+                        fontSize: '12.5px',
+                      }}
+                    />
+                  </div>
                 )}
                 <div style={{ fontSize: '10.5px', color: '#71717a', marginTop: '4px' }}>
                   Every observed branch is treated equally. Select whichever branch your team cuts releases from.

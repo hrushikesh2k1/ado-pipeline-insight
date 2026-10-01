@@ -206,3 +206,126 @@ def test_deterministic_fallback_narrative_citations():
     assert "NOT READY to ship" in narrative
     assert "9988" in narrative
     assert "2026-10-15" in narrative
+
+
+def test_severity_matching_precision():
+    """REGRESSION: Severity matching must use exact-prefix matching.
+    The old substring search on '1' would false-positive on values like '31 - Custom'.
+    """
+    # Should be high severity
+    assert is_high_or_blocker_severity("1 - Critical") is True
+    assert is_high_or_blocker_severity("2 - High") is True
+    assert is_high_or_blocker_severity("critical") is True
+    assert is_high_or_blocker_severity("blocker") is True
+    assert is_high_or_blocker_severity("high") is True
+    assert is_high_or_blocker_severity(None, priority=1) is True
+
+    # Should NOT be high severity
+    assert is_high_or_blocker_severity("3 - Medium") is False
+    assert is_high_or_blocker_severity("4 - Low") is False
+    assert is_high_or_blocker_severity(None, priority=3) is False
+    assert is_high_or_blocker_severity(None) is False
+
+
+def test_compute_scorecard_iteration_work_item_extraction(monkeypatch):
+    """REGRESSION: get_iteration_work_items returns list[dict].
+    compute_scorecard must extract work item IDs from this list and match iteration by target_ship_date.
+    """
+    from app.services.release_service import ReleaseService
+
+    class DummyADOClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def list_teams(self, project, top=10):
+            return [{"id": "team-alpha", "name": "Team Alpha"}]
+
+        def list_team_iterations(self, project, team_id):
+            return [
+                {
+                    "id": "iter-aug",
+                    "name": "Sprint Aug",
+                    "attributes": {
+                        "startDate": "2026-08-01T00:00:00Z",
+                        "finishDate": "2026-08-31T00:00:00Z",
+                        "timeFrame": "past",
+                    },
+                },
+                {
+                    "id": "iter-sep",
+                    "name": "Sprint Sep",
+                    "attributes": {
+                        "startDate": "2026-09-01T00:00:00Z",
+                        "finishDate": "2026-09-30T00:00:00Z",
+                        "timeFrame": "past",
+                    },
+                },
+                {
+                    "id": "iter-oct",
+                    "name": "Sprint Oct",
+                    "attributes": {
+                        "startDate": "2026-10-01T00:00:00Z",
+                        "finishDate": "2026-10-31T00:00:00Z",
+                        "timeFrame": "current",
+                    },
+                },
+            ]
+
+        def get_iteration_work_items(self, project, team_id, iter_id):
+            assert iter_id == "iter-sep", f"Expected iter-sep for target_ship_date 2026-09-15, got {iter_id}"
+            # Returns list of relation dicts as ADO does
+            return [
+                {"rel": None, "source": None, "target": {"id": 101, "url": "http://example/101"}},
+                {"rel": None, "source": None, "target": {"id": 102, "url": "http://example/102"}},
+            ]
+
+        def get_work_items_batch(self, project, ids, fields=None):
+            return [
+                {
+                    "id": 101,
+                    "fields": {
+                        "System.Id": 101,
+                        "System.Title": "Feature Auth",
+                        "System.WorkItemType": "User Story",
+                        "System.State": "Done",
+                        "Microsoft.VSTS.Scheduling.CompletedWork": 5.0,
+                    },
+                },
+                {
+                    "id": 102,
+                    "fields": {
+                        "System.Id": 102,
+                        "System.Title": "Feature Billing",
+                        "System.WorkItemType": "User Story",
+                        "System.State": "Done",
+                        "Microsoft.VSTS.Scheduling.CompletedWork": 3.0,
+                    },
+                },
+            ]
+
+        def list_pull_requests(self, project, repo_id=None, status="active"):
+            return []
+
+    monkeypatch.setattr("app.services.release_service.AzureDevOpsClient", DummyADOClient)
+    monkeypatch.setattr("app.services.release_service.fetch_all", lambda *args, **kwargs: [])
+
+    release = ReleaseDefinition(
+        release_id="rel-sep",
+        name="September Release",
+        organization_name="MyOrg",
+        project_name="MyProj",
+        repository_id="repo-1",
+        repository_name="MyRepo",
+        target_branch="refs/heads/main",
+        target_ship_date="2026-09-15",
+        created_at="2026-09-01T00:00:00Z",
+    )
+
+    service = ReleaseService()
+    card = service.compute_scorecard(release, pat="dummy-pat")
+    delivery = card.dimensions["delivery_completion"]
+    assert delivery.metrics["total_stories"] == 2
+    assert delivery.metrics["closed_stories"] == 2
+    assert delivery.metrics["completion_rate_pct"] == 100.0
+    assert delivery.status == "green"
+
