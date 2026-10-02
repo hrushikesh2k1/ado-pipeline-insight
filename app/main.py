@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from app.api.routes import router
 from app.core.config import get_settings
 from app.core.security import EasyAuthGate, RequestSizeLimit, SecurityHeaders
+from app.core.session_auth import SessionAuthGate
 
 frontend_dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
 
@@ -28,6 +29,10 @@ def create_app() -> FastAPI:
     # Middleware added last is outermost: headers wrap everything, then the size limit, then CORS, then the auth gate.
     if settings.require_easy_auth:
         app.add_middleware(EasyAuthGate)
+    if settings.require_login:
+        app.add_middleware(SessionAuthGate)
+    else:
+        logging.warning("REQUIRE_LOGIN is off: the API is served without sign-in.")
     if "*" in settings.cors_origins:
         logging.warning("Ignoring '*' in CORS_ORIGINS; list explicit origins instead.")
     app.add_middleware(

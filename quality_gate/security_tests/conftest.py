@@ -96,6 +96,7 @@ def make_app(monkeypatch):
         for key in ("REQUIRE_EASY_AUTH", "ENABLE_API_DOCS", "ALLOWED_ADO_ORGS"):
             monkeypatch.delenv(key, raising=False)
         monkeypatch.setenv("CORS_ORIGINS", env.pop("CORS_ORIGINS", GOOD_ORIGIN))
+        monkeypatch.setenv("REQUIRE_LOGIN", str(env.pop("REQUIRE_LOGIN", "false")))
         for key, value in env.items():
             monkeypatch.setenv(key, str(value))
         import app.core.config as cfg

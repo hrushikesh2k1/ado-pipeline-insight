@@ -13,6 +13,7 @@ export type AdoConnection={organization:string;projects:AdoProject[];pipelines:A
 
 export type UserProfile = {
   authenticated: boolean
+  loginRequired?: boolean
   userId: string | null
   email: string | null
   name: string | null

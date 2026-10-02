@@ -2,6 +2,9 @@ import os
 import sys
 from datetime import datetime, timedelta
 
+# The suite exercises routes without signing in; tests/test_session_auth.py turns sign-in back on explicitly.
+os.environ.setdefault("REQUIRE_LOGIN", "false")
+
 # Ensure repo root is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 

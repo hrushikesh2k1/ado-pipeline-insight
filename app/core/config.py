@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     enable_api_docs: bool = False
     allowed_ado_orgs: str = ""
     max_request_bytes: int = 65536
+    # Username/password sign-in. Credentials live in Key Vault; auth_username/auth_password are a local-dev fallback
+    # used only when key_vault_url is empty. Set REQUIRE_LOGIN=false to run without sign-in (local development).
+    require_login: bool = True
+    key_vault_url: str = ""
+    auth_username_secret_name: str = "app-auth-username"
+    auth_password_secret_name: str = "app-auth-password"
+    auth_session_secret_name: str = "app-auth-session-secret"
+    auth_username: str = ""
+    auth_password: str = ""
+    auth_session_secret: str = ""
+    session_hours: int = 8
     model_config = SettingsConfigDict(
         env_file=(PROJECT_ROOT / ".env",),
         case_sensitive=False,

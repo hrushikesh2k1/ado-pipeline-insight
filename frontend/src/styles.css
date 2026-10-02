@@ -5833,3 +5833,27 @@ html[data-theme="light"] body {
   border-top-color: #e2e8f0;
 }
 
+
+/* ---- Sign-in screen ---- */
+.loginScreen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#1a1a1f}
+.loginCard{width:100%;max-width:380px;background:#222228;border:1px solid #33333b;border-radius:14px;padding:28px 26px;display:flex;flex-direction:column;gap:16px;box-shadow:0 20px 50px rgba(0,0,0,.45)}
+.loginBrand{display:flex;align-items:center;gap:12px;margin-bottom:6px}
+.loginBrand h1{margin:0;font-size:17px;font-weight:700;color:#f4f4f5}
+.loginBrand p{margin:2px 0 0;font-size:12px;color:#a1a1aa}
+.loginField{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:600;color:#d4d4d8}
+.loginInput{display:flex;align-items:center;gap:8px;background:#1a1a1f;border:1px solid #3a3a43;border-radius:8px;padding:0 10px;color:#a1a1aa}
+.loginInput:focus-within{border-color:#818cf8;box-shadow:0 0 0 3px rgba(129,140,248,.2)}
+.loginInput input{flex:1;min-width:0;background:transparent;border:0;outline:0;color:#f4f4f5;font:inherit;font-size:14px;padding:10px 0}
+.loginEye{background:transparent;border:0;color:#a1a1aa;cursor:pointer;display:flex;padding:4px}
+.loginEye:hover{color:#f4f4f5}
+.loginError{display:flex;align-items:center;gap:8px;background:#2a1a1d;border:1px solid #4d2328;color:#fca5a5;border-radius:8px;padding:9px 11px;font-size:12px}
+.loginSubmit{display:flex;align-items:center;justify-content:center;gap:8px;background:#6366f1;border:0;color:#fff;border-radius:8px;padding:11px;font:inherit;font-size:14px;font-weight:600;cursor:pointer}
+.loginSubmit:hover:not(:disabled){background:#4f46e5}
+.loginSubmit:disabled{opacity:.55;cursor:not-allowed}
+[data-theme="light"] .loginScreen{background:#f4f4f7}
+[data-theme="light"] .loginCard{background:#fff;border-color:#e4e4e7;box-shadow:0 20px 50px rgba(0,0,0,.08)}
+[data-theme="light"] .loginBrand h1{color:#18181b}
+[data-theme="light"] .loginField{color:#3f3f46}
+[data-theme="light"] .loginInput{background:#fafafa;border-color:#d4d4d8}
+[data-theme="light"] .loginInput input{color:#18181b}
+[data-theme="light"] .loginError{background:#fef2f2;border-color:#fecaca;color:#b91c1c}

@@ -23,6 +23,9 @@ async function request<T>(path:string, init?:RequestInit):Promise<T>{
         }
       }
     } catch {}
+    if(response.status === 401 && !path.startsWith('/api/v1/auth/') && detail.toLowerCase().includes('authentication required')){
+      window.dispatchEvent(new Event('auth-expired'))
+    }
     throw new Error(`${response.status}: ${detail}`)
   }
   return response.json()
@@ -84,7 +87,24 @@ export const api = {
       body: JSON.stringify(payload)
     })
   },
+  login: (username: string, password: string) => request<UserProfile>('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  }),
+  logout: () => request<{ authenticated: boolean }>('/api/v1/auth/logout', { method: 'POST' }),
   me: async (): Promise<UserProfile> => {
+    const signedOut: UserProfile = { authenticated: false, loginRequired: true, userId: null, email: null, name: null, provider: null }
+    let backend: UserProfile = signedOut
+    try {
+      backend = await request<UserProfile>('/api/v1/auth/me')
+      if (backend.authenticated) return backend
+    } catch {}
+
+    if (backend.loginRequired !== false) {
+      return backend
+    }
+
     try {
       const res = await fetch('/.auth/me', { headers: { Accept: 'application/json' } })
       if (res.ok) {
@@ -104,12 +124,7 @@ export const api = {
         }
       }
     } catch {}
-
-    try {
-      return await request<UserProfile>('/api/v1/auth/me')
-    } catch {
-      return { authenticated: false, userId: null, email: null, name: null, provider: null }
-    }
+    return backend
   },
   releaseBranchCandidates: (organization: string, project: string, repositoryId?: string, pipelineId?: number, pat?: string) => {
     const p = new URLSearchParams({ organization, project })

@@ -7,6 +7,7 @@ import { defineConfig, devices } from '@playwright/test';
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'https://app-ado-pipeline-insight-test.azurewebsites.net';
 
 export default defineConfig({
+  globalSetup: './playwright/global-setup.ts',
   testDir: './playwright/tests',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
@@ -22,6 +23,7 @@ export default defineConfig({
   ],
   use: {
     baseURL: BASE_URL,
+    storageState: process.env.QG_USERNAME && process.env.QG_PASSWORD ? './playwright/.auth/state.json' : undefined,
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

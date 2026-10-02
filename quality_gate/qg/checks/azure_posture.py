@@ -48,9 +48,14 @@ def _check_app(res: CheckResult, kind: str, name: str, rg: str) -> bool:
         add("medium", "No managed identity; secrets must be stored as passwords", f"az {cmd} identity assign -g {rg} -n {name}", "AZ-MI")
     if kind == "web":
         auth = _az("webapp", "auth", "show", "-g", rg, "-n", name) or {}
-        if not auth.get("enabled"):
+        app_settings = {x.get("name"): str(x.get("value") or "") for x in (_az(cmd, "config", "appsettings", "list", "-g", rg, "-n", name) or [])}
+        builtin_login = app_settings.get("REQUIRE_LOGIN", "true").strip().lower() not in ("false", "0", "no", "off")
+        if not auth.get("enabled") and not builtin_login:
             add("high", "No authentication in front of the web app: every API route, including POST /ado/ingest and /analyze, is open to the internet",
-                "Enable App Service Authentication (Microsoft Entra ID) with 'Require authentication', then set REQUIRE_EASY_AUTH=true.", "AZ-NOAUTH")
+                "Set REQUIRE_LOGIN=true (built-in username/password from Key Vault) or enable App Service Authentication (Microsoft Entra ID) with REQUIRE_EASY_AUTH=true.", "AZ-NOAUTH")
+        elif builtin_login and not auth.get("enabled"):
+            res.findings.append(Finding("info", "Sign-in is a single shared account (built-in username/password from Key Vault); per-user identity and MFA need Entra ID",
+                                        where, "", "AZ-SHARED-LOGIN", "Move to App Service Authentication (Entra ID) when you need per-user accounts, audit trails or MFA."))
         if not cfg.get("http20Enabled"):
             res.findings.append(Finding("info", "HTTP/2 is disabled", where, "", "AZ-HTTP2", f"az webapp config set -g {rg} -n {name} --http20-enabled true"))
     restrictions = cfg.get("ipSecurityRestrictions") or []

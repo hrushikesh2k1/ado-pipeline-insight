@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { User, LogOut, ChevronDown, ShieldCheck, Sparkles } from 'lucide-react'
 import { api } from '../services/api'
 import type { UserProfile } from '../types/api'
@@ -22,6 +22,7 @@ function getInitials(name?: string | null, email?: string | null): string {
 export function UserProfileMenu() {
   const [isOpen, setIsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const queryClient = useQueryClient()
 
   const { data: profile, isLoading } = useQuery<UserProfile>({
     queryKey: ['user-profile'],
@@ -58,7 +59,13 @@ export function UserProfileMenu() {
     }
   }, [isOpen])
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    if (profile?.provider === 'Key Vault sign-in') {
+      try { await api.logout() } catch {}
+      queryClient.clear()
+      window.location.assign('/')
+      return
+    }
     window.location.href = '/.auth/logout?post_logout_redirect_uri=/'
   }
 
@@ -107,7 +114,7 @@ export function UserProfileMenu() {
                 ) : (
                   <>
                     <Sparkles size={11} color="#a5b4fc" />
-                    <span>Local Development</span>
+                    <span>Not signed in</span>
                   </>
                 )}
               </div>

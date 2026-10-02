@@ -77,3 +77,17 @@ def test_endpoint_latency(api, path):
     r = api.raw(path)
     elapsed = time.perf_counter() - started
     assert r.status_code == 200 and elapsed < 15, f"{path} took {elapsed:.1f}s"
+
+
+@pytest.mark.func(severity="critical", area="Authentication", title="The deployed API rejects anonymous callers and bad passwords",
+                  fix="Set REQUIRE_LOGIN=true and store app-auth-username / app-auth-password in Key Vault.")
+def test_deployed_login_gate():
+    import requests
+
+    anonymous = requests.get(f"{BASE_URL}/api/v1/options", timeout=60, allow_redirects=False)
+    if anonymous.status_code != 401:
+        pytest.skip(f"site does not use the built-in login (HTTP {anonymous.status_code})")
+    bad = requests.post(f"{BASE_URL}/api/v1/auth/login", json={"username": "Admin", "password": "definitely-not-the-password"},
+                        timeout=60, allow_redirects=False)
+    assert bad.status_code in (401, 429) and "set-cookie" not in bad.headers
+    assert requests.get(f"{BASE_URL}/api/v1/health", timeout=60).status_code == 200

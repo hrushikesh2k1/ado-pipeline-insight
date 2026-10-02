@@ -61,3 +61,6 @@ scratch/logs2/
 scratch/*.png
 scratch/*.txt
 
+
+# Playwright saved sign-in session
+frontend/playwright/.auth/

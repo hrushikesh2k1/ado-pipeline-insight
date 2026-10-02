@@ -5,6 +5,7 @@ statements against the database to prove the numbers the dashboard shows are the
 
 Configuration (all optional):
   QG_BASE_URL              deployed site (default: [functional].base_url in quality_gate.toml)
+  QG_USERNAME / QG_PASSWORD  the app's built-in sign-in (needed when REQUIRE_LOGIN is on, the default)
   QG_BEARER_TOKEN          bearer token when the site sits behind App Service Authentication
   QG_SQL_CONNECTION_STRING direct database access for the reconciliation tests (else SQL_CONNECTION_STRING, else Key Vault
                            via QG_KEY_VAULT_URL / KEY_VAULT_URL and your `az login`); tests skip when none is available
@@ -68,6 +69,13 @@ def api() -> Api:
         pytest.skip(f"cannot reach {BASE_URL}: {type(exc).__name__}")
     if probe.status_code in (301, 302, 303, 307, 308, 401, 403):
         pytest.skip(f"{BASE_URL} requires sign-in (HTTP {probe.status_code}); set QG_BEARER_TOKEN to test it")
+    username, password = os.environ.get("QG_USERNAME"), os.environ.get("QG_PASSWORD")
+    if username and password:
+        login = client.session.post(f"{BASE_URL}/api/v1/auth/login", json={"username": username, "password": password}, timeout=60)
+        if login.status_code != 200:
+            pytest.skip(f"sign-in with QG_USERNAME failed (HTTP {login.status_code})")
+    elif client.raw("/api/v1/options").status_code == 401:
+        pytest.skip(f"{BASE_URL} requires sign-in; set QG_USERNAME and QG_PASSWORD to test it")
     return client
 
 

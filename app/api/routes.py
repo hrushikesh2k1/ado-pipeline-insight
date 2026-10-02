@@ -6,6 +6,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Header
 from fastapi import Path as ApiPath
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from app.core import session_auth
 from urllib.parse import quote
 from app.core.db import fetch_one
 from app.repositories.pipeline_repository import PipelineRepository
@@ -101,8 +104,45 @@ def health():
     except Exception as exc:
         raise _unavailable(exc, "Database unavailable.") from exc
 
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=128)
+    password: str = Field(min_length=1, max_length=256)
+
+
+@router.post("/auth/login")
+def login(payload: LoginRequest, request: Request):
+    client = session_auth.client_id(request)
+    wait = session_auth.login_throttle.retry_after(client)
+    if wait:
+        return JSONResponse({"detail": "Too many failed attempts. Try again later."}, status_code=429, headers={"Retry-After": str(wait)})
+    creds = session_auth.check_login(payload.username, payload.password)
+    if creds is None:
+        session_auth.login_throttle.record_failure(client)
+        if session_auth.credential_store.get() is None:
+            logging.error("Sign-in attempted but no credentials are configured (Key Vault secrets missing or unreachable).")
+        return JSONResponse({"detail": "Invalid username or password."}, status_code=401)
+    session_auth.login_throttle.record_success(client)
+    lifetime = get_settings().session_hours * 3600
+    response = JSONResponse({"authenticated": True, "loginRequired": True, "userId": creds.username, "email": None, "name": creds.username, "provider": "Key Vault sign-in"})
+    response.set_cookie(
+        session_auth.COOKIE_NAME, session_auth.create_session_token(creds, lifetime),
+        max_age=lifetime, httponly=True, secure=session_auth.cookie_is_secure(request), samesite="strict", path="/",
+    )
+    return response
+
+
+@router.post("/auth/logout")
+def logout():
+    response = JSONResponse({"authenticated": False})
+    response.delete_cookie(session_auth.COOKIE_NAME, path="/", httponly=True, samesite="strict")
+    return response
+
+
 @router.get("/auth/me")
 def get_auth_me(request: Request):
+    signed_in = session_auth.session_user(request)
+    if signed_in:
+        return {"authenticated": True, "loginRequired": True, "userId": signed_in, "email": None, "name": signed_in, "provider": "Key Vault sign-in"}
     user_id = request.headers.get("x-ms-client-principal-id")
     user_name = request.headers.get("x-ms-client-principal-name")
     display_name = None
@@ -124,6 +164,7 @@ def get_auth_me(request: Request):
     authenticated = bool(user_id or user_name)
     return {
         "authenticated": authenticated,
+        "loginRequired": get_settings().require_login,
         "userId": user_id,
         "email": user_name,
         "name": display_name or user_name,
