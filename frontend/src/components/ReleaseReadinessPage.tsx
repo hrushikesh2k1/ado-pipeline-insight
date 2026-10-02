@@ -11,8 +11,6 @@ import {
   RefreshCw,
   GitBranch,
   Layers,
-  Bug,
-  Activity,
   GitPullRequest,
   Sparkles,
   ChevronDown,
@@ -106,8 +104,6 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
   // Expanded evidence sections
   const [expandedDims, setExpandedDims] = useState<Record<string, boolean>>({
     delivery_completion: false,
-    defect_burden: true, // open by default if defects exist
-    pipeline_health: false,
     review_backlog: false,
   })
 
@@ -469,7 +465,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                 Release Readiness Scorecard
               </h1>
               <p style={{ fontSize: '12px', color: '#9ca3af', margin: '3px 0 0' }}>
-                Composite go/no-go quality evaluation combining repository branch health, blocker defects, sprint delivery, and review backlog.
+                Composite go/no-go quality evaluation combining sprint work item delivery and pull request review backlog.
               </p>
             </div>
           </div>
@@ -651,7 +647,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
         <div style={{ padding: '60px', textAlign: 'center', color: '#9ca3af' }}>
           <RefreshCw size={28} className="spin" style={{ margin: '0 auto 12px', color: '#00fbfb' }} />
           <div style={{ fontSize: '14px', fontWeight: 600, color: '#f4f4f5' }}>Computing Release Readiness Scorecard...</div>
-          <div style={{ fontSize: '12px', marginTop: '4px' }}>Evaluating repository branch health, open blocker bugs, delivery milestone, and pull requests.</div>
+          <div style={{ fontSize: '12px', marginTop: '4px' }}>Evaluating sprint work item delivery and pull request reviews.</div>
         </div>
       ) : scorecard ? (
         <div>
@@ -699,7 +695,7 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
                   </div>
                   <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: '#d1d5db' }}>
                     {scorecard.overall_status === 'green'
-                      ? 'All four quality dimensions meet release criteria. No blocker bugs or pipeline failures detected.'
+                      ? 'Release quality criteria are satisfied. Sprint delivery is on track and pull requests are reviewed.'
                       : scorecard.overall_status === 'yellow'
                       ? 'One or more dimensions have moderate warnings. Review open items before initiating deployment.'
                       : 'Critical blockers detected. Strictly governed: the worst dimension decides the verdict (averaging is forbidden).'}
@@ -786,34 +782,18 @@ export const ReleaseReadinessPage: React.FC<ReleaseReadinessPageProps> = ({
             )}
           </div>
 
-          {/* The Four Quality Dimensions Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(310px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+          {/* Quality Dimensions Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '16px', marginBottom: '24px' }}>
             {/* Dimension 1: Delivery Completion */}
-            {renderDimensionCard(
+            {scorecard.dimensions.delivery_completion && renderDimensionCard(
               'delivery_completion',
               scorecard.dimensions.delivery_completion,
               <Layers size={18} style={{ color: '#38bdf8' }} />,
               'Sprint Delivery'
             )}
 
-            {/* Dimension 2: Defect Burden */}
-            {renderDimensionCard(
-              'defect_burden',
-              scorecard.dimensions.defect_burden,
-              <Bug size={18} style={{ color: '#f43f5e' }} />,
-              'Defect Severity'
-            )}
-
-            {/* Dimension 3: Pipeline Health */}
-            {renderDimensionCard(
-              'pipeline_health',
-              scorecard.dimensions.pipeline_health,
-              <Activity size={18} style={{ color: '#10b981' }} />,
-              'Branch Pipeline Builds'
-            )}
-
-            {/* Dimension 4: Review Backlog */}
-            {renderDimensionCard(
+            {/* Dimension 2: Review Backlog */}
+            {scorecard.dimensions.review_backlog && renderDimensionCard(
               'review_backlog',
               scorecard.dimensions.review_backlog,
               <GitPullRequest size={18} style={{ color: '#fbbf24' }} />,

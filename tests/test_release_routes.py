@@ -61,9 +61,9 @@ def test_release_crud_and_scorecard_lifecycle(client):
     assert card["release"]["release_id"] == rel_id
     assert card["overall_status"] in ("green", "yellow", "red")
     assert "delivery_completion" in card["dimensions"]
-    assert "defect_burden" in card["dimensions"]
-    assert "pipeline_health" in card["dimensions"]
     assert "review_backlog" in card["dimensions"]
+    assert "defect_burden" not in card["dimensions"]
+    assert "pipeline_health" not in card["dimensions"]
     assert len(card["ai_narrative"]) > 0
 
     # 4. Check history

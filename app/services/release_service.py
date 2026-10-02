@@ -441,10 +441,10 @@ def evaluate_review_backlog(
 
 def compute_overall_status(dimensions: dict[str, ReleaseDimension]) -> str:
     """PRODUCT DECISION (Strict Rule):
-    The overall status is the worst of the four dimensions: 'red' > 'yellow' > 'green'.
-    NEVER average them. One red dimension (such as an unresolved blocker bug or failing
-    pipeline build) makes the whole release RED, regardless of how good the other three
-    dimensions look. Averaging would obscure critical go/no-go blockers.
+    The overall status is the worst of the evaluated dimensions: 'red' > 'yellow' > 'green'.
+    NEVER average them. One red dimension (such as low sprint completion or stale
+    pull requests) makes the whole release RED, regardless of how good the other
+    dimension looks. Averaging would obscure critical go/no-go blockers.
     """
     for dim in dimensions.values():
         if dim.status == "red":
@@ -466,20 +466,7 @@ def build_recommendations(
 ) -> list[str]:
     recs: list[str] = []
     deliv = dimensions.get("delivery_completion")
-    defect = dimensions.get("defect_burden")
-    pipe = dimensions.get("pipeline_health")
     review = dimensions.get("review_backlog")
-
-    if defect and defect.status == "red":
-        recs.append("Resolve or downgrade all high-severity blocker bugs before authorizing deployment.")
-    elif defect and defect.status == "yellow":
-        recs.append("Review open medium-severity bugs to verify they do not impact release stability.")
-
-    if pipe and pipe.status == "red":
-        latest_id = pipe.metrics.get("latest_run_id")
-        recs.append(f"Investigate and fix build failure in pipeline run #{latest_id} on '{release.target_branch}'.")
-    elif pipe and pipe.status == "yellow":
-        recs.append(f"Monitor branch '{release.target_branch}' build stability; recent failure rate is elevated.")
 
     if review and review.status == "red":
         recs.append(f"Expedite code reviews for stale pull requests targeting '{release.target_branch}'.")
@@ -488,6 +475,8 @@ def build_recommendations(
 
     if deliv and deliv.status == "red":
         recs.append(f"Sprint completion is below target ({deliv.metrics.get('completion_rate_pct')}%) - de-scope unfinished stories or adjust ship date.")
+    elif deliv and deliv.status == "yellow":
+        recs.append(f"Sprint completion is currently at {deliv.metrics.get('completion_rate_pct')}% - monitor remaining work items.")
 
     if release.target_ship_date:
         try:
@@ -502,7 +491,7 @@ def build_recommendations(
             pass
 
     if overall_status == "green" and not recs:
-        recs.append("All four quality dimensions satisfy release criteria. Ready for deployment.")
+        recs.append("All release criteria satisfy deployment requirements. Ready for deployment.")
 
     return recs
 
@@ -513,11 +502,9 @@ def generate_deterministic_fallback_narrative(
     overall_status: str,
 ) -> str:
     """Build a deterministic, authoritative release narrative grounded strictly
-    in the 4 dimensions without external API calls.
+    in the evaluated dimensions without external API calls.
     """
     deliv = dimensions.get("delivery_completion")
-    defect = dimensions.get("defect_burden")
-    pipe = dimensions.get("pipeline_health")
     review = dimensions.get("review_backlog")
 
     verdict_text = {
@@ -530,10 +517,6 @@ def generate_deterministic_fallback_narrative(
 
     if overall_status == "red":
         reasons = []
-        if defect and defect.status == "red":
-            reasons.append(f"Defect burden has {defect.metrics.get('blocker_bugs_count', 0)} blocker bug(s) open")
-        if pipe and pipe.status == "red":
-            reasons.append(f"Pipeline health is failing (latest run #{pipe.metrics.get('latest_run_id')} failed)")
         if review and review.status == "red":
             reasons.append(f"Review backlog has {review.metrics.get('stale_prs_count', 0)} stale pull request(s) open")
         if deliv and deliv.status == "red":
@@ -544,18 +527,15 @@ def generate_deterministic_fallback_narrative(
         warnings = []
         if deliv and deliv.status == "yellow":
             warnings.append(f"delivery completion is {deliv.metrics.get('completion_rate_pct')}%")
-        if defect and defect.status == "yellow":
-            warnings.append(f"{defect.metrics.get('normal_bugs_count', 0)} medium/low severity bug(s) remain open")
-        if pipe and pipe.status == "yellow":
-            warnings.append(f"pipeline failure rate is {pipe.metrics.get('failure_rate_pct')}%")
         if review and review.status == "yellow":
             warnings.append(f"{review.metrics.get('open_prs_count', 0)} pull request(s) are awaiting review")
         if warnings:
             parts.append("Areas requiring attention: " + "; ".join(warnings) + ".")
     else:
+        completion_str = f"{deliv.metrics.get('completion_rate_pct', 100)}%" if deliv else "100%"
         parts.append(
-            f"All quality dimensions are healthy. Delivery completion is {deliv.metrics.get('completion_rate_pct', 100)}%, "
-            f"zero blocker bugs are open, pipeline builds on '{release.target_branch}' are successful, and the PR review backlog is clear."
+            f"Release criteria are satisfied. Delivery completion is {completion_str} "
+            f"and the PR review backlog is clear."
         )
 
     if release.target_ship_date:
@@ -603,7 +583,7 @@ def generate_scorecard_narrative(
             f"Evaluated Dimensions:\n" + "\n".join(dim_summaries) + "\n\n"
             f"Write a concise executive release readiness verdict (2-3 sentences max). "
             f"Ground every claim strictly in the dimension data provided above. "
-            f"Cite specific work item IDs, pipeline run IDs, or pull request IDs for any blockers or warnings. "
+            f"Cite specific work item IDs or pull request IDs for any blockers or warnings. "
             f"NEVER invent or assume any facts, SLAs, percentages, or domain names not present in the data."
         )
 
@@ -648,35 +628,7 @@ class ReleaseService:
         """Fetch all three data sources and compute the live Release Readiness Scorecard."""
         now_iso = datetime.now(timezone.utc).isoformat()
 
-        # 1. Fetch Pipeline Telemetry from dbo.pipeline_runs
-        pipeline_runs: list[dict[str, Any]] = []
-        try:
-            # Filter by branch in SQL so the row cap cannot be consumed by other branches.
-            branch_norm = normalize_branch(release.target_branch)
-            branch_params = (branch_norm, f"refs/heads/{branch_norm}")
-            if release.pipeline_id:
-                sql = """
-                    SELECT TOP (200) run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
-                    FROM dbo.pipeline_runs
-                    WHERE pipeline_id = ? AND LOWER(source_branch) IN (?, ?)
-                    ORDER BY start_time DESC
-                """
-                pipeline_runs = fetch_all(sql, (release.pipeline_id, *branch_params))
-            else:
-                sql = """
-                    SELECT TOP (200) run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
-                    FROM dbo.pipeline_runs
-                    WHERE LOWER(organization_name) = LOWER(?) AND LOWER(project_name) = LOWER(?)
-                      AND LOWER(source_branch) IN (?, ?)
-                    ORDER BY start_time DESC
-                """
-                pipeline_runs = fetch_all(
-                    sql, (release.organization_name, release.project_name, *branch_params)
-                )
-        except Exception as e:
-            logger.debug("Could not query dbo.pipeline_runs for release: %s", e)
-
-        # 2. Fetch Sprint/Work Item Data from Azure DevOps
+        # 1. Fetch Sprint/Work Item Data from Azure DevOps
         parsed_items: list[dict[str, Any]] = []
         parent_lookup: dict[int, tuple[str, str]] = {}
         all_prs: list[dict[str, Any]] = []
@@ -927,16 +879,12 @@ class ReleaseService:
             except Exception as e:
                 logger.debug("Could not fetch ADO pull requests for scorecard: %s", e)
 
-        # 3. Evaluate the 4 Dimensions
+        # 2. Evaluate Dimensions (Delivery Completion and Review Backlog)
         dim_deliv = evaluate_delivery_completion(parsed_items, release.scope_feature_title, parent_lookup)
-        dim_defect = evaluate_defect_burden(parsed_items, release.scope_feature_title, parent_lookup)
-        dim_pipe = evaluate_pipeline_health(pipeline_runs, release.target_branch)
         dim_review = evaluate_review_backlog(all_prs, release.target_branch, release.target_ship_date)
 
         dimensions: dict[str, ReleaseDimension] = {
             "delivery_completion": dim_deliv,
-            "defect_burden": dim_defect,
-            "pipeline_health": dim_pipe,
             "review_backlog": dim_review,
         }
 

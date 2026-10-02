@@ -30,21 +30,17 @@ def _make_dummy_dim(key: str, status: str) -> ReleaseDimension:
 
 def test_worst_dimension_wins_rule():
     """PRODUCT RULE: Overall verdict is strictly the worst dimension. Never averaged.
-    Three Green dimensions + One Red dimension MUST yield overall RED.
+    One Green dimension + One Red dimension MUST yield overall RED.
     """
     dims_with_one_red = {
         "delivery_completion": _make_dummy_dim("delivery_completion", "green"),
-        "defect_burden": _make_dummy_dim("defect_burden", "red"),  # 1 blocker bug
-        "pipeline_health": _make_dummy_dim("pipeline_health", "green"),
-        "review_backlog": _make_dummy_dim("review_backlog", "green"),
+        "review_backlog": _make_dummy_dim("review_backlog", "red"),
     }
     assert compute_overall_status(dims_with_one_red) == "red"
 
-    # Three Green + One Yellow must yield overall Yellow
+    # One Green + One Yellow must yield overall Yellow
     dims_with_one_yellow = {
-        "delivery_completion": _make_dummy_dim("delivery_completion", "green"),
-        "defect_burden": _make_dummy_dim("defect_burden", "yellow"),
-        "pipeline_health": _make_dummy_dim("pipeline_health", "green"),
+        "delivery_completion": _make_dummy_dim("delivery_completion", "yellow"),
         "review_backlog": _make_dummy_dim("review_backlog", "green"),
     }
     assert compute_overall_status(dims_with_one_yellow) == "yellow"
@@ -52,8 +48,6 @@ def test_worst_dimension_wins_rule():
     # All Green yields Green
     dims_all_green = {
         "delivery_completion": _make_dummy_dim("delivery_completion", "green"),
-        "defect_burden": _make_dummy_dim("defect_burden", "green"),
-        "pipeline_health": _make_dummy_dim("pipeline_health", "green"),
         "review_backlog": _make_dummy_dim("review_backlog", "green"),
     }
     assert compute_overall_status(dims_all_green) == "green"
@@ -207,22 +201,18 @@ def test_deterministic_fallback_narrative_citations():
         target_ship_date="2026-10-15",
         created_at="2026-10-01T00:00:00Z",
     )
-    dim_defect = _make_dummy_dim("defect_burden", "red")
-    dim_defect.metrics["blocker_bugs_count"] = 2
-    dim_pipe = _make_dummy_dim("pipeline_health", "red")
-    dim_pipe.metrics["latest_run_id"] = 9988
+    dim_review = _make_dummy_dim("review_backlog", "red")
+    dim_review.metrics["stale_prs_count"] = 5
 
     dimensions = {
         "delivery_completion": _make_dummy_dim("delivery_completion", "green"),
-        "defect_burden": dim_defect,
-        "pipeline_health": dim_pipe,
-        "review_backlog": _make_dummy_dim("review_backlog", "green"),
+        "review_backlog": dim_review,
     }
     narrative = generate_deterministic_fallback_narrative(release, dimensions, overall_status="red")
     assert "Sprint 42 Release" in narrative
     assert "dev" in narrative
     assert "NOT READY to ship" in narrative
-    assert "9988" in narrative
+    assert "5 stale pull request(s) open" in narrative
     assert "2026-10-15" in narrative
 
 
