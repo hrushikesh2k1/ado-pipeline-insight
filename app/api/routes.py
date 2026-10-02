@@ -716,6 +716,38 @@ def list_ado_sprints(
     return sprints
 
 
+def _apply_iteration_attributes(iteration: AdoIteration, raw: dict[str, Any] | None) -> None:
+    """Fill the sprint's start/finish dates and time frame from an Azure DevOps iteration payload when still missing."""
+    attrs = (raw or {}).get("attributes") or {}
+    iteration.start_date = iteration.start_date or attrs.get("startDate")
+    iteration.finish_date = iteration.finish_date or attrs.get("finishDate")
+    iteration.time_frame = iteration.time_frame or attrs.get("timeFrame")
+
+
+def _ensure_iteration_dates(ado: AzureDevOpsClient, project: str, team: str, iteration_id: str | None, iteration: AdoIteration) -> None:
+    """Make sure the selected sprint carries the same dates Azure DevOps shows.
+
+    The team's sprint list is tried first (the caller already has it); then the single team iteration; then the
+    project's iteration node, which is where the dates are configured in Project settings.
+    """
+    if iteration.start_date and iteration.finish_date:
+        return
+    if iteration_id and not iteration_id.startswith("iter-"):
+        try:
+            _apply_iteration_attributes(iteration, ado.get_team_iteration(project, team, iteration_id))
+        except Exception as e_team_iter:
+            logging.debug("Could not read team iteration dates: %s", e_team_iter)
+    if iteration.start_date and iteration.finish_date:
+        return
+    path = (iteration.path or "").replace("/", "\\").strip("\\")
+    relative = path[len(project):].strip("\\") if path.lower().startswith(project.lower() + "\\") else path
+    if relative:
+        try:
+            _apply_iteration_attributes(iteration, ado.get_iteration_node(project, relative))
+        except Exception as e_node:
+            logging.debug("Could not read iteration node dates for '%s': %s", relative, e_node)
+
+
 @router.get(
     "/ado/sprints/board",
     response_model=AdoSprintBoardResponse,
@@ -801,6 +833,7 @@ def get_ado_sprint_board(
                                 selected_iteration.name = iters[0]["name"]
                             if iters[0].get("path"):
                                 selected_iteration.path = iters[0]["path"]
+                            _apply_iteration_attributes(selected_iteration, iters[0])
                     except Exception:
                         pass
                 elif selected_iteration.id == "iter-prev":
@@ -812,6 +845,7 @@ def get_ado_sprint_board(
                                 selected_iteration.name = iters[-1]["name"]
                             if iters[-1].get("path"):
                                 selected_iteration.path = iters[-1]["path"]
+                            _apply_iteration_attributes(selected_iteration, iters[-1])
                     except Exception:
                         pass
 
@@ -828,6 +862,9 @@ def get_ado_sprint_board(
                                 selected_iteration.path = iter_info["path"]
                     except Exception as e_info:
                         logging.debug("Could not resolve team iteration path early: %s", e_info)
+
+            if selected_iteration:
+                _ensure_iteration_dates(ado, proj_clean, effective_team, target_iter_id, selected_iteration)
 
             # 3. Collect work item candidates from both iteration relations and WIQL
             candidate_ids: set[int] = set()

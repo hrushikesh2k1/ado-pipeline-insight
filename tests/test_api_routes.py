@@ -527,3 +527,92 @@ def test_sprint_board_shows_only_the_selected_teams_items(api, monkeypatch):
     assert r.status_code == 200
     ids = sorted(w["id"] for w in r.json()["work_items"])
     assert ids == [1, 2, 5], f"expected only the Monitoring team's items, got {ids}"
+
+
+def _dated_board_client(monkeypatch, *, team_iteration, node):
+    """Fake Azure DevOps where the team's sprint LIST carries no dates (as seen on a real Oct sprint)."""
+    class FakeAdo:
+        def __init__(self, *a, **k):
+            pass
+
+        def list_team_iterations(self, project, team, timeframe=None):
+            return [{"id": "oct", "name": "26-10", "path": r"proj\26-10", "attributes": {"timeFrame": "current"}}]
+
+        def get_team_iteration(self, project, team, iteration_id):
+            if team_iteration is None:
+                raise RuntimeError("team iteration lookup failed")
+            return {"id": "oct", "name": "26-10", "path": r"proj\26-10", "attributes": team_iteration}
+
+        def get_iteration_node(self, project, relative_path):
+            assert relative_path == "26-10"
+            return {"name": "26-10", "attributes": node}
+
+        def get_iteration_work_items(self, project, team, iteration_id):
+            return []
+
+        def query_wiql(self, project, wiql):
+            return []
+
+        def get_work_items_batch(self, project, ids, fields=None):
+            return []
+
+        def get_team_field_values(self, project, team):
+            return {}
+
+    monkeypatch.setattr(routes, "AzureDevOpsClient", FakeAdo)
+    monkeypatch.setattr(routes, "_resolve_pat", lambda org, pat=None: "token")
+
+
+def test_sprint_board_dates_come_from_the_team_iteration_when_the_list_has_none(api, monkeypatch):
+    _dated_board_client(monkeypatch, team_iteration={"startDate": "2026-10-01T00:00:00Z", "finishDate": "2026-10-31T00:00:00Z"}, node=None)
+    client, _ = api
+    r = client.get("/api/v1/ado/sprints/board?organization=myorg&project=proj&team=T&iteration_id=oct")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["iteration"]["start_date"] == "2026-10-01T00:00:00Z"
+    assert body["iteration"]["finish_date"] == "2026-10-31T00:00:00Z"
+    assert body["working_days_remaining"] is not None
+
+
+def test_sprint_board_dates_fall_back_to_the_project_iteration_node(api, monkeypatch):
+    _dated_board_client(monkeypatch, team_iteration=None, node={"startDate": "2026-10-01T00:00:00Z", "finishDate": "2026-10-31T00:00:00Z"})
+    client, _ = api
+    r = client.get("/api/v1/ado/sprints/board?organization=myorg&project=proj&team=T&iteration_id=oct")
+    assert r.status_code == 200
+    body = r.json()
+    assert (body["iteration"]["start_date"], body["iteration"]["finish_date"]) == ("2026-10-01T00:00:00Z", "2026-10-31T00:00:00Z")
+    assert body["working_days_remaining"] is not None
+
+
+def test_sprint_board_current_sprint_keeps_its_dates(api, monkeypatch):
+    class FakeAdo:
+        def __init__(self, *a, **k):
+            pass
+
+        def list_team_iterations(self, project, team, timeframe=None):
+            return [{"id": "oct", "name": "26-10", "path": r"proj\26-10",
+                     "attributes": {"startDate": "2026-10-01T00:00:00Z", "finishDate": "2026-10-31T00:00:00Z", "timeFrame": "current"}}]
+
+        def get_team_iteration(self, project, team, iteration_id):
+            return {}
+
+        def get_iteration_node(self, project, relative_path):
+            return {}
+
+        def get_iteration_work_items(self, project, team, iteration_id):
+            return []
+
+        def query_wiql(self, project, wiql):
+            return []
+
+        def get_work_items_batch(self, project, ids, fields=None):
+            return []
+
+        def get_team_field_values(self, project, team):
+            return {}
+
+    monkeypatch.setattr(routes, "AzureDevOpsClient", FakeAdo)
+    monkeypatch.setattr(routes, "_resolve_pat", lambda org, pat=None: "token")
+    client, _ = api
+    body = client.get("/api/v1/ado/sprints/board?organization=myorg&project=proj&team=T").json()  # no iteration chosen: current
+    assert (body["iteration"]["start_date"], body["iteration"]["finish_date"]) == ("2026-10-01T00:00:00Z", "2026-10-31T00:00:00Z")

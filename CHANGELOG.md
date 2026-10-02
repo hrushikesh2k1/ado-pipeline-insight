@@ -4,6 +4,15 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.4.1] - 2026-10-03
+
+### Fixed
+- **Sprint dates were wrong or missing on the Sprint Board** ("Sprint Dates Pending" with a placeholder
+  "1 work day remaining"). The board now fills the selected sprint's start and finish dates from the team's sprint
+  list, then the team iteration, then the project's iteration node, so it shows what Azure DevOps shows.
+  The range is formatted like Azure DevOps ("October 1 - October 31"), uses the UTC calendar day so a viewer's
+  timezone cannot shift it, and the page no longer invents "1 work day remaining" when it has no value.
+
 ## [1.4.0] - 2026-10-03
 
 ### Added

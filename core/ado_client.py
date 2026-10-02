@@ -245,6 +245,14 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response)
 
+    def get_iteration_node(self, project: str, relative_path: str) -> dict[str, Any]:
+        """The project's iteration node (Project settings > Iterations); carries the sprint start/finish dates."""
+        node_path = quote(relative_path.replace("\\", "/"), safe="/")
+        url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/_apis/wit/classificationnodes/iterations/{node_path}"
+        response = self.session.get(url, params={"api-version": self.api_version, "$depth": 1}, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response)
+
     def get_team_field_values(self, project: str, team: str) -> dict[str, Any]:
         """The team's backlog scope: its default area path and the area paths it owns (with child inclusion)."""
         url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/teamfieldvalues"

@@ -1,3 +1,4 @@
+import { formatSprintRange, formatWorkDaysRemaining, withListedDates } from '../utils/sprintDates'
 import React, { useState, useEffect, useMemo } from 'react'
 import {
   AlertTriangle,
@@ -332,33 +333,19 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
   }
 
   // Current iteration object
-  const currentIteration = boardData?.iteration || iterations.find(it => it.id === selectedIterationId) || {
+  const listedIteration = iterations.find(it => it.id === (boardData?.iteration?.id || selectedIterationId))
+  const currentIteration = withListedDates(boardData?.iteration, listedIteration) || {
     id: selectedIterationId || 'sprint-curr',
     name: selectedIterationId ? 'Selected Sprint' : 'Current Sprint',
-    path: project ? `${project}\\Sprint` : 'Sprint',
+    path: project ? `${project}\Sprint` : 'Sprint',
     start_date: undefined,
     finish_date: undefined,
     time_frame: 'current'
   }
 
-  // Date Range Display formatting
-  const formattedDateRange = useMemo(() => {
-    if (!currentIteration?.start_date || !currentIteration?.finish_date) {
-      return 'Sprint Dates Pending'
-    }
-    try {
-      const s = new Date(currentIteration.start_date)
-      const f = new Date(currentIteration.finish_date)
-      const sMonth = s.toLocaleString('default', { month: 'long' })
-      const fMonth = f.toLocaleString('default', { month: 'long' })
-      if (sMonth === fMonth) {
-        return `${sMonth} ${s.getDate()} - ${f.getDate()}`
-      }
-      return `${sMonth} ${s.getDate()} - ${fMonth} ${f.getDate()}`
-    } catch {
-      return 'Sprint Dates Pending'
-    }
-  }, [currentIteration])
+  // Date range as Azure DevOps shows it ("October 1 - October 31")
+  const formattedDateRange = formatSprintRange(currentIteration?.start_date, currentIteration?.finish_date) ?? 'Sprint Dates Pending'
+  const workDaysRemaining = formatWorkDaysRemaining(boardData?.working_days_remaining)
 
   // Checks summary
   const checksSummary: AdoSprintChecksSummary = boardData?.checks_summary || {
@@ -918,9 +905,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
           <div className="adoSprintDateInfo">
             <div className="adoSprintDateRange">{formattedDateRange}</div>
             <div className="adoSprintRemaining">
-              {boardData?.working_days_remaining !== undefined && boardData.working_days_remaining !== null
-                ? `${boardData.working_days_remaining} work day${boardData.working_days_remaining === 1 ? '' : 's'} remaining`
-                : '1 work day remaining'}
+              {workDaysRemaining}
             </div>
           </div>
 
