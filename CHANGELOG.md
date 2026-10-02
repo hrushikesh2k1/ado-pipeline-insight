@@ -1,0 +1,31 @@
+# Changelog
+
+All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versioning](https://semver.org):
+**MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
+The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
+
+## [1.4.0] - 2026-10-03
+
+### Added
+- **Sign-in.** Username and password are stored in Azure Key Vault (`app-auth-username`, `app-auth-password`);
+  signed HttpOnly session cookies, failed-login throttling, and every `/api/` route except health and sign-in requires a session.
+  Changing the password in Key Vault takes effect within a minute and signs everyone out.
+- **Release Readiness Scorecard** with a user-selectable branch per repository.
+- **Sprint Board:** milestone summary grouped by Feature/Epic and Area Path (no fixed vocabulary).
+- **Single source of truth for the version** (`VERSION` file). The header badge now shows the version the running
+  backend reports; `scripts/package_webapp.py` builds the deploy zip and stamps the commit and build time.
+
+### Fixed
+- **Sprint Board showed "No sprint tasks found".** A request to Azure DevOps combined `fields` with `$expand`, which it
+  rejects with HTTP 400. The same defect broke the milestone summary and Release Readiness work-item lookups.
+- **Sprint Board showed other teams' work.** Sprints are shared across a project; items are now limited to the selected
+  team's area paths.
+- **Release Readiness pipeline health** no longer pools runs from different pipelines; the worst pipeline wins.
+- The milestone AI summary always fell back to the plain template because its client class was never imported.
+- Project names are escaped in WIQL queries.
+
+### Quality
+- Quality gate and Playwright suites sign in with `QG_USERNAME` / `QG_PASSWORD`; a deployed-site check verifies the login gate.
+
+## [1.3.0] - 2026-10-01
+- Baseline before versioning was formalized.

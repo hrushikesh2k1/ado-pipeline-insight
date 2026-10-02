@@ -87,6 +87,7 @@ export const api = {
       body: JSON.stringify(payload)
     })
   },
+  version: () => request<{ version: string; git_commit?: string; git_branch?: string; build_timestamp?: string | null }>('/api/v1/version'),
   login: (username: string, password: string) => request<UserProfile>('/api/v1/auth/login', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

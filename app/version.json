@@ -1,8 +1,0 @@
-{
-  "version": "1.3.0",
-  "git_commit": "52941ee",
-  "git_branch": "master",
-  "build_timestamp": "2026-10-02T15:41:33.805342Z",
-  "service": "ADO Pipeline Insight",
-  "environment": "production"
-}

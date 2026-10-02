@@ -9,6 +9,7 @@ from fastapi import Path as ApiPath
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from app.core import session_auth
+from app.core.version import get_version_info
 from urllib.parse import quote
 from app.core.db import fetch_one
 from app.repositories.pipeline_repository import PipelineRepository
@@ -183,23 +184,8 @@ def options():
 
 @router.get("/version", tags=["system"])
 def version_metadata():
-    """Return runtime build and deployment metadata to trace running service release."""
-    from pathlib import Path
-    import json
-    for p in [Path(__file__).resolve().parent.parent / "version.json", Path(__file__).resolve().parents[2] / "version.json"]:
-        if p.exists():
-            try:
-                with open(p, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
-    return {
-        "version": "1.3.0",
-        "git_commit": "master",
-        "build_date": "2026-10-01",
-        "service": "ADO Pipeline Insight",
-        "environment": "production",
-    }
+    """Return the running release: version number (from the VERSION file) plus build commit, branch and time."""
+    return get_version_info()
 
 
 @router.get("/summary")

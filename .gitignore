@@ -64,3 +64,7 @@ scratch/*.txt
 
 # Playwright saved sign-in session
 frontend/playwright/.auth/
+
+# Build artifact stamped by scripts/package_webapp.py (commit, branch, build time)
+app/version.json
+webapp-deploy.zip

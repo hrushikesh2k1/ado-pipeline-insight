@@ -167,3 +167,18 @@ Set `INGEST_FUNCTION_URL` in `.env` to the Azure Function `ingest_pipeline` endp
 ### Telemetry correctness
 
 A real Azure DevOps timeline is authoritative. Re-ingestion replaces stale Stage/Job/Task rows for the run, skips fallback records when a real timeline is available, and writes the Azure DevOps build startTime and finishTime as the pipeline run boundaries.
+
+## Versioning and releases
+
+The version number lives in one file: `VERSION` (for example `1.4.0`). Nothing else hardcodes it; the app header and
+`GET /api/v1/version` read it at runtime.
+
+```bash
+python scripts/bump_version.py patch    # bug fix:   1.4.0 -> 1.4.1
+python scripts/bump_version.py minor    # feature:   1.4.0 -> 1.5.0
+python scripts/bump_version.py major    # breaking:  1.4.0 -> 2.0.0
+```
+
+Release steps: bump the version, add a `CHANGELOG.md` entry, commit, build the frontend (`cd frontend && npm run build`),
+then `python scripts/package_webapp.py` (stamps commit and build time into the zip) and
+`az webapp deploy -g <resource-group> -n <app-name> --src-path webapp-deploy.zip --type zip`.

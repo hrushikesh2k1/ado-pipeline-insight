@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import ReactECharts from 'echarts-for-react'
 import { Activity, AlertTriangle, BrainCircuit, Check, CheckCircle2, ChevronDown, ChevronRight, Clock3, Copy, Database, FileCode, Filter, Info, Layers, Moon, Package, RefreshCw, Server, ShieldAlert, Sparkles, Sun, Terminal, TriangleAlert, Wrench, X, Zap } from 'lucide-react'
 import { useAnalyze, useConnectAdo, useIngestAdo, useOptions, useRecommendations, useRunAnalysis, useRuns, useSummary, useTrends } from './hooks/usePipelineData'
+import { useVersion } from './hooks/useVersion'
 import { api } from './services/api'
 import { UserProfileMenu } from './components/UserProfileMenu'
 import { NavSidebar } from './components/NavSidebar'
@@ -400,6 +401,7 @@ function App() {
   }, [isIngesting, adoOrg, org, pipelineId, qc])
 
   const options = useOptions()
+  const appVersion = useVersion().data
   const connectAdo = useConnectAdo()
   const ingestAdo = useIngestAdo()
   const pipelines = options.data?.pipelines ?? []
@@ -756,7 +758,7 @@ function App() {
   }, [summary.data?.stages, theme])
 
   return <div className="app" data-theme={theme}>
-    <header><div className="brand"><div className="logo brandLogo"><img src={octaveLogo} alt="Octave" className="logoImg" /></div><div><h1>ADO Pipeline Insight</h1><p>Pipeline Performance & AI Duration Optimizer</p></div><span className="enterprise">ENTERPRISE</span><span className="versionBadge" title="Deployed Release Build: v1.3.0">v1.3.0</span></div><div className="controls"><Select testId="organization-select" label="Org" value={org} options={orgs} placeholder="All Organizations" onChange={v => { updateOrg(v); updateProject(''); updatePipelineId(null) }} /><Select testId="project-select" label="Project" value={project} options={projects} placeholder="All Projects" onChange={v => { updateProject(v); updatePipelineId(null) }} /><Select testId="pipeline-select" label="Pipeline" value={pipelineId?.toString() ?? ''} options={filtered.map(p => p.pipeline_id.toString())} labels={Object.fromEntries(filtered.map(p => [p.pipeline_id.toString(), p.pipeline_name]))} placeholder="All Pipelines" onChange={v => updatePipelineId(v ? Number(v) : null)} /><Select testId="window-select" label="Window" value={days.toString()} options={WINDOWS.map(w => w.days.toString())} labels={Object.fromEntries(WINDOWS.map(w => [w.days.toString(), w.label]))} onChange={v => updateDays(Number(v))} /></div><div className="status" data-testid="connection-status"><span className={`dot ${options.isError ? 'bad' : ''}`} />{options.isError ? 'ERROR' : 'CONNECTED'}</div><ThemeToggle theme={theme} onChange={setTheme} /><UserProfileMenu /></header>
+    <header><div className="brand"><div className="logo brandLogo"><img src={octaveLogo} alt="Octave" className="logoImg" /></div><div><h1>ADO Pipeline Insight</h1><p>Pipeline Performance & AI Duration Optimizer</p></div><span className="enterprise">ENTERPRISE</span>{appVersion && <span className="versionBadge" data-testid="app-version" title={`Release v${appVersion.version} - build ${appVersion.git_commit ?? 'unknown'}${appVersion.build_timestamp ? ` (${appVersion.build_timestamp})` : ''}`}>v{appVersion.version}</span>}</div><div className="controls"><Select testId="organization-select" label="Org" value={org} options={orgs} placeholder="All Organizations" onChange={v => { updateOrg(v); updateProject(''); updatePipelineId(null) }} /><Select testId="project-select" label="Project" value={project} options={projects} placeholder="All Projects" onChange={v => { updateProject(v); updatePipelineId(null) }} /><Select testId="pipeline-select" label="Pipeline" value={pipelineId?.toString() ?? ''} options={filtered.map(p => p.pipeline_id.toString())} labels={Object.fromEntries(filtered.map(p => [p.pipeline_id.toString(), p.pipeline_name]))} placeholder="All Pipelines" onChange={v => updatePipelineId(v ? Number(v) : null)} /><Select testId="window-select" label="Window" value={days.toString()} options={WINDOWS.map(w => w.days.toString())} labels={Object.fromEntries(WINDOWS.map(w => [w.days.toString(), w.label]))} onChange={v => updateDays(Number(v))} /></div><div className="status" data-testid="connection-status"><span className={`dot ${options.isError ? 'bad' : ''}`} />{options.isError ? 'ERROR' : 'CONNECTED'}</div><ThemeToggle theme={theme} onChange={setTheme} /><UserProfileMenu /></header>
     <div className="appLayout">
       <NavSidebar activePage={activePage} onSelectPage={handleSelectPage} />
       <div className="appContent">
