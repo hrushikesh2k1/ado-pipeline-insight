@@ -112,6 +112,8 @@ export type AdoWorkItem = {
   description?: string | null
   acceptance_criteria?: string | null
   area_path?: string | null
+  iteration_path?: string | null
+  iteration_id?: number | null
 }
 
 export type AdoSprintChecksSummary = {

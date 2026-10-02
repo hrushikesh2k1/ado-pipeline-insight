@@ -48,6 +48,7 @@ from app.repositories.release_repository import ReleaseRepository
 from app.services.release_service import ReleaseService
 from app.services.board_service import (
     evaluate_sprint_work_items,
+    is_work_item_in_iteration,
     calculate_remaining_work_days,
     parse_ado_date,
     calculate_sprint_milestones,
@@ -761,19 +762,26 @@ def get_ado_sprint_board(
     if iteration_id:
         req_id = iteration_id.strip()
         req_id_lower = req_id.lower()
+        # Pass 1: exact ID match
         for it in all_iterations:
-            it_id_lower = (it.id or "").strip().lower()
-            it_name_lower = (it.name or "").strip().lower()
-            it_path_lower = (it.path or "").strip().lower()
-            if (
-                it_id_lower == req_id_lower
-                or it_name_lower == req_id_lower
-                or it_path_lower == req_id_lower
-                or it_path_lower.endswith(req_id_lower)
-                or (req_id_lower in it_path_lower)
-            ):
+            if (it.id or "").strip().lower() == req_id_lower:
                 selected_iteration = it
                 break
+        # Pass 2: exact name or exact path match
+        if not selected_iteration:
+            for it in all_iterations:
+                it_name_lower = (it.name or "").strip().lower()
+                it_path_lower = (it.path or "").strip().lower()
+                if it_name_lower == req_id_lower or it_path_lower == req_id_lower:
+                    selected_iteration = it
+                    break
+        # Pass 3: path leaf match (e.g. req_id is "26-09" and path is "Project\26-09")
+        if not selected_iteration:
+            for it in all_iterations:
+                it_leaf = (it.path or "").replace("/", "\\").split("\\")[-1].strip().lower()
+                if it_leaf == req_id_lower:
+                    selected_iteration = it
+                    break
 
     if not selected_iteration and iteration_id:
         selected_iteration = AdoIteration(
@@ -790,7 +798,6 @@ def get_ado_sprint_board(
         try:
             ado = AzureDevOpsClient(org_clean, token)
             effective_team = team_clean
-            relations = []
 
             # 1. Resolve real iteration GUID or timeframe if possible
             target_iter_id = None
@@ -802,6 +809,10 @@ def get_ado_sprint_board(
                         iters = ado.list_team_iterations(proj_clean, effective_team, timeframe="current")
                         if iters:
                             target_iter_id = str(iters[0].get("id"))
+                            if iters[0].get("name"):
+                                selected_iteration.name = iters[0]["name"]
+                            if iters[0].get("path"):
+                                selected_iteration.path = iters[0]["path"]
                     except Exception:
                         pass
                 elif selected_iteration.id == "iter-prev":
@@ -809,15 +820,35 @@ def get_ado_sprint_board(
                         iters = ado.list_team_iterations(proj_clean, effective_team, timeframe="past")
                         if iters:
                             target_iter_id = str(iters[-1].get("id"))
+                            if iters[-1].get("name"):
+                                selected_iteration.name = iters[-1]["name"]
+                            if iters[-1].get("path"):
+                                selected_iteration.path = iters[-1]["path"]
                     except Exception:
                         pass
 
-            # 2. Fetch work item relations from Azure DevOps
+            # 2. Ensure selected_iteration has real name and path if it was GUID or partial
+            if selected_iteration and target_iter_id:
+                is_guid = bool(re.match(r"^[0-9a-fA-F-]{30,}$", (selected_iteration.name or "").strip()))
+                if is_guid or not selected_iteration.path or "\\" not in selected_iteration.path:
+                    try:
+                        iter_info = ado.get_team_iteration(proj_clean, effective_team, target_iter_id)
+                        if iter_info:
+                            if iter_info.get("name") and not bool(re.match(r"^[0-9a-fA-F-]{30,}$", iter_info["name"])):
+                                selected_iteration.name = iter_info["name"]
+                            if iter_info.get("path"):
+                                selected_iteration.path = iter_info["path"]
+                    except Exception as e_info:
+                        logging.debug("Could not resolve team iteration path early: %s", e_info)
+
+            # 3. Collect work item candidates from both iteration relations and WIQL
+            candidate_ids: set[int] = set()
             if target_iter_id:
                 try:
                     relations = ado.get_iteration_work_items(proj_clean, effective_team, target_iter_id)
                 except Exception as e_rel:
                     logging.info("get_iteration_work_items failed for '%s': %s; attempting project teams lookup", effective_team, e_rel)
+                    relations = []
                     try:
                         all_teams = ado.list_teams(proj_clean)
                         matched = next((t["name"] for t in all_teams if t["name"].lower() == effective_team.lower() or t.get("id") == effective_team), None)
@@ -829,28 +860,26 @@ def get_ado_sprint_board(
                     except Exception as e_team:
                         logging.warning("Failed secondary team lookup: %s", e_team)
 
-            # 3. Collect all work item IDs (from target and source)
-            item_ids: list[int] = []
-            for r in relations:
-                if isinstance(r, dict):
-                    target = r.get("target") or {}
-                    tid = target.get("id") if isinstance(target, dict) else None
-                    if tid is None and isinstance(r.get("id"), int):
-                        tid = r.get("id")
-                    if tid and isinstance(tid, int) and tid not in item_ids:
-                        item_ids.append(tid)
+                for r in relations:
+                    if isinstance(r, dict):
+                        target = r.get("target") or {}
+                        tid = target.get("id") if isinstance(target, dict) else None
+                        if tid is None and isinstance(r.get("id"), int):
+                            tid = r.get("id")
+                        if tid and isinstance(tid, int):
+                            candidate_ids.add(tid)
 
-                    source = r.get("source") or {}
-                    sid = source.get("id") if isinstance(source, dict) else None
-                    if sid and isinstance(sid, int) and sid not in item_ids:
-                        item_ids.append(sid)
+                        source = r.get("source") or {}
+                        sid = source.get("id") if isinstance(source, dict) else None
+                        if sid and isinstance(sid, int):
+                            candidate_ids.add(sid)
 
-            # 4. Fallback: If relations returned 0 items, query via WIQL by iteration path
-            if not item_ids and selected_iteration:
+            # Query WIQL by iteration path for comprehensive sprint work item discovery
+            if selected_iteration:
                 try:
                     iter_path = selected_iteration.path or selected_iteration.name
-                    if iter_path:
-                        clean_path = iter_path.strip().replace("'", "''")
+                    if iter_path and not iter_path.startswith("iter-"):
+                        clean_path = iter_path.strip().replace("'", "''").replace("/", "\\")
                         if not clean_path.startswith(proj_clean) and not clean_path.startswith("\\"):
                             clean_path = f"{proj_clean}\\{clean_path}"
                         clean_path = clean_path.lstrip("\\")
@@ -859,14 +888,25 @@ def get_ado_sprint_board(
                         wiql_ids = ado.query_wiql(proj_clean, wiql)
                         if wiql_ids:
                             for wid in wiql_ids:
-                                if wid not in item_ids:
-                                    item_ids.append(wid)
+                                candidate_ids.add(wid)
                 except Exception as e_wiql:
-                    logging.info("WIQL iteration query fallback failed: %s", e_wiql)
+                    logging.info("WIQL iteration query failed: %s", e_wiql)
 
-            # 5. Batch fetch real work item fields
+            # 4. Batch fetch real work item fields
+            item_ids = list(candidate_ids)
             if item_ids:
-                raw_work_items = ado.get_work_items_batch(proj_clean, item_ids)
+                fetched_items = ado.get_work_items_batch(proj_clean, item_ids)
+                # 5. STRICT SPRINT ITERATION FILTERING:
+                # Strictly keep only work items whose System.IterationPath matches selected_iteration.
+                # Prevents linked items (e.g. bug 1084653 assigned to Oct) from leaking into Sep sprint.
+                raw_work_items = [
+                    item for item in fetched_items
+                    if is_work_item_in_iteration(
+                        (item.get("fields") or {}).get("System.IterationPath"),
+                        (item.get("fields") or {}).get("System.IterationId"),
+                        selected_iteration,
+                    )
+                ]
         except Exception as e:
             logging.error("Failed to query sprint work items from Azure DevOps: %s", e)
 

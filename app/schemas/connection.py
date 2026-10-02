@@ -146,6 +146,8 @@ class AdoWorkItem(BaseModel):
     description: str | None = None
     acceptance_criteria: str | None = None
     area_path: str | None = None
+    iteration_path: str | None = None
+    iteration_id: int | None = None
     severity: str | None = None
     priority: int | None = None
 

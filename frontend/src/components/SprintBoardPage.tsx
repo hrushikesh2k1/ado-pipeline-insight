@@ -235,6 +235,53 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       })
   }
 
+  // Handle Sync Board button click - refreshes sprints list and board data for current team/iteration
+  const handleSyncBoard = async () => {
+    if (!organization || !project) return
+    setIsLoadingBoard(true)
+    setErrorMessage(null)
+    try {
+      let teamIdToUse = selectedTeamId
+      if (!teamIdToUse) {
+        const teamList = await api.teams(organization, project, pat)
+        setTeams(teamList)
+        if (teamList.length > 0) {
+          teamIdToUse = teamList[0].id
+          setSelectedTeamId(teamIdToUse)
+        }
+      }
+
+      if (teamIdToUse) {
+        setIsLoadingSprints(true)
+        const sprintList = await api.sprints(organization, project, teamIdToUse, pat)
+        setIterations(sprintList)
+        setIsLoadingSprints(false)
+
+        let targetIterationId = selectedIterationId
+        if (!targetIterationId || !sprintList.some(s => s.id === targetIterationId)) {
+          const current = sprintList.find(s => s.time_frame === 'current') || sprintList[0]
+          if (current) {
+            targetIterationId = current.id
+            setSelectedIterationId(targetIterationId)
+            localStorage.setItem('ado_sprint_selected_iteration', targetIterationId)
+          }
+        }
+
+        const data = await api.sprintBoard(organization, project, teamIdToUse, targetIterationId || undefined, pat)
+        setBoardData(data)
+        if (data.iteration?.id) {
+          setSelectedIterationId(data.iteration.id)
+          localStorage.setItem('ado_sprint_selected_iteration', data.iteration.id)
+        }
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to sync sprint board')
+    } finally {
+      setIsLoadingBoard(false)
+      setIsLoadingSprints(false)
+    }
+  }
+
   useEffect(() => {
     fetchBoardData()
   }, [organization, project, selectedTeamId, pat])
@@ -273,31 +320,31 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       if (match && match.name && !/^[0-9a-fA-F-]{30,}$/.test(match.name)) {
         return match.name.toLowerCase().includes('sprint') ? match.name : `${match.name} Sprint`
       }
-      if (path && path.includes('\\')) {
-        const seg = path.split('\\').pop()?.trim()
+      if (path && (path.includes('\\') || path.includes('/'))) {
+        const seg = path.split(/[\\/]/).pop()?.trim()
         if (seg && !/^[0-9a-fA-F-]{30,}$/.test(seg)) {
           return seg.toLowerCase().includes('sprint') ? seg : `${seg} Sprint`
         }
       }
-      return '26-09 Sprint'
+      return 'Sprint'
     }
     return trimmed.toLowerCase().includes('sprint') ? trimmed : `${trimmed} Sprint`
   }
 
   // Current iteration object
   const currentIteration = boardData?.iteration || iterations.find(it => it.id === selectedIterationId) || {
-    id: 'sprint-curr',
-    name: '26-09 (Sep Work)',
-    path: `${project}\\26-09`,
-    start_date: '2026-09-01T00:00:00Z',
-    finish_date: '2026-09-30T23:59:59Z',
+    id: selectedIterationId || 'sprint-curr',
+    name: selectedIterationId ? 'Selected Sprint' : 'Current Sprint',
+    path: project ? `${project}\\Sprint` : 'Sprint',
+    start_date: undefined,
+    finish_date: undefined,
     time_frame: 'current'
   }
 
   // Date Range Display formatting
   const formattedDateRange = useMemo(() => {
     if (!currentIteration?.start_date || !currentIteration?.finish_date) {
-      return 'September 1 - September 30'
+      return 'Sprint Dates Pending'
     }
     try {
       const s = new Date(currentIteration.start_date)
@@ -309,7 +356,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       }
       return `${sMonth} ${s.getDate()} - ${fMonth} ${f.getDate()}`
     } catch {
-      return 'September 1 - September 30'
+      return 'Sprint Dates Pending'
     }
   }, [currentIteration])
 
@@ -334,6 +381,20 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
 
     // Filter work items by person and search query
     const filtered = boardData.work_items.filter(w => {
+      // Defense-in-depth: Ensure work item strictly belongs to current board iteration if available
+      if (w.iteration_path && currentIteration) {
+        const itemIter = w.iteration_path.toLowerCase().replace(/\\/g, '/').trim()
+        const currPath = (currentIteration.path || '').toLowerCase().replace(/\\/g, '/').trim()
+        const currName = (currentIteration.name || '').toLowerCase().trim()
+        if (currPath || currName) {
+          const itemLeaf = itemIter.split('/').pop() || ''
+          const currLeaf = currPath ? currPath.split('/').pop() || '' : currName
+          if (itemLeaf && currLeaf && itemLeaf !== currLeaf && !itemIter.endsWith('/' + currLeaf)) {
+            return false
+          }
+        }
+      }
+
       if (personFilter !== 'all') {
         if (personFilter === '@Me') {
           // If @Me, check if assigned to user or first word match
@@ -702,7 +763,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
           <button
             type="button"
             className="adoConnectRefreshBtn"
-            onClick={fetchBoardData}
+            onClick={handleSyncBoard}
             title="Sync Sprint Board"
           >
             <RefreshCw size={13} className={isLoadingBoard || isLoadingTeams || isLoadingSprints ? 'spin' : ''} />
@@ -896,7 +957,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
           <button
             type="button"
             className="adoRefreshBtn"
-            onClick={fetchBoardData}
+            onClick={() => fetchBoardData(selectedIterationId)}
             title="Refresh sprint items"
           >
             <RefreshCw size={14} className={isLoadingBoard ? 'spin' : ''} />

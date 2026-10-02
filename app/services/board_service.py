@@ -94,6 +94,109 @@ def strip_html_tags(text: str | None) -> str:
     return "\n".join(lines)
 
 
+def is_work_item_in_iteration(
+    item_iter_path: Any | None = None,
+    item_iter_id: int | None = None,
+    iteration: Any | None = None,
+    *,
+    target_iteration_path: str | None = None,
+    target_iteration_name: str | None = None,
+    target_iteration_id: int | None = None,
+) -> bool:
+    """Verify whether a work item strictly belongs to the specified sprint iteration.
+
+    Prevents cross-sprint leakage where linked items (e.g. bug 1084653 assigned to October)
+    inadvertently appear on the September sprint board because of parent/child hierarchy relations.
+    """
+    # If first argument is a work item dict / object, extract its iteration fields
+    if isinstance(item_iter_path, dict):
+        fields = item_iter_path.get("fields", item_iter_path)
+        extracted_path = fields.get("System.IterationPath") or fields.get("iteration_path")
+        extracted_id = fields.get("System.IterationId") or fields.get("iteration_id")
+        if item_iter_id is None:
+            item_iter_id = extracted_id
+        item_iter_path = extracted_path
+
+    if iteration is None:
+        if target_iteration_path is not None or target_iteration_name is not None or target_iteration_id is not None:
+            iteration = {
+                "path": target_iteration_path,
+                "name": target_iteration_name,
+                "id": target_iteration_id,
+            }
+        else:
+            return True
+
+    if isinstance(iteration, dict):
+        iter_path = iteration.get("path")
+        iter_name = iteration.get("name")
+        iter_id = iteration.get("id")
+    else:
+        iter_path = getattr(iteration, "path", None)
+        iter_name = getattr(iteration, "name", None)
+        iter_id = getattr(iteration, "id", None)
+
+    # If neither path nor name is provided on iteration, do not filter
+    if not iter_path and not iter_name and not iter_id:
+        return True
+
+    # If work item has no iteration path at all, fallback to ID if present
+    if not item_iter_path:
+        if item_iter_id is not None and iter_id:
+            try:
+                return int(item_iter_id) == int(iter_id)
+            except (ValueError, TypeError):
+                pass
+        return False
+
+    norm_item = str(item_iter_path).strip().replace("/", "\\").strip("\\").lower()
+    item_leaf = norm_item.split("\\")[-1].strip()
+
+    norm_target = str(iter_path or "").strip().replace("/", "\\").strip("\\").lower()
+    norm_name = str(iter_name or "").strip().replace("/", "\\").strip("\\").lower()
+    target_leaf = norm_target.split("\\")[-1].strip() if norm_target else norm_name
+
+    # 1. Exact normalized path match (e.g. "myproject\26-09" == "myproject\26-09")
+    if norm_target and norm_item == norm_target:
+        return True
+
+    # 2. Exact leaf segment match (e.g. "26-09" == "26-09")
+    if target_leaf and item_leaf == target_leaf:
+        return True
+
+    # 3. Iteration name exact match (e.g. "26-09" == "26-09")
+    if norm_name and item_leaf == norm_name:
+        return True
+
+    # 4. Path boundary matches (e.g. norm_item ends with "\26-09")
+    if target_leaf and norm_item.endswith(f"\\{target_leaf}"):
+        return True
+    if item_leaf and norm_target.endswith(f"\\{item_leaf}"):
+        return True
+
+    # 5. Nested iteration path match (item is UNDER iteration path)
+    if norm_target and norm_item.startswith(f"{norm_target}\\"):
+        return True
+
+    # 6. Check common sprint patterns (e.g. "26-09" in "26-09 (Sep Work)" or "Sprint 1")
+    # Strictly extract sprint code token so "26-09" matches "26-09 (Sep Work)",
+    # but "26-10" NEVER matches "26-09"!
+    item_code_match = re.search(r"(\b\d{2}-\d{2}\b|sprint\s*\d+\b)", item_leaf)
+    target_code_match = re.search(r"(\b\d{2}-\d{2}\b|sprint\s*\d+\b)", target_leaf or norm_name)
+    if item_code_match and target_code_match:
+        return item_code_match.group(1).replace(" ", "") == target_code_match.group(1).replace(" ", "")
+
+    # 7. Check if item_iter_id matches iteration.id
+    if item_iter_id is not None and iter_id:
+        try:
+            if int(item_iter_id) == int(iter_id):
+                return True
+        except (ValueError, TypeError):
+            pass
+
+    return False
+
+
 def evaluate_sprint_work_items(
     raw_items: list[dict[str, Any]],
     org: str,
@@ -231,6 +334,8 @@ def evaluate_sprint_work_items(
             "acceptance_criteria": acceptance_criteria or None,
             "tags": tags_raw,
             "area_path": area_path_leaf,
+            "iteration_path": str(fields.get("System.IterationPath") or "") or None,
+            "iteration_id": int(fields.get("System.IterationId")) if fields.get("System.IterationId") is not None else None,
             "severity": severity,
             "priority": priority,
         })

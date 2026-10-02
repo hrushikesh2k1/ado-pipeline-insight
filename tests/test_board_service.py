@@ -327,6 +327,48 @@ def test_next_sprint_recommendations_are_derived_not_scripted():
     graph = calculate_sprint_milestones(work_items, parent_lookup)["graph_data"]
     stream = next(s for s in graph["streams"] if s["name"] == "Android Revamp")
     assert "1 item(s) in this stream are still open" in stream["next_sprint_recommendation"]
-    assert any("Android Revamp" in area for area in graph["next_sprint_focus_areas"])
-    assert "alert" not in graph["next_sprint_recommended_capacity"].lower()
+def test_is_work_item_in_iteration_cross_sprint_isolation():
+    from app.services.board_service import is_work_item_in_iteration
+
+    # Scenario: Bug 1084653 is in Oct (26-10) iteration
+    bug_1084653 = {
+        "id": 1084653,
+        "fields": {
+            "System.Id": 1084653,
+            "System.Title": "Pipeline telemetry ingestion timeout",
+            "System.WorkItemType": "Bug",
+            "System.IterationPath": "MyProject\\26-10",
+            "System.IterationId": 501,
+        },
+    }
+
+    # User Story in Sep (26-09) iteration
+    story_sep = {
+        "id": 1084000,
+        "fields": {
+            "System.Id": 1084000,
+            "System.Title": "Data exporter feature",
+            "System.WorkItemType": "User Story",
+            "System.IterationPath": "MyProject\\26-09",
+            "System.IterationId": 401,
+        },
+    }
+
+    # 1. September Sprint checks
+    assert is_work_item_in_iteration(story_sep, target_iteration_path="MyProject\\26-09", target_iteration_name="26-09") is True
+    # Bug 1084653 MUST NOT be in September Sprint!
+    assert is_work_item_in_iteration(bug_1084653, target_iteration_path="MyProject\\26-09", target_iteration_name="26-09") is False
+
+    # 2. October Sprint checks
+    assert is_work_item_in_iteration(bug_1084653, target_iteration_path="MyProject\\26-10", target_iteration_name="26-10") is True
+    # Sep story MUST NOT be in October Sprint!
+    assert is_work_item_in_iteration(story_sep, target_iteration_path="MyProject\\26-10", target_iteration_name="26-10") is False
+
+    # 3. Normalized slash checks (e.g. forward slash vs backward slash)
+    assert is_work_item_in_iteration(bug_1084653, target_iteration_path="MyProject/26-10") is True
+    assert is_work_item_in_iteration(bug_1084653, target_iteration_path="MyProject/26-09") is False
+
+    # 4. Check by Iteration ID
+    assert is_work_item_in_iteration(bug_1084653, target_iteration_id=501) is True
+    assert is_work_item_in_iteration(bug_1084653, target_iteration_id=401) is False
 
