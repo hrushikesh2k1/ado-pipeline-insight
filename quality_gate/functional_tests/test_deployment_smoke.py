@@ -89,5 +89,6 @@ def test_deployed_login_gate():
         pytest.skip(f"site does not use the built-in login (HTTP {anonymous.status_code})")
     bad = requests.post(f"{BASE_URL}/api/v1/auth/login", json={"username": "Admin", "password": "definitely-not-the-password"},
                         timeout=60, allow_redirects=False)
-    assert bad.status_code in (401, 429) and "set-cookie" not in bad.headers
+    assert bad.status_code in (401, 429)
+    assert "ado_session" not in bad.headers.get("set-cookie", ""), "a failed login must not issue a session"  # App Service's own ARRAffinity cookie is fine
     assert requests.get(f"{BASE_URL}/api/v1/health", timeout=60).status_code == 200

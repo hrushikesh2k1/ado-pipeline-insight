@@ -50,6 +50,13 @@ class Api:
         token = os.environ.get("QG_BEARER_TOKEN")
         if token:
             self.session.headers["Authorization"] = f"Bearer {token}"
+        self.login_status: int | None = None
+        username, password = os.environ.get("QG_USERNAME"), os.environ.get("QG_PASSWORD")
+        if username and password:  # the app's built-in sign-in; every client instance gets its own session cookie
+            try:
+                self.login_status = self.session.post(f"{BASE_URL}/api/v1/auth/login", json={"username": username, "password": password}, timeout=60).status_code
+            except requests.RequestException:
+                self.login_status = None
 
     def raw(self, path: str, **kw):
         return self.session.get(f"{BASE_URL}{path}", timeout=60, allow_redirects=False, **kw)
@@ -69,12 +76,9 @@ def api() -> Api:
         pytest.skip(f"cannot reach {BASE_URL}: {type(exc).__name__}")
     if probe.status_code in (301, 302, 303, 307, 308, 401, 403):
         pytest.skip(f"{BASE_URL} requires sign-in (HTTP {probe.status_code}); set QG_BEARER_TOKEN to test it")
-    username, password = os.environ.get("QG_USERNAME"), os.environ.get("QG_PASSWORD")
-    if username and password:
-        login = client.session.post(f"{BASE_URL}/api/v1/auth/login", json={"username": username, "password": password}, timeout=60)
-        if login.status_code != 200:
-            pytest.skip(f"sign-in with QG_USERNAME failed (HTTP {login.status_code})")
-    elif client.raw("/api/v1/options").status_code == 401:
+    if client.login_status not in (None, 200):
+        pytest.skip(f"sign-in with QG_USERNAME failed (HTTP {client.login_status})")
+    if client.raw("/api/v1/options").status_code == 401:
         pytest.skip(f"{BASE_URL} requires sign-in; set QG_USERNAME and QG_PASSWORD to test it")
     return client
 

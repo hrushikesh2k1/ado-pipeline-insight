@@ -27,7 +27,7 @@ function capture(page: Page): Captured {
 
 async function loadDashboard(page: Page): Promise<Captured> {
   const seen = capture(page);
-  await page.goto('/');
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForLoadState('networkidle', { timeout: 60_000 });
   await expect(page.locator('.metric').filter({ hasText: 'Completed Runs' }).locator('.metricValue')).toHaveText(/\d+\s*runs/, { timeout: 60_000 });
   expect(seen.summary.length, 'summary was never fetched').toBeGreaterThan(0);
@@ -70,7 +70,7 @@ test.describe('Dashboard shows exactly what the API returned', () => {
     for (const [i, item] of r.items.slice(0, 10).entries()) {
       const row = rows.nth(i);
       await expect(row.locator('b')).toHaveText(`#${item.build_number || item.run_id}`);
-      await expect(row.locator('span').first()).toHaveText(item.pipeline_name);
+      await expect(row.locator('span:not([class])').first()).toHaveText(item.pipeline_name);
       await expect(row.locator('small')).toContainText(fmt(item.duration_seconds));
       await expect(row.locator('.result')).toHaveText(item.result || 'unknown');
     }
