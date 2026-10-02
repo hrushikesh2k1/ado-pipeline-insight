@@ -49,6 +49,8 @@ from app.services.release_service import ReleaseService
 from app.services.board_service import (
     evaluate_sprint_work_items,
     is_work_item_in_iteration,
+    is_in_team_areas,
+    parse_team_area_scopes,
     calculate_remaining_work_days,
     parse_ado_date,
     calculate_sprint_milestones,
@@ -912,6 +914,13 @@ def get_ado_sprint_board(
                     if iid:
                         item_by_id[int(iid)] = item
 
+                # A sprint is shared by every team in the project; the team's own area paths decide which items are theirs.
+                team_scopes: list[tuple[str, bool]] = []
+                try:
+                    team_scopes = parse_team_area_scopes(ado.get_team_field_values(proj_clean, effective_team))
+                except Exception as e_scope:
+                    logging.warning("Could not read area paths for team '%s'; showing every team's items: %s", effective_team, e_scope)
+
                 # Identify sprint parent stories/bugs/PBIs
                 sprint_parent_items: list[dict[str, Any]] = []
                 sprint_parent_ids: set[int] = set()
@@ -920,7 +929,7 @@ def get_ado_sprint_board(
                     f = item.get("fields") or {}
                     wtype = str(f.get("System.WorkItemType") or "").lower()
                     if wtype in ("user story", "product backlog item", "feature", "bug", "requirement", "issue"):
-                        if is_work_item_in_iteration(
+                        if is_in_team_areas(f.get("System.AreaPath"), team_scopes) and is_work_item_in_iteration(
                             f.get("System.IterationPath"),
                             f.get("System.IterationId"),
                             selected_iteration,
@@ -985,7 +994,7 @@ def get_ado_sprint_board(
                         if pid and int(pid) in sprint_parent_ids:
                             # Child task belongs to a sprint parent story
                             raw_work_items.append(item)
-                        elif is_work_item_in_iteration(
+                        elif is_in_team_areas(f.get("System.AreaPath"), team_scopes) and is_work_item_in_iteration(
                             f.get("System.IterationPath"),
                             f.get("System.IterationId"),
                             selected_iteration,

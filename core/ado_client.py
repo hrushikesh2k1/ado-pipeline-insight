@@ -245,42 +245,32 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response)
 
+    def get_team_field_values(self, project: str, team: str) -> dict[str, Any]:
+        """The team's backlog scope: its default area path and the area paths it owns (with child inclusion)."""
+        url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/teamfieldvalues"
+        response = self.session.get(url, params={"api-version": self.api_version}, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response)
+
     def get_work_items_batch(
         self, project: str, ids: list[int], fields: list[str] | None = None
     ) -> list[dict[str, Any]]:
-        """Batch fetch work items by their IDs."""
+        """Batch fetch work items by their IDs.
+
+        Azure DevOps rejects a request that combines `fields` with `$expand` (HTTP 400). So: pass `fields` to get just
+        those fields (no relations), or omit it to get every field plus the work item relations (parent/child links).
+        """
         if not ids:
             return []
         url = self._url(project, "_apis/wit/workitemsbatch")
-        default_fields = [
-            "System.Id",
-            "System.Title",
-            "System.State",
-            "System.WorkItemType",
-            "System.AssignedTo",
-            "System.ChangedDate",
-            "System.CreatedDate",
-            "System.IterationPath",
-            "System.AreaPath",
-            "System.Parent",
-            "Microsoft.VSTS.Scheduling.RemainingWork",
-            "Microsoft.VSTS.Scheduling.CompletedWork",
-            "Microsoft.VSTS.Scheduling.OriginalEstimate",
-            "Microsoft.VSTS.Common.StateChangeDate",
-            "System.BoardColumn",
-            "System.Description",
-            "Microsoft.VSTS.Common.AcceptanceCriteria",
-            "Microsoft.VSTS.TCM.ReproSteps",
-            "System.Tags",
-        ]
         results: list[dict[str, Any]] = []
         for i in range(0, len(ids), 200):
             chunk = ids[i : i + 200]
-            payload = {
-                "ids": chunk,
-                "fields": fields or default_fields,
-                "$expand": "relations",
-            }
+            payload: dict[str, Any] = {"ids": chunk}
+            if fields:
+                payload["fields"] = fields
+            else:
+                payload["$expand"] = "relations"
             response = self.session.post(url, json=payload, params={"api-version": self.api_version}, timeout=30)
             response.raise_for_status()
             results.extend(self._json_response(response).get("value", []))

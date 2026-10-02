@@ -197,6 +197,39 @@ def is_work_item_in_iteration(
     return False
 
 
+def _norm_area(path: Any) -> str:
+    return str(path or "").strip().replace("/", "\\").strip("\\").lower()
+
+
+def parse_team_area_scopes(field_values: dict[str, Any] | None) -> list[tuple[str, bool]]:
+    """Turn Azure DevOps teamfieldvalues into [(normalized area path, includes_children)].
+
+    A sprint (iteration) is shared across the project, so the sprint alone cannot say which team's work to show;
+    the team's area paths do. An empty result means the scope is unknown and nothing should be filtered.
+    """
+    if not isinstance(field_values, dict):
+        return []
+    scopes = [
+        (_norm_area(v.get("value")), bool(v.get("includeChildren")))
+        for v in field_values.get("values") or []
+        if isinstance(v, dict) and v.get("value")
+    ]
+    if not scopes and field_values.get("defaultValue"):
+        scopes = [(_norm_area(field_values["defaultValue"]), False)]
+    return scopes
+
+
+def is_in_team_areas(area_path: Any, scopes: list[tuple[str, bool]]) -> bool:
+    """True when the work item's Area Path falls under one of the team's areas (or no scope is known)."""
+    if not scopes:
+        return True
+    area = _norm_area(area_path)
+    for base, include_children in scopes:
+        if area == base or (include_children and area.startswith(base + "\\")):
+            return True
+    return False
+
+
 def evaluate_sprint_work_items(
     raw_items: list[dict[str, Any]],
     org: str,

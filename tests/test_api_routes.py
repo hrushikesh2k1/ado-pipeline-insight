@@ -483,3 +483,47 @@ def test_milestone_ai_summary_uses_openai_when_configured(api, monkeypatch):
 
 
 
+
+
+def test_sprint_board_shows_only_the_selected_teams_items(api, monkeypatch):
+    """A sprint is shared by every team; only items in the selected team's area paths may appear."""
+    def wi(i, wtype, area, parent=None):
+        f = {"System.Id": i, "System.Title": f"item {i}", "System.WorkItemType": wtype, "System.State": "Active",
+             "System.IterationPath": r"proj\Sprint 1", "System.AreaPath": area}
+        if parent:
+            f["System.Parent"] = parent
+        return {"id": i, "fields": f, "relations": []}
+
+    items = [wi(1, "User Story", r"proj\CloudOps-Monitoring"), wi(2, "Task", r"proj\CloudOps-Monitoring", parent=1),
+             wi(3, "User Story", r"proj\Identity"), wi(4, "Task", r"proj\Identity", parent=3),
+             wi(5, "Bug", r"proj\CloudOps-Monitoring\Alerts")]
+
+    class FakeAdo:
+        def __init__(self, *a, **k):
+            pass
+
+        def list_team_iterations(self, project, team, timeframe=None):
+            return [{"id": "it-1", "name": "Sprint 1", "path": r"proj\Sprint 1", "attributes": {"timeFrame": "current"}}]
+
+        def get_team_iteration(self, project, team, iteration_id):
+            return {"id": "it-1", "name": "Sprint 1", "path": r"proj\Sprint 1"}
+
+        def get_iteration_work_items(self, project, team, iteration_id):
+            return []
+
+        def query_wiql(self, project, wiql):
+            return [i["id"] for i in items]  # the sprint query returns every team's items
+
+        def get_work_items_batch(self, project, ids, fields=None):
+            return [i for i in items if i["id"] in ids]
+
+        def get_team_field_values(self, project, team):
+            return {"defaultValue": r"proj\CloudOps-Monitoring", "values": [{"value": r"proj\CloudOps-Monitoring", "includeChildren": True}]}
+
+    monkeypatch.setattr(routes, "AzureDevOpsClient", FakeAdo)
+    monkeypatch.setattr(routes, "_resolve_pat", lambda org, pat=None: "token")
+    client, _ = api
+    r = client.get("/api/v1/ado/sprints/board?organization=myorg&project=proj&team=CloudOps-Monitoring&iteration_id=it-1")
+    assert r.status_code == 200
+    ids = sorted(w["id"] for w in r.json()["work_items"])
+    assert ids == [1, 2, 5], f"expected only the Monitoring team's items, got {ids}"

@@ -1,3 +1,5 @@
+import requests
+
 from core.ado_client import AzureDevOpsClient
 
 
@@ -96,3 +98,30 @@ def test_flatten_timeline_preserves_build_number():
     timeline = {"records": [{"id": "stage", "type": "Stage", "name": "Build"}]}
     metrics = AzureDevOpsClient("example", "test").flatten_timeline(build, timeline)
     assert metrics[0].build_number == "20260920.1"
+
+
+class _StrictBatchSession:
+    """Behaves like Azure DevOps: workitemsbatch answers 400 when `fields` and `$expand` are sent together."""
+
+    def __init__(self):
+        self.headers = {}
+        self.payloads = []
+
+    def post(self, url, json=None, params=None, timeout=30):
+        self.payloads.append(json)
+        if "fields" in json and "$expand" in json:
+            raise requests.HTTPError("400 Client Error: Bad Request for url: workitemsbatch")
+        return _FakeResponse([{"id": i, "fields": {}, "relations": []} for i in json["ids"]])
+
+
+def test_work_items_batch_never_combines_fields_and_expand():
+    session = _StrictBatchSession()
+    client = AzureDevOpsClient("example", "test", session=session)
+
+    with_relations = client.get_work_items_batch("project", [1, 2])
+    assert [w["id"] for w in with_relations] == [1, 2]
+    assert session.payloads[-1].get("$expand") == "relations" and "fields" not in session.payloads[-1]
+
+    only_fields = client.get_work_items_batch("project", [3], fields=["System.Id", "System.Title"])
+    assert [w["id"] for w in only_fields] == [3]
+    assert session.payloads[-1]["fields"] == ["System.Id", "System.Title"] and "$expand" not in session.payloads[-1]

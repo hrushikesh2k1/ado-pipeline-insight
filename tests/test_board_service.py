@@ -372,3 +372,27 @@ def test_is_work_item_in_iteration_cross_sprint_isolation():
     assert is_work_item_in_iteration(bug_1084653, target_iteration_id=501) is True
     assert is_work_item_in_iteration(bug_1084653, target_iteration_id=401) is False
 
+
+
+def test_team_area_scopes_filter_shared_sprint_items():
+    from app.services.board_service import is_in_team_areas, parse_team_area_scopes
+
+    scopes = parse_team_area_scopes({
+        "defaultValue": r"Proj\CloudOps-Monitoring",
+        "values": [{"value": r"Proj\CloudOps-Monitoring", "includeChildren": True}, {"value": r"Proj\Shared", "includeChildren": False}],
+    })
+    assert is_in_team_areas(r"Proj\CloudOps-Monitoring", scopes)
+    assert is_in_team_areas("proj/cloudops-monitoring/Alerts", scopes)  # child area, case and slash insensitive
+    assert is_in_team_areas(r"Proj\Shared", scopes)
+    assert not is_in_team_areas(r"Proj\Shared\Sub", scopes)  # includeChildren is false for this one
+    assert not is_in_team_areas(r"Proj\Identity", scopes)  # another team's area
+    assert not is_in_team_areas(r"Proj\CloudOps-MonitoringExtra", scopes)  # prefix of the name is not a child
+    assert not is_in_team_areas(None, scopes)
+
+
+def test_team_area_scope_unknown_means_no_filtering():
+    from app.services.board_service import is_in_team_areas, parse_team_area_scopes
+
+    assert parse_team_area_scopes(None) == [] and parse_team_area_scopes({}) == []
+    assert is_in_team_areas(r"Anything\At All", [])
+    assert parse_team_area_scopes({"defaultValue": r"Proj\Team A"}) == [(r"proj\team a", False)]
