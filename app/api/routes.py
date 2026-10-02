@@ -860,8 +860,10 @@ def get_ado_sprint_board(
                     except Exception as e_team:
                         logging.warning("Failed secondary team lookup: %s", e_team)
 
+                relation_parent_map: dict[int, int] = {}
                 for r in relations:
                     if isinstance(r, dict):
+                        rel_type = str(r.get("rel") or "").lower()
                         target = r.get("target") or {}
                         tid = target.get("id") if isinstance(target, dict) else None
                         if tid is None and isinstance(r.get("id"), int):
@@ -873,6 +875,12 @@ def get_ado_sprint_board(
                         sid = source.get("id") if isinstance(source, dict) else None
                         if sid and isinstance(sid, int):
                             candidate_ids.add(sid)
+
+                        if sid and tid:
+                            if "hierarchy-forward" in rel_type or not rel_type:
+                                relation_parent_map[tid] = sid
+                            elif "hierarchy-reverse" in rel_type:
+                                relation_parent_map[sid] = tid
 
             # Query WIQL by iteration path for comprehensive sprint work item discovery
             if selected_iteration:
@@ -896,17 +904,52 @@ def get_ado_sprint_board(
             item_ids = list(candidate_ids)
             if item_ids:
                 fetched_items = ado.get_work_items_batch(proj_clean, item_ids)
+
+                # Populate System.Parent from relation_parent_map if missing on the work item
+                for item in fetched_items:
+                    fields = item.setdefault("fields", {})
+                    iid = item.get("id") or fields.get("System.Id")
+                    if fields.get("System.Parent") is None and iid in relation_parent_map:
+                        fields["System.Parent"] = relation_parent_map[iid]
+
+                # Map items by ID for parent lookup
+                item_by_id = {
+                    (item.get("id") or (item.get("fields") or {}).get("System.Id")): item
+                    for item in fetched_items
+                }
+
                 # 5. STRICT SPRINT ITERATION FILTERING:
-                # Strictly keep only work items whose System.IterationPath matches selected_iteration.
-                # Prevents linked items (e.g. bug 1084653 assigned to Oct) from leaking into Sep sprint.
-                raw_work_items = [
-                    item for item in fetched_items
-                    if is_work_item_in_iteration(
-                        (item.get("fields") or {}).get("System.IterationPath"),
-                        (item.get("fields") or {}).get("System.IterationId"),
+                # Strictly keep only work items whose System.IterationPath matches selected_iteration,
+                # or child tasks whose parent story is in the selected sprint iteration.
+                raw_work_items = []
+                for item in fetched_items:
+                    f = item.get("fields") or {}
+                    wtype = str(f.get("System.WorkItemType") or "").lower()
+                    pid = f.get("System.Parent")
+
+                    # Check if item itself matches iteration
+                    in_iter = is_work_item_in_iteration(
+                        f.get("System.IterationPath"),
+                        f.get("System.IterationId"),
                         selected_iteration,
                     )
-                ]
+
+                    # For child tasks, if task itself has no distinct iteration or root project iteration,
+                    # inherit parent story's sprint iteration validation
+                    if not in_iter and wtype == "task" and pid and pid in item_by_id:
+                        parent_f = item_by_id[pid].get("fields") or {}
+                        parent_in_iter = is_work_item_in_iteration(
+                            parent_f.get("System.IterationPath"),
+                            parent_f.get("System.IterationId"),
+                            selected_iteration,
+                        )
+                        task_path = str(f.get("System.IterationPath") or "").strip().lower()
+                        # If task is not explicitly assigned to a DIFFERENT sprint, keep with parent story
+                        if parent_in_iter and (not task_path or task_path == proj_clean.lower() or not re.search(r"(\b\d{2}-\d{2}\b|sprint\s*\d+\b)", task_path)):
+                            in_iter = True
+
+                    if in_iter:
+                        raw_work_items.append(item)
         except Exception as e:
             logging.error("Failed to query sprint work items from Azure DevOps: %s", e)
 

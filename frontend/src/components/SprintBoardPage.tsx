@@ -379,10 +379,17 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
 
     if (!boardData) return { userStories: stories, tasksByParent: tasksMap, unparentedTasks: unparented }
 
+    const storyIdSet = new Set(boardData.work_items.filter(w => {
+      const t = w.work_item_type.toLowerCase()
+      return t === 'user story' || t === 'product backlog item' || t === 'feature' || t === 'bug'
+    }).map(w => w.id))
+
     // Filter work items by person and search query
     const filtered = boardData.work_items.filter(w => {
       // Defense-in-depth: Ensure work item strictly belongs to current board iteration if available
-      if (w.iteration_path && currentIteration) {
+      // If item is a child task whose parent story is in this sprint, retain it
+      const isChildOfSprintStory = w.parent_id && storyIdSet.has(w.parent_id)
+      if (w.iteration_path && currentIteration && !isChildOfSprintStory) {
         const itemIter = w.iteration_path.toLowerCase().replace(/\\/g, '/').trim()
         const currPath = (currentIteration.path || '').toLowerCase().replace(/\\/g, '/').trim()
         const currName = (currentIteration.name || '').toLowerCase().trim()
@@ -1163,8 +1170,8 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                             <span className="adoAssigneeName">{story.assigned_to_name || 'Unassigned'}</span>
                           </div>
 
-                          <div className="adoStoryProgress" title={`${completedTasks} of ${childTasks.length} tasks completed`}>
-                            <span>{completedTasks}/{childTasks.length} done</span>
+                          <div className="adoStoryProgress" title={childTasks.length > 0 ? `${completedTasks} of ${childTasks.length} tasks completed` : 'No child tasks linked'}>
+                            <span>{childTasks.length > 0 ? `${completedTasks}/${childTasks.length} done` : 'No tasks'}</span>
                           </div>
                         </div>
                       </div>
