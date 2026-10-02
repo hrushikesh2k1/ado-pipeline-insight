@@ -279,6 +279,7 @@ class AzureDevOpsClient:
             payload = {
                 "ids": chunk,
                 "fields": fields or default_fields,
+                "$expand": "relations",
             }
             response = self.session.post(url, json=payload, params={"api-version": self.api_version}, timeout=30)
             response.raise_for_status()

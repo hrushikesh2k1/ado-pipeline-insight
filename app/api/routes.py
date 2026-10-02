@@ -905,51 +905,93 @@ def get_ado_sprint_board(
             if item_ids:
                 fetched_items = ado.get_work_items_batch(proj_clean, item_ids)
 
-                # Populate System.Parent from relation_parent_map if missing on the work item
+                # Map items by ID
+                item_by_id: dict[int, dict[str, Any]] = {}
+                for item in fetched_items:
+                    iid = item.get("id") or (item.get("fields") or {}).get("System.Id")
+                    if iid:
+                        item_by_id[int(iid)] = item
+
+                # Identify sprint parent stories/bugs/PBIs
+                sprint_parent_items: list[dict[str, Any]] = []
+                sprint_parent_ids: set[int] = set()
+
+                for item in fetched_items:
+                    f = item.get("fields") or {}
+                    wtype = str(f.get("System.WorkItemType") or "").lower()
+                    if wtype in ("user story", "product backlog item", "feature", "bug", "requirement", "issue"):
+                        if is_work_item_in_iteration(
+                            f.get("System.IterationPath"),
+                            f.get("System.IterationId"),
+                            selected_iteration,
+                        ):
+                            sprint_parent_items.append(item)
+                            iid = item.get("id") or f.get("System.Id")
+                            if iid:
+                                sprint_parent_ids.add(int(iid))
+
+                # Discover child tasks from relations of all sprint parent stories (e.g. child tasks under 1078348, 1067972)
+                child_ids_to_fetch: set[int] = set()
+                for item in sprint_parent_items:
+                    pid = int(item.get("id") or (item.get("fields") or {}).get("System.Id"))
+                    for rel in item.get("relations") or []:
+                        rel_type = str(rel.get("rel") or "").lower()
+                        rel_name = str((rel.get("attributes") or {}).get("name") or "").lower()
+                        if "hierarchy-forward" in rel_type or rel_name == "child":
+                            url = str(rel.get("url") or "")
+                            child_id_str = url.rstrip("/").split("/")[-1]
+                            if child_id_str.isdigit():
+                                cid = int(child_id_str)
+                                relation_parent_map[cid] = pid
+                                if cid not in item_by_id:
+                                    child_ids_to_fetch.add(cid)
+
+                # Fetch any missing child tasks from Azure DevOps
+                if child_ids_to_fetch:
+                    try:
+                        child_fetched = ado.get_work_items_batch(proj_clean, list(child_ids_to_fetch))
+                        for c_item in child_fetched:
+                            cid = c_item.get("id") or (c_item.get("fields") or {}).get("System.Id")
+                            if cid:
+                                cid_int = int(cid)
+                                item_by_id[cid_int] = c_item
+                                fetched_items.append(c_item)
+                    except Exception as e_child:
+                        logging.warning("Failed to batch fetch linked child tasks: %s", e_child)
+
+                # Populate System.Parent from relation_parent_map for all fetched items
                 for item in fetched_items:
                     fields = item.setdefault("fields", {})
                     iid = item.get("id") or fields.get("System.Id")
-                    if fields.get("System.Parent") is None and iid in relation_parent_map:
-                        fields["System.Parent"] = relation_parent_map[iid]
+                    if iid and (fields.get("System.Parent") is None or not fields.get("System.Parent")):
+                        iid_int = int(iid)
+                        if iid_int in relation_parent_map:
+                            fields["System.Parent"] = relation_parent_map[iid_int]
 
-                # Map items by ID for parent lookup
-                item_by_id = {
-                    (item.get("id") or (item.get("fields") or {}).get("System.Id")): item
-                    for item in fetched_items
-                }
+                # 5. ASSEMBLE SPRINT WORK ITEMS:
+                # 1) Include all sprint parent stories/bugs.
+                # 2) Include child tasks whose parent story is in the sprint.
+                # 3) Include standalone/unparented tasks whose iteration matches the sprint.
+                raw_work_items = list(sprint_parent_items)
 
-                # 5. STRICT SPRINT ITERATION FILTERING:
-                # Strictly keep only work items whose System.IterationPath matches selected_iteration,
-                # or child tasks whose parent story is in the selected sprint iteration.
-                raw_work_items = []
                 for item in fetched_items:
                     f = item.get("fields") or {}
                     wtype = str(f.get("System.WorkItemType") or "").lower()
                     pid = f.get("System.Parent")
+                    iid = item.get("id") or f.get("System.Id")
 
-                    # Check if item itself matches iteration
-                    in_iter = is_work_item_in_iteration(
-                        f.get("System.IterationPath"),
-                        f.get("System.IterationId"),
-                        selected_iteration,
-                    )
-
-                    # For child tasks, if task itself has no distinct iteration or root project iteration,
-                    # inherit parent story's sprint iteration validation
-                    if not in_iter and wtype == "task" and pid and pid in item_by_id:
-                        parent_f = item_by_id[pid].get("fields") or {}
-                        parent_in_iter = is_work_item_in_iteration(
-                            parent_f.get("System.IterationPath"),
-                            parent_f.get("System.IterationId"),
+                    # Only evaluate tasks or unclassified items (parents are already added)
+                    if wtype not in ("user story", "product backlog item", "feature", "bug", "requirement", "issue"):
+                        if pid and int(pid) in sprint_parent_ids:
+                            # Child task belongs to a sprint parent story
+                            raw_work_items.append(item)
+                        elif is_work_item_in_iteration(
+                            f.get("System.IterationPath"),
+                            f.get("System.IterationId"),
                             selected_iteration,
-                        )
-                        task_path = str(f.get("System.IterationPath") or "").strip().lower()
-                        # If task is not explicitly assigned to a DIFFERENT sprint, keep with parent story
-                        if parent_in_iter and (not task_path or task_path == proj_clean.lower() or not re.search(r"(\b\d{2}-\d{2}\b|sprint\s*\d+\b)", task_path)):
-                            in_iter = True
-
-                    if in_iter:
-                        raw_work_items.append(item)
+                        ):
+                            # Unparented task assigned directly to this sprint iteration
+                            raw_work_items.append(item)
         except Exception as e:
             logging.error("Failed to query sprint work items from Azure DevOps: %s", e)
 
