@@ -31,7 +31,6 @@ from app.schemas.connection import (
     AdoWorkItem,
     AdoSprintChecksSummary,
     AdoSprintBoardResponse,
-    AdoMilestoneItem,
     AdoSprintMilestoneSummary,
     MilestoneAiSummaryRequest,
     MilestoneAiSummaryResponse,
@@ -54,6 +53,8 @@ from core.validation import validate_organization, validate_project
 from core.ado_client import AzureDevOpsClient
 from core.config import get_ado_pat
 from core.db import AlertRepository
+from core.openai_client import PipelineRecommendationClient
+import tempfile
 from datetime import datetime, timezone, timedelta
 import threading
 import logging
@@ -104,7 +105,6 @@ def health():
 def get_auth_me(request: Request):
     user_id = request.headers.get("x-ms-client-principal-id")
     user_name = request.headers.get("x-ms-client-principal-name")
-    idp = request.headers.get("x-ms-client-principal-idp", "aad")
     display_name = None
 
     encoded = request.headers.get("x-ms-client-principal")
@@ -813,7 +813,8 @@ def get_ado_sprint_board(
                         if not clean_path.startswith(proj_clean) and not clean_path.startswith("\\"):
                             clean_path = f"{proj_clean}\\{clean_path}"
                         clean_path = clean_path.lstrip("\\")
-                        wiql = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{proj_clean}' AND ([System.IterationPath] = '{clean_path}' OR [System.IterationPath] UNDER '{clean_path}')"
+                        safe_project = proj_clean.replace("'", "''")
+                        wiql = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{safe_project}' AND ([System.IterationPath] = '{clean_path}' OR [System.IterationPath] UNDER '{clean_path}')"
                         wiql_ids = ado.query_wiql(proj_clean, wiql)
                         if wiql_ids:
                             for wid in wiql_ids:
@@ -1061,7 +1062,7 @@ def generate_milestone_ai_summary(req: MilestoneAiSummaryRequest) -> MilestoneAi
     )
 
     # 2. Try Azure OpenAI if configured
-    if settings.azure_openai_endpoint and (settings.azure_openai_api_key or True):
+    if settings.azure_openai_endpoint:  # api key optional: falls back to managed identity
         try:
             client = PipelineRecommendationClient(
                 endpoint=settings.azure_openai_endpoint,
@@ -1197,10 +1198,6 @@ def generate_milestone_ai_summary(req: MilestoneAiSummaryRequest) -> MilestoneAi
     )
 
 
-
-import json
-import tempfile
-from pathlib import Path
 
 _ingestion_jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
@@ -1380,7 +1377,6 @@ def ado_ingest_status(
     pipeline_id: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None,
 ):
     """Get the current progress of background ingestion for a pipeline or the active job."""
-    global _ingestion_jobs
     with _jobs_lock:
         disk_jobs = _load_persisted_jobs()
         for k, v in disk_jobs.items():

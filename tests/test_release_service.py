@@ -91,6 +91,24 @@ def test_branch_name_neutrality():
     assert evaluate_pipeline_health(runs_rel_fail, target_branch="release/2.3").status == "red"
 
 
+def test_pipeline_health_never_pools_pipelines():
+    """Two pipelines building the same branch must not be merged into one pass rate."""
+    now = datetime.now(timezone.utc)
+    runs = [
+        {"run_id": 3, "pipeline_id": 1, "pipeline_name": "API", "source_branch": "refs/heads/dev",
+         "result": "succeeded", "start_time": now},
+        {"run_id": 2, "pipeline_id": 2, "pipeline_name": "Web", "source_branch": "refs/heads/dev",
+         "result": "failed", "start_time": now - timedelta(minutes=5)},
+        {"run_id": 1, "pipeline_id": 1, "pipeline_name": "API", "source_branch": "refs/heads/dev",
+         "result": "succeeded", "start_time": now - timedelta(minutes=10)},
+    ]
+    dim = evaluate_pipeline_health(runs, target_branch="dev")
+    assert dim.status == "red"
+    assert dim.metrics["latest_run_id"] == 2
+    assert dim.metrics["pipelines_evaluated"] == 2
+    assert "Web" in dim.summary
+
+
 def test_defect_burden_severity_logic():
     """Check Microsoft.VSTS.Common.Severity handling.
     Blocker / high severity produces red. Medium/low produces yellow. None produces green.

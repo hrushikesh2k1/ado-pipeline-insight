@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -212,6 +211,9 @@ def evaluate_defect_burden(
     )
 
 
+_STATUS_RANK = {"green": 0, "yellow": 1, "red": 2}
+
+
 def evaluate_pipeline_health(
     runs: list[dict[str, Any]],
     target_branch: str,
@@ -219,17 +221,45 @@ def evaluate_pipeline_health(
 ) -> ReleaseDimension:
     """Dimension 3: Pipeline health.
     Evaluates pipeline runs on the user-selected target_branch (matching branch names neutrally).
-    Red if the single most recent run's result != 'succeeded'.
-    Yellow if failure rate over the last window_size runs is elevated (> 15%).
-    Green if latest run succeeded and pass rate is healthy.
+    Runs are never pooled across pipelines: when the release is not linked to a single pipeline
+    and several pipelines built the branch, each is evaluated on its own and the worst wins.
     """
     target_norm = normalize_branch(target_branch)
-
-    # Filter runs matching target_branch without hardcoded name assumptions
     branch_runs = [
         r for r in runs
         if normalize_branch(r.get("source_branch")) == target_norm
     ]
+
+    by_pipeline: dict[Any, list[dict[str, Any]]] = {}
+    for r in branch_runs:  # input is newest-first; grouping preserves that order
+        by_pipeline.setdefault(r.get("pipeline_id"), []).append(r)
+
+    if len(by_pipeline) <= 1:
+        return _evaluate_single_pipeline_health(branch_runs, target_branch, window_size)
+
+    results = [
+        (_evaluate_single_pipeline_health(group, target_branch, window_size), group[0])
+        for group in by_pipeline.values()
+    ]
+    # max() keeps the first (most recent-first order) among equally bad pipelines
+    worst, worst_run = max(results, key=lambda t: _STATUS_RANK[t[0].status])
+    pipeline_label = worst_run.get("pipeline_name") or f"Pipeline {worst_run.get('pipeline_id')}"
+    worst.summary = (
+        f"{len(by_pipeline)} pipelines built branch '{target_branch}'; worst is {pipeline_label}. "
+        f"{worst.summary}"
+    )
+    worst.metrics["pipelines_evaluated"] = len(by_pipeline)
+    return worst
+
+
+def _evaluate_single_pipeline_health(
+    branch_runs: list[dict[str, Any]],
+    target_branch: str,
+    window_size: int,
+) -> ReleaseDimension:
+    """Red if the most recent run != 'succeeded'; yellow if failure rate > 15% over the
+    last window_size runs; green otherwise. branch_runs must already be one pipeline, one branch.
+    """
 
     evidence: list[ReleaseDimensionEvidenceItem] = []
     for r in branch_runs[:window_size]:
@@ -621,22 +651,28 @@ class ReleaseService:
         # 1. Fetch Pipeline Telemetry from dbo.pipeline_runs
         pipeline_runs: list[dict[str, Any]] = []
         try:
+            # Filter by branch in SQL so the row cap cannot be consumed by other branches.
+            branch_norm = normalize_branch(release.target_branch)
+            branch_params = (branch_norm, f"refs/heads/{branch_norm}")
             if release.pipeline_id:
                 sql = """
                     SELECT TOP (200) run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
                     FROM dbo.pipeline_runs
-                    WHERE pipeline_id = ?
+                    WHERE pipeline_id = ? AND LOWER(source_branch) IN (?, ?)
                     ORDER BY start_time DESC
                 """
-                pipeline_runs = fetch_all(sql, (release.pipeline_id,))
+                pipeline_runs = fetch_all(sql, (release.pipeline_id, *branch_params))
             else:
                 sql = """
                     SELECT TOP (200) run_id, pipeline_id, pipeline_name, source_branch, result, start_time, finish_time
                     FROM dbo.pipeline_runs
                     WHERE LOWER(organization_name) = LOWER(?) AND LOWER(project_name) = LOWER(?)
+                      AND LOWER(source_branch) IN (?, ?)
                     ORDER BY start_time DESC
                 """
-                pipeline_runs = fetch_all(sql, (release.organization_name, release.project_name))
+                pipeline_runs = fetch_all(
+                    sql, (release.organization_name, release.project_name, *branch_params)
+                )
         except Exception as e:
             logger.debug("Could not query dbo.pipeline_runs for release: %s", e)
 
@@ -671,7 +707,8 @@ class ReleaseService:
                         continue
                     try:
                         iterations = client.list_team_iterations(release.project_name, tid)
-                    except Exception:
+                    except Exception as e_iter:
+                        logger.debug("Could not list iterations for team %s: %s", tid, e_iter)
                         continue
                     if not iterations:
                         continue
@@ -771,7 +808,8 @@ class ReleaseService:
                             if not clean_path.startswith(release.project_name) and not clean_path.startswith("\\"):
                                 clean_path = f"{release.project_name}\\{clean_path}"
                             clean_path = clean_path.lstrip("\\")
-                            wiql = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{release.project_name}' AND ([System.IterationPath] = '{clean_path}' OR [System.IterationPath] UNDER '{clean_path}')"
+                            safe_project = release.project_name.replace("'", "''")
+                            wiql = f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{safe_project}' AND ([System.IterationPath] = '{clean_path}' OR [System.IterationPath] UNDER '{clean_path}')"
                             try:
                                 wiql_ids = client.query_wiql(release.project_name, wiql)
                                 if wiql_ids:

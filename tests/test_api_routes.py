@@ -446,4 +446,40 @@ def test_milestone_ai_summary(api):
     assert "9001" in data["summary"] or "Data Ingestion" in data["summary"] or "CloudOps" in data["summary"]
 
 
+def test_milestone_ai_summary_uses_openai_when_configured(api, monkeypatch):
+    """Regression: the AI path referenced an undefined client class and always fell back silently."""
+    import types
+    from app.api import routes as routes_module
+
+    class FakeClient:
+        deployment = "fake"
+
+        def __init__(self, **kwargs):
+            create = lambda **kw: types.SimpleNamespace(  # noqa: E731
+                choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="AI BRIEFING #9001"))]
+            )
+            self.client = types.SimpleNamespace(
+                chat=types.SimpleNamespace(completions=types.SimpleNamespace(create=create))
+            )
+
+    real_settings = routes_module.get_settings()
+    fake_settings = types.SimpleNamespace(**{**vars(real_settings), "azure_openai_endpoint": "https://example.test"}) \
+        if hasattr(real_settings, "__dict__") else real_settings.model_copy(update={"azure_openai_endpoint": "https://example.test"})
+    monkeypatch.setattr(routes_module, "get_settings", lambda: fake_settings)
+    monkeypatch.setattr(routes_module, "PipelineRecommendationClient", FakeClient)
+
+    client, _ = api
+    payload = {
+        "sprint_name": "S1",
+        "team_name": "T",
+        "achieved_items": [{"id": 9001, "title": "X", "work_item_type": "User Story", "category": "Feature & Business Value"}],
+        "total_stories": 1,
+        "closed_stories_count": 1,
+        "total_delivered_hours": 4,
+    }
+    r = client.post("/api/v1/sprint-board/milestone-ai-summary", json=payload)
+    assert r.status_code == 200
+    assert "AI BRIEFING #9001" in r.json()["summary"]
+
+
 

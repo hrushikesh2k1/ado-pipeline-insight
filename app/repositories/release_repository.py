@@ -358,7 +358,7 @@ class ReleaseRepository:
 
     def get_scorecard_history(self, release_id: str, limit: int = 20) -> list[ReleaseScorecardHistoryItem]:
         ensure_schema()
-        sql = f"""
+        sql = """
             SELECT TOP (?) history_id, release_id, computed_at, overall_status, dimension_data
             FROM dbo.release_scorecard_history
             WHERE release_id = ?
