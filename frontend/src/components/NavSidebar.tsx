@@ -71,13 +71,13 @@ export const NavSidebar: React.FC<NavSidebarProps> = ({ activePage, onSelectPage
           type="button"
           className={`navSidebarBtn ${activePage === 'irp' ? 'active' : ''}`}
           onClick={() => onSelectPage('irp')}
-          aria-label="Incident Response & Wiki Hub"
+          aria-label="Incident Response Plan (IRP) Studio"
         >
           <div className="navSidebarActiveIndicator" />
           <div className="navIconWrapper">
             <ShieldAlert size={20} strokeWidth={2.2} />
           </div>
-          <span className="navTooltip">Incident Response & IRPs</span>
+          <span className="navTooltip">IRP Studio</span>
         </button>
       </div>
 

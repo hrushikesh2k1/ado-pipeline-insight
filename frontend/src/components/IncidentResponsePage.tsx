@@ -1,788 +1,772 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import {
   ShieldAlert,
   Sparkles,
-  BookOpen,
-  FileText,
   Copy,
   Check,
-  UploadCloud,
-  RefreshCw,
-  Search,
-  ChevronRight,
-  ExternalLink,
-  Layers,
-  Flame,
-  CheckCircle2,
+  FileText,
+  Upload,
+  Download,
+  Terminal,
+  Code2,
+  HelpCircle,
+  FileCode2,
+  Trash2,
   AlertTriangle,
-  Server,
-  Zap,
+  Info,
+  Layers,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { api } from '../services/api'
-import type { AdoProject, AdoWiki, AdoWikiPage } from '../types/api'
+import type { IrpGenerateResponse } from '../types/api'
 
 interface IncidentResponsePageProps {
-  organization: string
-  project: string
-  pat: string
-  projects?: AdoProject[]
+  organization?: string
+  project?: string
+  pat?: string
+  projects?: Array<{ id: string; name: string }>
   onOrganizationChange?: (org: string) => void
   onProjectChange?: (proj: string) => void
   onPatChange?: (pat: string) => void
   theme?: 'dark' | 'light'
 }
 
-type TabMode = 'generator' | 'explorer'
-
-const ALERT_PRESETS = [
+const DEFAULT_ALERT_PRESETS = [
   {
     name: 'VPN Tunnel Disconnected',
-    resource: 'Azure Virtual Network Gateway (Site-to-Site)',
+    cvrd: 'CVRD-NET-8821',
+    columns: 'TimeGenerated, ResourceGroup, GatewayName, ConnectionState, PeerIP, DisconnectReason',
+    details: 'IPsec Phase 2 tunnel dropped between on-prem datacenter and Azure Virtual Network Gateway. High risk of database replication drop and internal API failure.',
+    arm: `{\n  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",\n  "contentVersion": "1.0.0.0",\n  "resources": [\n    {\n      "type": "Microsoft.Network/virtualNetworkGateways",\n      "apiVersion": "2023-04-01",\n      "name": "vnet-gw-prod-east",\n      "location": "eastus",\n      "properties": {\n        "gatewayType": "Vpn",\n        "vpnType": "RouteBased",\n        "enableBgp": true,\n        "sku": { "name": "VpnGw2", "tier": "VpnGw2" }\n      }\n    }\n  ]\n}`,
     severity: 'Sev-1',
-    trigger: 'Gateway Connection Status == 0 for > 5 minutes',
-    team: 'Cloud Network Engineering',
-    notes: 'IPsec Phase 2 or BGP peering disconnection between corporate on-premises and Azure hub.',
+    resource: 'vnet-gw-prod-east (Microsoft.Network/virtualNetworkGateways)',
+    trigger: 'Gateway Connection Status != Connected for > 2 minutes',
+    team: 'Cloud Network Operations',
   },
   {
-    name: 'High CPU on App Service Plan',
-    resource: 'Azure App Service Plan (P2v3)',
+    name: 'High CPU & Request Queuing on App Service',
+    cvrd: 'CVRD-COMP-4019',
+    columns: 'TimeGenerated, AppName, InstanceId, CpuPercentage, MemoryPercentage, HttpQueueLength, Http5xxCount',
+    details: 'Production web application exceeding 90% CPU threshold across all P2v3 scale workers with elevated HTTP 503 errors.',
+    arm: `{\n  "type": "Microsoft.Web/serverfarms",\n  "apiVersion": "2022-03-01",\n  "name": "asp-prod-checkout",\n  "sku": { "name": "P2v3", "tier": "PremiumV3", "capacity": 4 }\n}`,
     severity: 'Sev-2',
-    trigger: 'CPU Utilization >= 85% for 10 continuous minutes',
-    team: 'Core Platform Engineering',
-    notes: 'Risk of HTTP 503 Service Unavailable and thread starvation across web workers.',
+    resource: 'asp-prod-checkout (Microsoft.Web/serverfarms)',
+    trigger: 'CpuPercentage >= 85% for 5 continuous minutes',
+    team: 'Platform SRE',
   },
   {
-    name: 'SQL Database Deadlock Spike',
-    resource: 'Azure SQL Database (General Purpose)',
-    severity: 'Sev-1',
-    trigger: 'Deadlock count > 50 in 5 minutes & transaction rollback rate spike',
-    team: 'Database Operations',
-    notes: 'Lock escalation blocking critical customer checkout and order processing workflows.',
-  },
-  {
-    name: 'Disk IOPS Throttled on VM',
-    resource: 'Azure Managed Disk (Premium SSD P30)',
+    name: 'Storage Account Throttling & 503 Errors',
+    cvrd: 'CVRD-STR-1022',
+    columns: 'TimeGenerated, AccountName, ApiName, StatusCode, ClientIpAddress, ServerTimeoutMs',
+    details: 'Blob container ingress throughput hitting partition IOPS limits resulting in HTTP 503 ClientOtherErrors.',
+    arm: `{\n  "type": "Microsoft.Storage/storageAccounts",\n  "apiVersion": "2022-09-01",\n  "name": "stprodanalyticsdata",\n  "sku": { "name": "Standard_ZRS" },\n  "kind": "StorageV2"\n}`,
     severity: 'Sev-2',
-    trigger: 'Disk Read/Write IOPS at 100% burst consumption limit',
-    team: 'Infrastructure SRE',
-    notes: 'Severe storage I/O latency impacting background worker queues.',
+    resource: 'stprodanalyticsdata (Microsoft.Storage/storageAccounts)',
+    trigger: 'ClientOtherErrorCount > 100 in 5 minutes',
+    team: 'Data Platform Operations',
   },
 ]
 
-export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = ({
-  organization,
-  project,
-  pat,
-  projects = [],
-  onOrganizationChange,
-  onProjectChange,
-  onPatChange,
-}) => {
-  // Navigation
-  const [activeTab, setActiveTab] = useState<TabMode>('generator')
-
-  // Discovery
-  const [wikis, setWikis] = useState<AdoWiki[]>([])
-  const [selectedWikiId, setSelectedWikiId] = useState<string>('')
-  const [isLoadingWikis, setIsLoadingWikis] = useState<boolean>(false)
-
-  // Wiki Pages Explorer
-  const [wikiPages, setWikiPages] = useState<AdoWikiPage[]>([])
-  const [isLoadingPages, setIsLoadingPages] = useState<boolean>(false)
-  const [selectedPagePath, setSelectedPagePath] = useState<string>('')
-  const [selectedPageContent, setSelectedPageContent] = useState<string>('')
-  const [isLoadingContent, setIsLoadingContent] = useState<boolean>(false)
-  const [pageSearchFilter, setPageSearchFilter] = useState<string>('')
-
-  // IRP Generator Form State
+export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
+  // Alert Details & ARM context
   const [alertName, setAlertName] = useState<string>('VPN Tunnel Disconnected')
-  const [targetResource, setTargetResource] = useState<string>('Azure Virtual Network Gateway (Site-to-Site)')
-  const [severity, setSeverity] = useState<string>('Sev-1')
-  const [triggerCondition, setTriggerCondition] = useState<string>('Connection Status == 0 for > 5 minutes')
-  const [owningTeam, setOwningTeam] = useState<string>('Cloud Network Engineering')
-  const [environment, setEnvironment] = useState<string>('Production')
-  const [additionalNotes, setAdditionalNotes] = useState<string>(
-    'IPsec Phase 2 or BGP peering disconnection between corporate on-premises and Azure hub.'
+  const [cvrd, setCvrd] = useState<string>('CVRD-NET-8821')
+  const [alertOutputColumns, setAlertOutputColumns] = useState<string>(
+    'TimeGenerated, ResourceGroup, GatewayName, ConnectionState, PeerIP, DisconnectReason'
   )
+  const [alertDetails, setAlertDetails] = useState<string>(
+    'IPsec Phase 2 tunnel dropped between on-prem datacenter and Azure Virtual Network Gateway. High risk of database replication drop and internal API failure.'
+  )
+  const [armTemplateContext, setArmTemplateContext] = useState<string>(
+    DEFAULT_ALERT_PRESETS[0].arm
+  )
+  const [targetResource, setTargetResource] = useState<string>(
+    'vnet-gw-prod-east (Microsoft.Network/virtualNetworkGateways)'
+  )
+  const [severity, setSeverity] = useState<string>('Sev-1')
+  const [triggerCondition, setTriggerCondition] = useState<string>(
+    'Gateway Connection Status != Connected for > 2 minutes'
+  )
+  const [owningTeam, setOwningTeam] = useState<string>('Cloud Network Operations')
+  const [environment, setEnvironment] = useState<string>('Production')
+  const [additionalNotes, setAdditionalNotes] = useState<string>('')
 
-  // Generated Output State
-  const [generatedMarkdown, setGeneratedMarkdown] = useState<string>('')
-  const [suggestedWikiPath, setSuggestedWikiPath] = useState<string>('/Incident-Response-Plans/VPN-Tunnel-Disconnected')
+  // Uploaded Template & Example
+  const [irpTemplate, setIrpTemplate] = useState<string>('')
+  const [irpTemplateFileName, setIrpTemplateFileName] = useState<string>('')
+  const [irpExample, setIrpExample] = useState<string>('')
+  const [irpExampleFileName, setIrpExampleFileName] = useState<string>('')
+
+  // UI expand collapse states
+  const [showArmBox, setShowArmBox] = useState<boolean>(true)
+  const [showTemplateBox, setShowTemplateBox] = useState<boolean>(true)
+  const [showExampleBox, setShowExampleBox] = useState<boolean>(true)
+
+  // Output & Generation State
   const [isGenerating, setIsGenerating] = useState<boolean>(false)
-  const [irpEditorMode, setIrpEditorMode] = useState<'preview' | 'raw'>('preview')
-  const [copiedMarkdown, setCopiedMarkdown] = useState<boolean>(false)
+  const [generatedIrp, setGeneratedIrp] = useState<string>('')
+  const [errorMessage, setErrorMessage] = useState<string>('')
+  const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview')
+  const [copied, setCopied] = useState<boolean>(false)
 
-  // Publishing State
-  const [isPublishing, setIsPublishing] = useState<boolean>(false)
-  const [updateInventoryCheck, setUpdateInventoryCheck] = useState<boolean>(true)
-  const [inventoryPagePath, setInventoryPagePath] = useState<string>('/Alert-Inventory')
-  const [publishSuccessMsg, setPublishSuccessMsg] = useState<string | null>(null)
-  const [publishErrorMsg, setPublishErrorMsg] = useState<string | null>(null)
-
-  // Load Wikis when Project changes
-  useEffect(() => {
-    if (!organization || !project) return
-    let isCurrent = true
-    setIsLoadingWikis(true)
-    api
-      .listWikis(organization, project, pat)
-      .then((data) => {
-        if (!isCurrent) return
-        setWikis(data)
-        if (data.length > 0 && !selectedWikiId) {
-          setSelectedWikiId(data[0].id)
-        }
-      })
-      .catch(() => {
-        if (isCurrent) setWikis([])
-      })
-      .finally(() => {
-        if (isCurrent) setIsLoadingWikis(false)
-      })
-    return () => {
-      isCurrent = false
-    }
-  }, [organization, project, pat])
-
-  // Load Wiki Pages when selected Wiki changes
-  useEffect(() => {
-    if (!organization || !project || !selectedWikiId || activeTab !== 'explorer') return
-    let isCurrent = true
-    setIsLoadingPages(true)
-    api
-      .getWikiPages(organization, project, selectedWikiId, '/', pat)
-      .then((pages) => {
-        if (!isCurrent) return
-        setWikiPages(pages)
-        if (pages.length > 0 && !selectedPagePath) {
-          const first = pages[0].path || '/'
-          setSelectedPagePath(first)
-        }
-      })
-      .catch(() => {
-        if (isCurrent) setWikiPages([])
-      })
-      .finally(() => {
-        if (isCurrent) setIsLoadingPages(false)
-      })
-    return () => {
-      isCurrent = false
-    }
-  }, [organization, project, selectedWikiId, activeTab, pat])
-
-  // Load Selected Page Content
-  useEffect(() => {
-    if (!organization || !project || !selectedWikiId || !selectedPagePath || activeTab !== 'explorer') return
-    let isCurrent = true
-    setIsLoadingContent(true)
-    api
-      .getWikiPageContent(organization, project, selectedWikiId, selectedPagePath, pat)
-      .then((page) => {
-        if (!isCurrent) return
-        setSelectedPageContent(page.content || '# No content in this page.')
-      })
-      .catch(() => {
-        if (isCurrent) setSelectedPageContent('# Failed to load page content.')
-      })
-      .finally(() => {
-        if (isCurrent) setIsLoadingContent(false)
-      })
-    return () => {
-      isCurrent = false
-    }
-  }, [organization, project, selectedWikiId, selectedPagePath, activeTab, pat])
-
-  const handleApplyPreset = (preset: typeof ALERT_PRESETS[0]) => {
+  // Handle Preset Selection
+  const applyPreset = (preset: typeof DEFAULT_ALERT_PRESETS[0]) => {
     setAlertName(preset.name)
-    setTargetResource(preset.resource)
+    setCvrd(preset.cvrd)
+    setAlertOutputColumns(preset.columns)
+    setAlertDetails(preset.details)
+    setArmTemplateContext(preset.arm)
     setSeverity(preset.severity)
+    setTargetResource(preset.resource)
     setTriggerCondition(preset.trigger)
     setOwningTeam(preset.team)
-    setAdditionalNotes(preset.notes)
-    setPublishSuccessMsg(null)
-    setPublishErrorMsg(null)
   }
 
+  // File Upload Handlers
+  const handleTemplateFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setIrpTemplateFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const content = event.target?.result as string
+      setIrpTemplate(content || '')
+    }
+    reader.readAsText(file)
+  }
+
+  const handleExampleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setIrpExampleFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const content = event.target?.result as string
+      setIrpExample(content || '')
+    }
+    reader.readAsText(file)
+  }
+
+  // Handle Generation
   const handleGenerate = async () => {
-    if (!alertName.trim() || !targetResource.trim()) return
+    if (!alertName.trim()) {
+      setErrorMessage('Please provide an Alert Name.')
+      return
+    }
+
     setIsGenerating(true)
-    setPublishSuccessMsg(null)
-    setPublishErrorMsg(null)
+    setErrorMessage('')
+
     try {
-      const res = await api.generateIrp({
+      const res: IrpGenerateResponse = await api.generateIrp({
         alert_name: alertName,
-        target_resource: targetResource,
+        cvrd: cvrd.trim() || undefined,
+        alert_output_columns: alertOutputColumns.trim() || undefined,
+        arm_template_context: armTemplateContext.trim() || undefined,
+        alert_details: alertDetails.trim() || undefined,
+        target_resource: targetResource.trim() || undefined,
         severity,
-        trigger_condition: triggerCondition,
-        owning_team: owningTeam,
+        trigger_condition: triggerCondition.trim() || undefined,
+        owning_team: owningTeam.trim() || undefined,
         environment,
-        additional_notes: additionalNotes,
+        irp_template: irpTemplate.trim() || undefined,
+        irp_example: irpExample.trim() || undefined,
+        additional_notes: additionalNotes.trim() || undefined,
       })
-      setGeneratedMarkdown(res.markdown_content)
-      setSuggestedWikiPath(res.suggested_wiki_path)
+
+      setGeneratedIrp(res.markdown_content)
     } catch (err: any) {
-      setPublishErrorMsg(err.message || 'Failed to generate IRP.')
+      setErrorMessage(err?.response?.data?.detail || err?.message || 'Failed to generate Incident Response Plan.')
     } finally {
       setIsGenerating(false)
     }
   }
 
-  const handleCopy = () => {
-    if (!generatedMarkdown) return
-    navigator.clipboard.writeText(generatedMarkdown)
-    setCopiedMarkdown(true)
-    setTimeout(() => setCopiedMarkdown(false), 2000)
-  }
-
-  const handlePublish = async () => {
-    if (!organization || !project || !selectedWikiId || !generatedMarkdown.trim()) {
-      setPublishErrorMsg('Please select a Wiki and ensure the IRP is generated before publishing.')
-      return
-    }
-    setIsPublishing(true)
-    setPublishSuccessMsg(null)
-    setPublishErrorMsg(null)
+  // Copy to Clipboard
+  const handleCopyClipboard = async () => {
+    if (!generatedIrp) return
     try {
-      const res = await api.publishIrp(
-        {
-          organization,
-          project,
-          wiki_id: selectedWikiId,
-          path: suggestedWikiPath,
-          content: generatedMarkdown,
-          comment: `Add AI-generated IRP for alert '${alertName}'`,
-          update_inventory: updateInventoryCheck,
-          inventory_page_path: inventoryPagePath,
-          alert_name: alertName,
-          severity,
-          owning_team: owningTeam,
-        },
-        pat
-      )
-      setPublishSuccessMsg(
-        `Successfully published to Wiki at '${res.page_path}'${
-          res.inventory_updated ? ' and registered in Alert Inventory!' : '.'
-        }`
-      )
-    } catch (err: any) {
-      setPublishErrorMsg(err.message || 'Failed to publish to Wiki. Ensure PAT has Wiki (Write) permissions.')
-    } finally {
-      setIsPublishing(false)
+      await navigator.clipboard.writeText(generatedIrp)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2500)
+    } catch {
+      // Fallback
+      const el = document.createElement('textarea')
+      el.value = generatedIrp
+      document.body.appendChild(el)
+      el.select()
+      document.execCommand('copy')
+      document.body.removeChild(el)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2500)
     }
   }
 
-  // Flatten recursive wiki pages for list view
-  const flattenPages = (pages: AdoWikiPage[]): AdoWikiPage[] => {
-    const list: AdoWikiPage[] = []
-    const recurse = (items: AdoWikiPage[]) => {
-      for (const it of items) {
-        list.push(it)
-        if (it.sub_pages && it.sub_pages.length > 0) {
-          recurse(it.sub_pages)
-        }
-      }
-    }
-    recurse(pages)
-    return list
+  // Download Markdown
+  const handleDownload = () => {
+    if (!generatedIrp) return
+    const blob = new Blob([generatedIrp], { type: 'text/markdown;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const fileName = `${alertName.replace(/[^a-zA-Z0-9_-]/g, '_')}_IRP.md`
+    link.href = url
+    link.setAttribute('download', fileName)
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
   }
 
-  const allPages = flattenPages(wikiPages)
-  const filteredPages = allPages.filter((p) =>
-    p.path.toLowerCase().includes(pageSearchFilter.toLowerCase())
-  )
+  // Formatted Markdown Preview Renderer
+  const renderMarkdownPreview = (text: string) => {
+    if (!text) return null
+
+    return (
+      <div className="irpPreviewContent">
+        {text.split('\n\n').map((block, idx) => {
+          const trimmed = block.trim()
+
+          // Header 1
+          if (trimmed.startsWith('# ')) {
+            return (
+              <h1 key={idx} className="irpHeading1">
+                {trimmed.replace('# ', '')}
+              </h1>
+            )
+          }
+          // Header 2
+          if (trimmed.startsWith('## ')) {
+            return (
+              <h2 key={idx} className="irpHeading2">
+                {trimmed.replace('## ', '')}
+              </h2>
+            )
+          }
+          // Header 3
+          if (trimmed.startsWith('### ')) {
+            return (
+              <h3 key={idx} className="irpHeading3">
+                {trimmed.replace('### ', '')}
+              </h3>
+            )
+          }
+          // Blockquote
+          if (trimmed.startsWith('> ')) {
+            return (
+              <blockquote key={idx} className="irpBlockquote">
+                {trimmed.replace(/> /g, '')}
+              </blockquote>
+            )
+          }
+          // Code block
+          if (trimmed.startsWith('```')) {
+            const lines = trimmed.split('\n')
+            const lang = lines[0].replace('```', '') || 'text'
+            const code = lines.slice(1, -1).join('\n')
+            return (
+              <div key={idx} className="irpCodeBlock">
+                <div className="irpCodeHeader">
+                  <Terminal size={13} style={{ opacity: 0.7 }} />
+                  <span>{lang}</span>
+                </div>
+                <pre>
+                  <code>{code}</code>
+                </pre>
+              </div>
+            )
+          }
+          // Markdown Table
+          if (trimmed.includes('|') && trimmed.split('\n').length > 1) {
+            const tableRows = trimmed.split('\n').filter((r) => r.trim().startsWith('|'))
+            if (tableRows.length >= 2) {
+              const headers = tableRows[0]
+                .split('|')
+                .map((c) => c.trim())
+                .filter(Boolean)
+              const dataRows = tableRows.slice(2).map((r) =>
+                r
+                  .split('|')
+                  .map((c) => c.trim())
+                  .filter(Boolean)
+              )
+              return (
+                <div key={idx} className="irpTableWrapper">
+                  <table className="irpTable">
+                    <thead>
+                      <tr>
+                        {headers.map((h, i) => (
+                          <th key={i}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dataRows.map((row, rIdx) => (
+                        <tr key={rIdx}>
+                          {row.map((cell, cIdx) => (
+                            <td key={cIdx}>{cell}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            }
+          }
+          // Checklists or unordered list
+          if (trimmed.startsWith('- [ ]') || trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+            const items = trimmed.split('\n')
+            return (
+              <ul key={idx} className="irpList">
+                {items.map((it, iIdx) => {
+                  const isChecklist = it.includes('[ ]') || it.includes('[x]')
+                  const isChecked = it.includes('[x]')
+                  const cleanText = it.replace(/^-\s*(\[[ x]\]\s*)?/, '')
+                  return (
+                    <li key={iIdx} className={isChecklist ? 'irpChecklistItem' : ''}>
+                      {isChecklist && (
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          readOnly
+                          style={{ marginRight: '8px', accentColor: 'var(--color-primary, #6366f1)' }}
+                        />
+                      )}
+                      <span>{cleanText}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            )
+          }
+
+          // Regular paragraph
+          return (
+            <p key={idx} className="irpParagraph">
+              {trimmed}
+            </p>
+          )
+        })}
+      </div>
+    )
+  }
 
   return (
     <div className="irpPageContainer">
-      {/* 0. Top Connection & Discovery Bar */}
-      <div className="adoConnectBar">
-        <div className="adoConnectBarLeft">
-          <div className="adoConnectItem">
-            <span className="adoConnectLabel">Org:</span>
-            <input
-              type="text"
-              className="adoConnectInput"
-              placeholder="Organization"
-              value={organization}
-              onChange={(e) => onOrganizationChange?.(e.target.value)}
-            />
-          </div>
-
-          <div className="adoConnectItem">
-            <span className="adoConnectLabel">PAT:</span>
-            <input
-              type="password"
-              className="adoConnectInput"
-              placeholder={pat ? '••••••••••••••••' : 'PAT (Wiki scope)'}
-              value={pat || ''}
-              onChange={(e) => onPatChange?.(e.target.value)}
-              autoComplete="off"
-            />
-          </div>
-
-          <div className="adoConnectItem">
-            <span className="adoConnectLabel">Project:</span>
-            <div className="adoCustomSelectWrapper">
-              <select
-                className="adoCustomSelect"
-                value={project}
-                onChange={(e) => onProjectChange?.(e.target.value)}
-              >
-                <option value="">Select Project</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.name}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          <div className="adoConnectItem">
-            <span className="adoConnectLabel">Target Wiki:</span>
-            <div className="adoCustomSelectWrapper">
-              <select
-                className="adoCustomSelect"
-                value={selectedWikiId}
-                onChange={(e) => setSelectedWikiId(e.target.value)}
-                disabled={wikis.length === 0}
-              >
-                {wikis.length === 0 ? (
-                  <option value="">No Wikis Found</option>
-                ) : (
-                  wikis.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.name} ({w.type || 'ProjectWiki'})
-                    </option>
-                  ))
-                )}
-              </select>
-            </div>
-          </div>
-        </div>
-
-        <div className="adoConnectBarRight">
-          <button
-            type="button"
-            className="adoConnectRefreshBtn"
-            onClick={() => {
-              if (organization && project) {
-                setIsLoadingWikis(true)
-                api.listWikis(organization, project, pat).then(setWikis).finally(() => setIsLoadingWikis(false))
-              }
-            }}
-            title="Refresh Wikis from Azure DevOps"
-          >
-            <RefreshCw size={13} className={isLoadingWikis ? 'spin' : ''} />
-            <span>Sync Wikis</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 1. Header Banner */}
+      {/* Top Banner */}
       <div className="irpHeaderBanner">
-        <div className="irpHeaderLeft">
-          <div className="irpHeaderIcon">
-            <ShieldAlert size={24} color="#00fbfb" />
+        <div className="irpHeaderTitleBlock">
+          <div className="irpHeaderIconWrap">
+            <ShieldAlert size={28} />
           </div>
           <div>
-            <h2>Incident Response & Wiki Hub</h2>
-            <p>Generate production-ready SRE runbooks from alert signals & publish directly to Azure DevOps Wiki.</p>
+            <h1 className="irpHeaderTitle">Incident Response Plan (IRP) Studio</h1>
+            <p className="irpHeaderSubtitle">
+              Generate production-grade runbooks adhering strictly to your organization's IRP template, schema example, and official Azure documentation.
+            </p>
           </div>
-        </div>
-
-        {/* Tab Navigation */}
-        <div className="irpTabSwitch">
-          <button
-            type="button"
-            className={`irpTabBtn ${activeTab === 'generator' ? 'active' : ''}`}
-            onClick={() => setActiveTab('generator')}
-          >
-            <Sparkles size={15} />
-            <span>AI IRP Generator</span>
-          </button>
-          <button
-            type="button"
-            className={`irpTabBtn ${activeTab === 'explorer' ? 'active' : ''}`}
-            onClick={() => setActiveTab('explorer')}
-          >
-            <BookOpen size={15} />
-            <span>Wiki Runbook Explorer</span>
-          </button>
         </div>
       </div>
 
-      {/* 2. TAB 1: AI IRP GENERATOR */}
-      {activeTab === 'generator' && (
-        <div className="irpGeneratorGrid">
-          {/* Left Panel: Input Parameters */}
-          <div className="irpConfigCard">
-            <div className="irpCardHead">
-              <div className="irpCardHeadTitle">
-                <Zap size={16} color="#00fbfb" />
-                <h3>Alert Details & Context</h3>
+      {/* Preset Pills */}
+      <div className="irpPresetsBar">
+        <span className="irpPresetsLabel">
+          <Sparkles size={14} style={{ color: '#818cf8', marginRight: '6px' }} /> Quick Fill Alert Preset:
+        </span>
+        <div className="irpPresetPillList">
+          {DEFAULT_ALERT_PRESETS.map((preset) => (
+            <button
+              key={preset.name}
+              type="button"
+              className={`irpPresetPill ${alertName === preset.name ? 'active' : ''}`}
+              onClick={() => applyPreset(preset)}
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Main 2-Column Split: 3 Input Sections Left, 1 Output Section Right */}
+      <div className="irpStudioGrid">
+        {/* ================= LEFT COLUMN: 3 CONFIG SECTIONS ================= */}
+        <div className="irpLeftCol">
+          {/* SECTION 1: ALERT & ARM DETAILS */}
+          <div className="irpCardSection">
+            <div className="irpCardHeader">
+              <div className="irpCardHeaderTitle">
+                <FileCode2 size={18} className="irpSectionIcon" />
+                <span>1. Alert & ARM Template Details</span>
               </div>
-              <span className="irpBadgeAi">Azure OpenAI Grounded</span>
+              <span className="irpBadgeSev">{severity}</span>
             </div>
 
-            <div className="irpCardBody">
-              {/* Quick Presets */}
-              <div className="irpFormGroup">
-                <label className="irpLabel">Quick Presets:</label>
-                <div className="irpPresetsWrap">
-                  {ALERT_PRESETS.map((p) => (
-                    <button
-                      key={p.name}
-                      type="button"
-                      className={`irpPresetPill ${alertName === p.name ? 'active' : ''}`}
-                      onClick={() => handleApplyPreset(p)}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="irpFormGroup">
-                <label className="irpLabel">Alert Name *</label>
+            <div className="irpFormGrid">
+              <div className="irpInputGroup">
+                <label className="irpLabel">
+                  Alert Name <span className="irpReq">*</span>
+                </label>
                 <input
                   type="text"
                   className="irpInput"
-                  placeholder="e.g. VPN Tunnel Disconnected"
                   value={alertName}
                   onChange={(e) => setAlertName(e.target.value)}
+                  placeholder="e.g. VPN Tunnel Disconnected"
                 />
               </div>
 
-              <div className="irpFormRow">
-                <div className="irpFormGroup">
-                  <label className="irpLabel">Target Resource / Service *</label>
-                  <input
-                    type="text"
-                    className="irpInput"
-                    placeholder="e.g. Azure Virtual Network Gateway"
-                    value={targetResource}
-                    onChange={(e) => setTargetResource(e.target.value)}
-                  />
-                </div>
-
-                <div className="irpFormGroup">
-                  <label className="irpLabel">Severity Level</label>
-                  <select
-                    className="irpSelect"
-                    value={severity}
-                    onChange={(e) => setSeverity(e.target.value)}
-                  >
-                    <option value="Sev-1">Sev-1 (Critical Outage)</option>
-                    <option value="Sev-2">Sev-2 (High Degradation)</option>
-                    <option value="Sev-3">Sev-3 (Medium / Warning)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="irpFormRow">
-                <div className="irpFormGroup">
-                  <label className="irpLabel">Owning Engineering Team</label>
-                  <input
-                    type="text"
-                    className="irpInput"
-                    placeholder="e.g. Cloud Network Engineering"
-                    value={owningTeam}
-                    onChange={(e) => setOwningTeam(e.target.value)}
-                  />
-                </div>
-
-                <div className="irpFormGroup">
-                  <label className="irpLabel">Environment</label>
-                  <select
-                    className="irpSelect"
-                    value={environment}
-                    onChange={(e) => setEnvironment(e.target.value)}
-                  >
-                    <option value="Production">Production</option>
-                    <option value="Staging">Staging</option>
-                    <option value="Disaster Recovery">Disaster Recovery</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="irpFormGroup">
-                <label className="irpLabel">Trigger Logic / Threshold</label>
+              <div className="irpInputGroup">
+                <label className="irpLabel">CVRD / Alert Identifier</label>
                 <input
                   type="text"
                   className="irpInput"
-                  placeholder="e.g. Connection Status == 0 for > 5 minutes"
-                  value={triggerCondition}
-                  onChange={(e) => setTriggerCondition(e.target.value)}
+                  value={cvrd}
+                  onChange={(e) => setCvrd(e.target.value)}
+                  placeholder="e.g. CVRD-NET-8821"
                 />
               </div>
 
-              <div className="irpFormGroup">
-                <label className="irpLabel">Additional Operational Notes / Symptoms</label>
+              <div className="irpInputGroup fullWidth">
+                <label className="irpLabel">Alert Output Columns (from KQL / Telemetry Query)</label>
+                <input
+                  type="text"
+                  className="irpInput"
+                  value={alertOutputColumns}
+                  onChange={(e) => setAlertOutputColumns(e.target.value)}
+                  placeholder="e.g. TimeGenerated, ResourceGroup, GatewayName, ConnectionState, PeerIP, DisconnectReason"
+                />
+              </div>
+
+              <div className="irpInputGroup fullWidth">
+                <label className="irpLabel">Alert Description / Report Context</label>
                 <textarea
                   className="irpTextarea"
-                  rows={3}
-                  placeholder="e.g. Dependencies, affected VPC peering, on-premise firewall gateway IPs..."
-                  value={additionalNotes}
-                  onChange={(e) => setAdditionalNotes(e.target.value)}
+                  rows={2}
+                  value={alertDetails}
+                  onChange={(e) => setAlertDetails(e.target.value)}
+                  placeholder="Describe what report or service this alert monitors and the symptoms triggered..."
                 />
               </div>
 
-              <button
-                type="button"
-                className="irpPrimaryBtn"
-                onClick={handleGenerate}
-                disabled={isGenerating || !alertName.trim()}
-              >
-                {isGenerating ? (
-                  <>
-                    <RefreshCw size={15} className="spin" />
-                    <span>Synthesizing IRP with OpenAI...</span>
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={16} />
-                    <span>Generate Incident Response Plan</span>
-                  </>
+              <div className="irpInputGroup fullWidth">
+                <div
+                  className="irpToggleHeader"
+                  onClick={() => setShowArmBox(!showArmBox)}
+                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}
+                >
+                  <label className="irpLabel" style={{ marginBottom: 0, cursor: 'pointer' }}>
+                    <Code2 size={14} style={{ display: 'inline', marginRight: '6px' }} />
+                    ARM Template / Bicep / Resource Context
+                  </label>
+                  {showArmBox ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                </div>
+                {showArmBox && (
+                  <textarea
+                    className="irpTextarea codeFont"
+                    rows={4}
+                    value={armTemplateContext}
+                    onChange={(e) => setArmTemplateContext(e.target.value)}
+                    placeholder="Paste your ARM Template JSON, Bicep snippet, or resource configuration..."
+                  />
                 )}
-              </button>
+              </div>
+
+              <div className="irpInputGroup">
+                <label className="irpLabel">Target Resource / Service</label>
+                <input
+                  type="text"
+                  className="irpInput"
+                  value={targetResource}
+                  onChange={(e) => setTargetResource(e.target.value)}
+                  placeholder="e.g. vnet-gw-prod-east"
+                />
+              </div>
+
+              <div className="irpInputGroup">
+                <label className="irpLabel">Severity</label>
+                <select className="irpSelect" value={severity} onChange={(e) => setSeverity(e.target.value)}>
+                  <option value="Sev-1">Sev-1 (Critical Outage)</option>
+                  <option value="Sev-2">Sev-2 (High Degradation)</option>
+                  <option value="Sev-3">Sev-3 (Moderate Warning)</option>
+                </select>
+              </div>
+
+              <div className="irpInputGroup">
+                <label className="irpLabel">Trigger Condition</label>
+                <input
+                  type="text"
+                  className="irpInput"
+                  value={triggerCondition}
+                  onChange={(e) => setTriggerCondition(e.target.value)}
+                  placeholder="e.g. Gateway Connection Status != 1 for > 2 mins"
+                />
+              </div>
+
+              <div className="irpInputGroup">
+                <label className="irpLabel">Owning Team</label>
+                <input
+                  type="text"
+                  className="irpInput"
+                  value={owningTeam}
+                  onChange={(e) => setOwningTeam(e.target.value)}
+                  placeholder="e.g. Cloud Network Operations"
+                />
+              </div>
             </div>
           </div>
 
-          {/* Right Panel: Output & Publishing */}
-          <div className="irpOutputCard">
-            <div className="irpCardHead">
-              <div className="irpCardHeadTitle">
-                <FileText size={16} color="#00fbfb" />
-                <h3>Generated Incident Response Plan</h3>
+          {/* SECTION 2: IRP TEMPLATE UPLOAD */}
+          <div className="irpCardSection">
+            <div className="irpCardHeader">
+              <div className="irpCardHeaderTitle">
+                <Layers size={18} className="irpSectionIcon" />
+                <span>2. Organization IRP Template</span>
               </div>
+              <div
+                className="irpToggleHeader"
+                onClick={() => setShowTemplateBox(!showTemplateBox)}
+                style={{ cursor: 'pointer' }}
+              >
+                {showTemplateBox ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </div>
 
-              <div className="irpCardHeadActions">
+            <p className="irpSectionHint">
+              Upload your company's standard markdown IRP template. The AI will strictly follow its exact structure and headings.
+            </p>
+
+            <div className="irpUploadRow">
+              <label className="irpUploadBtn">
+                <Upload size={14} style={{ marginRight: '6px' }} />
+                {irpTemplateFileName ? `Uploaded: ${irpTemplateFileName}` : 'Upload Template (.md, .txt, .json)'}
+                <input
+                  type="file"
+                  accept=".md,.txt,.json,.doc,.docx"
+                  style={{ display: 'none' }}
+                  onChange={handleTemplateFileUpload}
+                />
+              </label>
+              {irpTemplate && (
+                <button
+                  type="button"
+                  className="irpClearBtn"
+                  onClick={() => {
+                    setIrpTemplate('')
+                    setIrpTemplateFileName('')
+                  }}
+                  title="Clear Template"
+                >
+                  <Trash2 size={14} /> Clear
+                </button>
+              )}
+            </div>
+
+            {showTemplateBox && (
+              <textarea
+                className="irpTextarea codeFont"
+                rows={3}
+                value={irpTemplate}
+                onChange={(e) => setIrpTemplate(e.target.value)}
+                placeholder="Or paste your markdown IRP template here (e.g. # [Alert] Incident Response Plan&#10;## 1. Overview&#10;## 2. Immediate Triage...)"
+                style={{ marginTop: '8px' }}
+              />
+            )}
+          </div>
+
+          {/* SECTION 3: IRP EXAMPLE UPLOAD */}
+          <div className="irpCardSection">
+            <div className="irpCardHeader">
+              <div className="irpCardHeaderTitle">
+                <FileText size={18} className="irpSectionIcon" />
+                <span>3. Reference IRP Example (Schema Guide)</span>
+              </div>
+              <div
+                className="irpToggleHeader"
+                onClick={() => setShowExampleBox(!showExampleBox)}
+                style={{ cursor: 'pointer' }}
+              >
+                {showExampleBox ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </div>
+
+            <p className="irpSectionHint">
+              Upload a completed reference IRP. The AI will mirror this exact schema, depth, checklist format, and command style.
+            </p>
+
+            <div className="irpUploadRow">
+              <label className="irpUploadBtn">
+                <Upload size={14} style={{ marginRight: '6px' }} />
+                {irpExampleFileName ? `Uploaded: ${irpExampleFileName}` : 'Upload Example (.md, .txt)'}
+                <input
+                  type="file"
+                  accept=".md,.txt,.json"
+                  style={{ display: 'none' }}
+                  onChange={handleExampleFileUpload}
+                />
+              </label>
+              {irpExample && (
+                <button
+                  type="button"
+                  className="irpClearBtn"
+                  onClick={() => {
+                    setIrpExample('')
+                    setIrpExampleFileName('')
+                  }}
+                  title="Clear Example"
+                >
+                  <Trash2 size={14} /> Clear
+                </button>
+              )}
+            </div>
+
+            {showExampleBox && (
+              <textarea
+                className="irpTextarea codeFont"
+                rows={3}
+                value={irpExample}
+                onChange={(e) => setIrpExample(e.target.value)}
+                placeholder="Or paste a completed reference IRP markdown here to guide schema and tone..."
+                style={{ marginTop: '8px' }}
+              />
+            )}
+          </div>
+
+          {/* GENERATE BUTTON */}
+          <div className="irpGenerateRow">
+            <button
+              type="button"
+              className="irpGenerateBtn"
+              onClick={handleGenerate}
+              disabled={isGenerating || !alertName.trim()}
+            >
+              {isGenerating ? (
+                <>
+                  <div className="irpSpinner" /> Generating IRP from Official Docs & Template...
+                </>
+              ) : (
+                <>
+                  <Sparkles size={18} style={{ marginRight: '8px' }} /> Generate Incident Response Plan (IRP)
+                </>
+              )}
+            </button>
+          </div>
+
+          {errorMessage && (
+            <div className="irpErrorNotice">
+              <AlertTriangle size={16} style={{ marginRight: '8px', flexShrink: 0 }} />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+        </div>
+
+        {/* ================= RIGHT COLUMN: GENERATED IRP ================= */}
+        <div className="irpRightCol">
+          <div className="irpOutputCard">
+            <div className="irpOutputHeader">
+              <div className="irpOutputHeaderLeft">
+                <div className="irpOutputTitle">Generated Incident Response Plan</div>
                 <div className="irpViewToggle">
                   <button
                     type="button"
-                    className={`irpViewBtn ${irpEditorMode === 'preview' ? 'active' : ''}`}
-                    onClick={() => setIrpEditorMode('preview')}
+                    className={`irpToggleBtn ${viewMode === 'preview' ? 'active' : ''}`}
+                    onClick={() => setViewMode('preview')}
                   >
                     Formatted Preview
                   </button>
                   <button
                     type="button"
-                    className={`irpViewBtn ${irpEditorMode === 'raw' ? 'active' : ''}`}
-                    onClick={() => setIrpEditorMode('raw')}
+                    className={`irpToggleBtn ${viewMode === 'raw' ? 'active' : ''}`}
+                    onClick={() => setViewMode('raw')}
                   >
                     Raw Markdown
                   </button>
                 </div>
+              </div>
+
+              <div className="irpOutputHeaderRight">
+                <button
+                  type="button"
+                  className={`irpActionBtn ${copied ? 'copied' : ''}`}
+                  onClick={handleCopyClipboard}
+                  disabled={!generatedIrp}
+                  title="Copy generated IRP markdown to clipboard"
+                >
+                  {copied ? (
+                    <>
+                      <Check size={15} style={{ color: '#10b981', marginRight: '6px' }} />
+                      <span>Copied to Clipboard!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={15} style={{ marginRight: '6px' }} />
+                      <span>Copy to Clipboard</span>
+                    </>
+                  )}
+                </button>
 
                 <button
                   type="button"
-                  className="irpSecondaryBtn"
-                  onClick={handleCopy}
-                  disabled={!generatedMarkdown}
-                  title="Copy Markdown"
+                  className="irpActionBtn secondary"
+                  onClick={handleDownload}
+                  disabled={!generatedIrp}
+                  title="Download as .md file"
                 >
-                  {copiedMarkdown ? <Check size={14} color="#34d399" /> : <Copy size={14} />}
-                  <span>{copiedMarkdown ? 'Copied!' : 'Copy'}</span>
+                  <Download size={15} style={{ marginRight: '6px' }} />
+                  <span>Download .md</span>
                 </button>
               </div>
             </div>
 
-            <div className="irpCardBody irpOutputBody">
-              {!generatedMarkdown && !isGenerating && (
+            <div className="irpOutputBody">
+              {generatedIrp ? (
+                viewMode === 'preview' ? (
+                  renderMarkdownPreview(generatedIrp)
+                ) : (
+                  <textarea
+                    className="irpRawTextarea"
+                    value={generatedIrp}
+                    onChange={(e) => setGeneratedIrp(e.target.value)}
+                    placeholder="Generated raw markdown will appear here..."
+                  />
+                )
+              ) : (
                 <div className="irpEmptyState">
                   <div className="irpEmptyIconWrap">
-                    <ShieldAlert size={36} color="#71717a" />
+                    <ShieldAlert size={36} />
                   </div>
-                  <h4>No Incident Response Plan Generated Yet</h4>
+                  <h3>Ready to Generate Your IRP</h3>
                   <p>
-                    Select an alert preset or fill in the alert details on the left, then click{' '}
-                    <b>Generate Incident Response Plan</b>.
+                    Fill in your alert details on the left, optionally upload your organization's IRP template or reference example, and click <strong>Generate Incident Response Plan</strong>.
                   </p>
-                </div>
-              )}
-
-              {isGenerating && (
-                <div className="irpLoadingState">
-                  <RefreshCw size={36} className="spin" color="#00fbfb" />
-                  <h4>Azure OpenAI Generating Runbook...</h4>
-                  <p>Synthesizing triage checklist, diagnostic CLI queries, and recovery options.</p>
-                </div>
-              )}
-
-              {generatedMarkdown && !isGenerating && (
-                <>
-                  {irpEditorMode === 'raw' ? (
-                    <textarea
-                      className="irpRawEditor"
-                      value={generatedMarkdown}
-                      onChange={(e) => setGeneratedMarkdown(e.target.value)}
-                    />
-                  ) : (
-                    <div className="irpMarkdownPreview">
-                      <pre className="irpPreWrap">
-                        <code>{generatedMarkdown}</code>
-                      </pre>
+                  <div className="irpGuidanceList">
+                    <div className="irpGuidanceItem">
+                      <Check size={14} style={{ color: '#10b981', marginRight: '6px' }} />
+                      <span>Official Azure documentation CLI commands, PowerShell, and KQL queries</span>
                     </div>
-                  )}
-
-                  {/* Publishing Bar */}
-                  <div className="irpPublishPanel">
-                    <div className="irpPublishPanelHeader">
-                      <div className="irpPublishTitle">
-                        <UploadCloud size={16} color="#00fbfb" />
-                        <span>Publish to Azure DevOps Wiki</span>
-                      </div>
-                      <span className="irpWikiTargetBadge">
-                        Wiki: {wikis.find((w) => w.id === selectedWikiId)?.name || 'Default Wiki'}
-                      </span>
+                    <div className="irpGuidanceItem">
+                      <Check size={14} style={{ color: '#10b981', marginRight: '6px' }} />
+                      <span>Strict compliance with your uploaded template and example schema</span>
                     </div>
-
-                    <div className="irpPublishRow">
-                      <div className="irpPublishPathField">
-                        <label>Wiki Page Path:</label>
-                        <input
-                          type="text"
-                          className="irpPublishInput"
-                          value={suggestedWikiPath}
-                          onChange={(e) => setSuggestedWikiPath(e.target.value)}
-                          placeholder="/Incident-Response-Plans/Alert-Name"
-                        />
-                      </div>
-
-                      <button
-                        type="button"
-                        className="irpPublishBtn"
-                        onClick={handlePublish}
-                        disabled={isPublishing || !selectedWikiId}
-                      >
-                        {isPublishing ? (
-                          <>
-                            <RefreshCw size={14} className="spin" />
-                            <span>Publishing...</span>
-                          </>
-                        ) : (
-                          <>
-                            <UploadCloud size={15} />
-                            <span>Publish to Wiki</span>
-                          </>
-                        )}
-                      </button>
+                    <div className="irpGuidanceItem">
+                      <Check size={14} style={{ color: '#10b981', marginRight: '6px' }} />
+                      <span>One-click Copy to Clipboard to paste directly into your ADO Wiki</span>
                     </div>
-
-                    <label className="irpCheckboxLabel">
-                      <input
-                        type="checkbox"
-                        checked={updateInventoryCheck}
-                        onChange={(e) => setUpdateInventoryCheck(e.target.checked)}
-                      />
-                      <span>
-                        Auto-register alert in the <b>Alert Inventory</b> Wiki table (
-                        <code>{inventoryPagePath}</code>)
-                      </span>
-                    </label>
-
-                    {publishSuccessMsg && (
-                      <div className="irpSuccessBanner">
-                        <CheckCircle2 size={16} />
-                        <span>{publishSuccessMsg}</span>
-                      </div>
-                    )}
-
-                    {publishErrorMsg && (
-                      <div className="irpErrorBanner">
-                        <AlertTriangle size={16} />
-                        <span>{publishErrorMsg}</span>
-                      </div>
-                    )}
                   </div>
-                </>
+                </div>
               )}
             </div>
+
+            {generatedIrp && (
+              <div className="irpOutputFooter">
+                <Info size={14} style={{ marginRight: '6px', opacity: 0.7 }} />
+                <span>
+                  Tip: Use <strong>Copy to Clipboard</strong> to paste directly into your Azure DevOps Wiki page or SRE Runbook portal.
+                </span>
+              </div>
+            )}
           </div>
         </div>
-      )}
-
-      {/* 3. TAB 2: WIKI RUNBOOK & ALERT INVENTORY EXPLORER */}
-      {activeTab === 'explorer' && (
-        <div className="irpExplorerLayout">
-          {/* Left Sidebar: Pages Tree */}
-          <div className="irpExplorerSidebar">
-            <div className="irpExplorerSidebarHeader">
-              <div className="irpSearchWrap">
-                <Search size={14} className="irpSearchIcon" />
-                <input
-                  type="text"
-                  placeholder="Search Wiki pages..."
-                  className="irpSearchInput"
-                  value={pageSearchFilter}
-                  onChange={(e) => setPageSearchFilter(e.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="irpExplorerPageList">
-              {isLoadingPages ? (
-                <div className="irpListLoading">
-                  <RefreshCw size={18} className="spin" color="#00fbfb" />
-                  <span>Loading Wiki Tree...</span>
-                </div>
-              ) : filteredPages.length === 0 ? (
-                <div className="irpListEmpty">No pages found in this Wiki.</div>
-              ) : (
-                filteredPages.map((page) => (
-                  <button
-                    key={page.path}
-                    type="button"
-                    className={`irpPageItemBtn ${selectedPagePath === page.path ? 'active' : ''}`}
-                    onClick={() => setSelectedPagePath(page.path)}
-                  >
-                    <FileText size={14} className="irpPageItemIcon" />
-                    <span className="irpPageItemText">{page.path}</span>
-                    <ChevronRight size={13} className="irpPageItemArrow" />
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Right Area: Page Content Reader */}
-          <div className="irpExplorerContent">
-            <div className="irpExplorerContentHead">
-              <div className="irpContentPathWrap">
-                <Layers size={16} color="#00fbfb" />
-                <span className="irpContentPath">{selectedPagePath || 'Select a Wiki Page'}</span>
-              </div>
-
-              {selectedPageContent && (
-                <button
-                  type="button"
-                  className="irpSecondaryBtn"
-                  onClick={() => {
-                    navigator.clipboard.writeText(selectedPageContent)
-                  }}
-                  title="Copy Page Markdown"
-                >
-                  <Copy size={14} />
-                  <span>Copy Markdown</span>
-                </button>
-              )}
-            </div>
-
-            <div className="irpExplorerBody">
-              {isLoadingContent ? (
-                <div className="irpLoadingState">
-                  <RefreshCw size={28} className="spin" color="#00fbfb" />
-                  <span>Loading Page Content...</span>
-                </div>
-              ) : (
-                <pre className="irpExplorerPre">
-                  <code>{selectedPageContent || '# Select a page on the left to view its contents.'}</code>
-                </pre>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      </div>
     </div>
   )
 }

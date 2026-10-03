@@ -5905,176 +5905,89 @@ html[data-theme="light"] body {
 [data-theme="light"] .loginError{background:#fef2f2;border-color:#fecaca;color:#b91c1c}
 
 /* ==========================================================================
-   INCIDENT RESPONSE & WIKI IRP HUB STYLES
+   INCIDENT RESPONSE PLAN (IRP) STUDIO STYLES
    ========================================================================== */
 
 .irpPageContainer {
   max-width: 1500px;
   margin: 0 auto;
   width: 100%;
-  padding: 26px 30px 50px;
+  padding: 24px 28px 48px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
 }
 
+/* Header Banner */
 .irpHeaderBanner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 22px;
-  background: #202026;
+  background: #1f1f26;
   border: 1px solid #2e2f38;
   border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-  flex-wrap: wrap;
-  gap: 14px;
+  padding: 16px 20px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
-.irpHeaderLeft {
+.irpHeaderTitleBlock {
   display: flex;
   align-items: center;
   gap: 14px;
 }
 
-.irpHeaderIcon {
+.irpHeaderIconWrap {
   width: 44px;
   height: 44px;
   border-radius: 10px;
-  background: rgba(0, 251, 251, 0.12);
-  border: 1px solid rgba(0, 251, 251, 0.3);
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  color: #818cf8;
   display: grid;
   place-items: center;
+  flex-shrink: 0;
 }
 
-.irpHeaderLeft h2 {
+.irpHeaderTitle {
   margin: 0;
   font-size: 17px;
   font-weight: 700;
   color: #ffffff;
 }
 
-.irpHeaderLeft p {
+.irpHeaderSubtitle {
   margin: 3px 0 0;
   font-size: 12px;
   color: #9ca3af;
+  line-height: 1.45;
 }
 
-.irpTabSwitch {
+/* Quick-Fill Presets Bar */
+.irpPresetsBar {
   display: flex;
   align-items: center;
-  background: #141418;
-  border: 1px solid #2e2f38;
-  border-radius: 24px;
-  padding: 3px;
-  gap: 4px;
-}
-
-.irpTabBtn {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 16px;
-  border-radius: 20px;
-  background: transparent;
-  border: none;
-  color: #9ca3af;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.irpTabBtn:hover {
-  color: #ffffff;
-}
-
-.irpTabBtn.active {
-  background: rgba(0, 251, 251, 0.12);
-  color: #00fbfb;
-  box-shadow: 0 0 10px rgba(0, 251, 251, 0.2);
-}
-
-/* Generator 2-Column Grid */
-.irpGeneratorGrid {
-  display: grid;
-  grid-template-columns: 1.05fr 1.35fr;
-  gap: 18px;
-  align-items: stretch;
-}
-
-@media (max-width: 1200px) {
-  .irpGeneratorGrid {
-    grid-template-columns: 1fr;
-  }
-}
-
-.irpConfigCard,
-.irpOutputCard {
-  background: #202026;
-  border: 1px solid #2e2f38;
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.irpCardHead {
-  padding: 14px 20px;
-  background: #1a1a20;
-  border-bottom: 1px solid #2e2f38;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
   gap: 10px;
+  flex-wrap: wrap;
+  padding: 4px 0;
 }
 
-.irpCardHeadTitle {
+.irpPresetsLabel {
   display: flex;
   align-items: center;
-  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #a1a1aa;
 }
 
-.irpCardHeadTitle h3 {
-  margin: 0;
-  font-size: 13.5px;
-  font-weight: 700;
-  color: #f4f4f5;
-}
-
-.irpBadgeAi {
-  font-size: 10px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 12px;
-  background: rgba(0, 251, 251, 0.12);
-  color: #00fbfb;
-  border: 1px solid rgba(0, 251, 251, 0.3);
-}
-
-.irpCardBody {
-  padding: 20px;
+.irpPresetPillList {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
-  flex: 1;
-}
-
-/* Preset Pills */
-.irpPresetsWrap {
-  display: flex;
-  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-  margin-top: 4px;
+  flex-wrap: wrap;
 }
 
 .irpPresetPill {
   background: #18181f;
   border: 1px solid #2f2f3c;
-  color: #a1a1aa;
-  font-size: 11px;
+  color: #cbd5e1;
+  font-size: 11.5px;
   font-weight: 500;
   padding: 4px 10px;
   border-radius: 6px;
@@ -6089,41 +6002,118 @@ html[data-theme="light"] body {
 }
 
 .irpPresetPill.active {
-  background: rgba(0, 251, 251, 0.12);
-  border-color: rgba(0, 251, 251, 0.4);
-  color: #00fbfb;
+  background: rgba(99, 102, 241, 0.18);
+  border-color: rgba(99, 102, 241, 0.5);
+  color: #a5b4fc;
   font-weight: 600;
 }
 
-.irpFormGroup {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* 2-Column Main Studio Grid */
+.irpStudioGrid {
+  display: grid;
+  grid-template-columns: 1.05fr 1.35fr;
+  gap: 18px;
+  align-items: start;
 }
 
-.irpFormRow {
+@media (max-width: 1180px) {
+  .irpStudioGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Left Column */
+.irpLeftCol {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.irpCardSection {
+  background: #1f1f26;
+  border: 1px solid #2e2f38;
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.irpCardHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.irpCardHeaderTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #f4f4f5;
+}
+
+.irpSectionIcon {
+  color: #818cf8;
+}
+
+.irpBadgeSev {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+}
+
+.irpSectionHint {
+  margin: 0;
+  font-size: 11.5px;
+  color: #9ca3af;
+  line-height: 1.45;
+}
+
+/* Form Fields */
+.irpFormGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: 10px;
+}
+
+.irpInputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.irpInputGroup.fullWidth {
+  grid-column: 1 / -1;
 }
 
 .irpLabel {
   font-size: 11px;
   font-weight: 700;
-  color: #a1a1aa;
+  color: #9ca3af;
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+.irpReq {
+  color: #f87171;
 }
 
 .irpInput,
 .irpSelect,
 .irpTextarea {
-  background: #141418;
-  border: 1px solid #33333d;
+  background: #141419;
+  border: 1px solid #33333e;
   border-radius: 6px;
-  padding: 8px 12px;
+  padding: 7px 11px;
   color: #ffffff;
-  font-size: 12.5px;
+  font-size: 12px;
   outline: none;
   font-family: inherit;
   transition: border-color 0.15s ease;
@@ -6132,135 +6122,427 @@ html[data-theme="light"] body {
 .irpInput:focus,
 .irpSelect:focus,
 .irpTextarea:focus {
-  border-color: #00fbfb;
-  box-shadow: 0 0 0 2px rgba(0, 251, 251, 0.2);
+  border-color: #818cf8;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
 }
 
-.irpPrimaryBtn {
+.irpTextarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.irpTextarea.codeFont {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: #38bdf8;
+}
+
+/* Upload Row */
+.irpUploadRow {
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 8px;
-  background: #00fbfb;
-  color: #000000;
-  border: none;
-  border-radius: 8px;
-  padding: 10px 16px;
-  font-size: 13px;
-  font-weight: 700;
+}
+
+.irpUploadBtn {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  background: #272733;
+  border: 1px dashed #4f46e5;
+  border-radius: 6px;
+  color: #c7d2fe;
+  font-size: 11.5px;
+  font-weight: 600;
   cursor: pointer;
-  margin-top: 6px;
   transition: all 0.15s ease;
 }
 
-.irpPrimaryBtn:hover:not(:disabled) {
-  background: #38ffff;
-  box-shadow: 0 0 14px rgba(0, 251, 251, 0.4);
+.irpUploadBtn:hover {
+  background: #312e81;
+  color: #ffffff;
+  border-color: #818cf8;
 }
 
-.irpPrimaryBtn:disabled {
+.irpClearBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid #3e3e4f;
+  border-radius: 6px;
+  color: #f87171;
+  font-size: 11px;
+  padding: 5px 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.irpClearBtn:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: #f87171;
+}
+
+/* Generate Button */
+.irpGenerateRow {
+  margin-top: 4px;
+}
+
+.irpGenerateBtn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #4f46e5;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 18px;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.35);
+}
+
+.irpGenerateBtn:hover:not(:disabled) {
+  background: #6366f1;
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5);
+}
+
+.irpGenerateBtn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
 }
 
-/* Output Card Area */
-.irpCardHeadActions {
+.irpSpinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin-right: 8px;
+}
+
+.irpErrorNotice {
   display: flex;
   align-items: center;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+/* Right Column: Output Card */
+.irpRightCol {
+  display: flex;
+  flex-direction: column;
+}
+
+.irpOutputCard {
+  background: #1f1f26;
+  border: 1px solid #2e2f38;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 680px;
+}
+
+.irpOutputHeader {
+  padding: 12px 18px;
+  background: #191920;
+  border-bottom: 1px solid #2e2f38;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
+}
+
+.irpOutputHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.irpOutputTitle {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
 }
 
 .irpViewToggle {
   display: flex;
-  background: #141418;
-  border: 1px solid #2e2f38;
+  background: #131317;
+  border: 1px solid #2d2d38;
   border-radius: 6px;
   padding: 2px;
 }
 
-.irpViewBtn {
+.irpToggleBtn {
   background: transparent;
   border: none;
-  color: #a1a1aa;
+  color: #9ca3af;
   font-size: 11px;
   font-weight: 600;
-  padding: 3px 9px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.irpViewBtn.active {
-  background: #2a2a35;
-  color: #00fbfb;
-}
-
-.irpSecondaryBtn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  background: #272733;
-  border: 1px solid #3e3e4f;
-  color: #e4e4e7;
   padding: 4px 10px;
-  border-radius: 6px;
-  font-size: 11.5px;
+  border-radius: 4px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
-.irpSecondaryBtn:hover:not(:disabled) {
+.irpToggleBtn.active {
+  background: #2d2d3b;
+  color: #818cf8;
+}
+
+.irpOutputHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.irpActionBtn {
+  display: inline-flex;
+  align-items: center;
+  background: #4f46e5;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.irpActionBtn:hover:not(:disabled) {
+  background: #6366f1;
+}
+
+.irpActionBtn.secondary {
+  background: #272733;
+  border: 1px solid #3e3e4f;
+  color: #cbd5e1;
+}
+
+.irpActionBtn.secondary:hover:not(:disabled) {
   background: #333342;
   color: #ffffff;
 }
 
-.irpOutputBody {
-  min-height: 480px;
-  position: relative;
+.irpActionBtn.copied {
+  background: #065f46;
+  color: #6ee7b7;
 }
 
-.irpEmptyState,
-.irpLoadingState {
+.irpActionBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.irpOutputBody {
+  padding: 20px;
+  flex: 1;
+  overflow-y: auto;
+  max-height: 720px;
+}
+
+.irpOutputFooter {
+  padding: 10px 18px;
+  background: #191920;
+  border-top: 1px solid #2e2f38;
+  display: flex;
+  align-items: center;
+  font-size: 11.5px;
+  color: #9ca3af;
+}
+
+/* Empty State */
+.irpEmptyState {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 60px 20px;
   text-align: center;
-  gap: 10px;
-  color: #a1a1aa;
+  gap: 12px;
+  color: #9ca3af;
 }
 
 .irpEmptyIconWrap {
-  width: 60px;
-  height: 60px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
   background: #18181f;
-  border: 1px solid #2c2c38;
+  border: 1px solid #2e2f38;
+  color: #818cf8;
   display: grid;
   place-items: center;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
-.irpEmptyState h4,
-.irpLoadingState h4 {
+.irpEmptyState h3 {
   margin: 0;
-  font-size: 15px;
-  color: #f4f4f5;
+  font-size: 16px;
   font-weight: 700;
+  color: #f4f4f5;
 }
 
-.irpEmptyState p,
-.irpLoadingState p {
+.irpEmptyState p {
   margin: 0;
-  font-size: 12px;
-  max-width: 380px;
-  line-height: 1.45;
+  font-size: 12.5px;
+  max-width: 440px;
+  line-height: 1.5;
 }
 
-.irpRawEditor {
+.irpGuidanceList {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.irpGuidanceItem {
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+/* Markdown Rendering Elements */
+.irpPreviewContent {
+  color: #e4e4e7;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.irpHeading1 {
+  font-size: 18px;
+  font-weight: 750;
+  color: #ffffff;
+  border-bottom: 1px solid #33333f;
+  padding-bottom: 8px;
+  margin: 0 0 14px;
+}
+
+.irpHeading2 {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #a5b4fc;
+  margin: 18px 0 8px;
+}
+
+.irpHeading3 {
+  font-size: 13px;
+  font-weight: 650;
+  color: #ffffff;
+  margin: 14px 0 6px;
+}
+
+.irpBlockquote {
+  margin: 10px 0;
+  padding: 8px 14px;
+  background: #181820;
+  border-left: 3px solid #818cf8;
+  color: #cbd5e1;
+  border-radius: 0 6px 6px 0;
+  font-size: 12px;
+}
+
+.irpCodeBlock {
+  background: #131317;
+  border: 1px solid #2e2f38;
+  border-radius: 8px;
+  margin: 10px 0;
+  overflow: hidden;
+}
+
+.irpCodeHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #181820;
+  border-bottom: 1px solid #2e2f38;
+  font-size: 10.5px;
+  font-family: ui-monospace, monospace;
+  color: #9ca3af;
+  text-transform: uppercase;
+}
+
+.irpCodeBlock pre {
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+}
+
+.irpCodeBlock code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: #38bdf8;
+}
+
+.irpTableWrapper {
+  margin: 12px 0;
+  overflow-x: auto;
+  border: 1px solid #2e2f38;
+  border-radius: 8px;
+}
+
+.irpTable {
   width: 100%;
-  height: 380px;
-  background: #121216;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.irpTable th {
+  background: #181820;
+  padding: 8px 12px;
+  text-align: left;
+  color: #cbd5e1;
+  font-weight: 650;
+  border-bottom: 1px solid #2e2f38;
+}
+
+.irpTable td {
+  padding: 7px 12px;
+  border-bottom: 1px solid #252530;
+  color: #e4e4e7;
+}
+
+.irpTable tr:last-child td {
+  border-bottom: none;
+}
+
+.irpList {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.irpChecklistItem {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  margin-left: -20px;
+  margin-bottom: 4px;
+}
+
+.irpParagraph {
+  margin: 8px 0;
+  color: #d4d4d8;
+}
+
+.irpRawTextarea {
+  width: 100%;
+  height: 600px;
+  background: #131317;
   border: 1px solid #2e2f38;
   border-radius: 8px;
   padding: 14px;
@@ -6272,383 +6554,30 @@ html[data-theme="light"] body {
   resize: vertical;
 }
 
-.irpMarkdownPreview {
-  max-height: 420px;
-  overflow-y: auto;
-  background: #121216;
-  border: 1px solid #2e2f38;
-  border-radius: 8px;
-  padding: 16px;
-}
-
-.irpPreWrap {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.55;
-  color: #e4e4e7;
-}
-
-/* Publishing Panel */
-.irpPublishPanel {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px 16px;
-  background: #17171e;
-  border: 1px solid #2d2d3a;
-  border-radius: 8px;
-  margin-top: 10px;
-}
-
-.irpPublishPanelHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.irpPublishTitle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  color: #00fbfb;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.irpWikiTargetBadge {
-  font-size: 11px;
-  color: #9ca3af;
-  background: #202028;
-  border: 1px solid #333342;
-  padding: 2px 8px;
-  border-radius: 4px;
-}
-
-.irpPublishRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.irpPublishPathField {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  background: #111115;
-  border: 1px solid #333340;
-  border-radius: 6px;
-  padding: 2px 10px;
-}
-
-.irpPublishPathField label {
-  font-size: 11px;
-  color: #a1a1aa;
-  white-space: nowrap;
-  font-weight: 600;
-}
-
-.irpPublishInput {
-  background: transparent;
-  border: none;
-  color: #38bdf8;
-  font-family: ui-monospace, monospace;
-  font-size: 12px;
-  width: 100%;
-  padding: 6px 0;
-  outline: none;
-}
-
-.irpPublishBtn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: #0078d4;
-  color: #ffffff;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 16px;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s ease;
-  white-space: nowrap;
-}
-
-.irpPublishBtn:hover:not(:disabled) {
-  background: #106ebe;
-}
-
-.irpPublishBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.irpCheckboxLabel {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11.5px;
-  color: #cbd5e1;
-  cursor: pointer;
-}
-
-.irpCheckboxLabel code {
-  color: #00fbfb;
-  font-family: monospace;
-}
-
-.irpSuccessBanner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(16, 185, 129, 0.12);
-  border: 1px solid rgba(16, 185, 129, 0.35);
-  color: #34d399;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-}
-
-.irpErrorBanner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  color: #f87171;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-}
-
-/* Explorer Layout */
-.irpExplorerLayout {
-  display: grid;
-  grid-template-columns: 320px 1fr;
-  gap: 18px;
-  min-height: 580px;
-}
-
-.irpExplorerSidebar {
-  background: #202026;
-  border: 1px solid #2e2f38;
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.irpExplorerSidebarHeader {
-  padding: 12px 14px;
-  background: #1a1a20;
-  border-bottom: 1px solid #2e2f38;
-}
-
-.irpSearchWrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.irpSearchIcon {
-  position: absolute;
-  left: 10px;
-  color: #71717a;
-  pointer-events: none;
-}
-
-.irpSearchInput {
-  width: 100%;
-  background: #121216;
-  border: 1px solid #2f2f3c;
-  border-radius: 6px;
-  padding: 6px 10px 6px 30px;
-  color: #ffffff;
-  font-size: 12px;
-  outline: none;
-}
-
-.irpSearchInput:focus {
-  border-color: #00fbfb;
-}
-
-.irpExplorerPageList {
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow-y: auto;
-  flex: 1;
-}
-
-.irpPageItemBtn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  color: #cbd5e1;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.irpPageItemBtn:hover {
-  background: #262633;
-  color: #ffffff;
-}
-
-.irpPageItemBtn.active {
-  background: rgba(0, 251, 251, 0.12);
-  border-color: rgba(0, 251, 251, 0.3);
-  color: #00fbfb;
-  font-weight: 600;
-}
-
-.irpPageItemIcon {
-  color: #71717a;
-  flex-shrink: 0;
-}
-
-.irpPageItemBtn.active .irpPageItemIcon {
-  color: #00fbfb;
-}
-
-.irpPageItemText {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.irpPageItemArrow {
-  color: #71717a;
-  flex-shrink: 0;
-}
-
-.irpListLoading,
-.irpListEmpty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 30px 10px;
-  color: #71717a;
-  font-size: 12px;
-  text-align: center;
-}
-
-.irpExplorerContent {
-  background: #202026;
-  border: 1px solid #2e2f38;
-  border-radius: 12px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.irpExplorerContentHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 18px;
-  background: #1a1a20;
-  border-bottom: 1px solid #2e2f38;
-}
-
-.irpContentPathWrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.irpContentPath {
-  font-size: 13px;
-  font-weight: 600;
-  color: #ffffff;
-  font-family: ui-monospace, monospace;
-}
-
-.irpExplorerBody {
-  padding: 18px;
-  flex: 1;
-  overflow-y: auto;
-}
-
-.irpExplorerPre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: #e4e4e7;
-}
-
-/* Light Theme Overrides for IRP */
+/* Light Theme Support */
 [data-theme="light"] .irpHeaderBanner,
-[data-theme="light"] .irpConfigCard,
-[data-theme="light"] .irpOutputCard,
-[data-theme="light"] .irpExplorerSidebar,
-[data-theme="light"] .irpExplorerContent {
+[data-theme="light"] .irpCardSection,
+[data-theme="light"] .irpOutputCard {
   background: #ffffff;
   border-color: #e2e8f0;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
 }
 
-[data-theme="light"] .irpCardHead,
-[data-theme="light"] .irpExplorerSidebarHeader,
-[data-theme="light"] .irpExplorerContentHead {
+[data-theme="light"] .irpHeaderTitle,
+[data-theme="light"] .irpCardHeaderTitle,
+[data-theme="light"] .irpOutputTitle,
+[data-theme="light"] .irpHeading1,
+[data-theme="light"] .irpHeading3,
+[data-theme="light"] .irpEmptyState h3 {
+  color: #0f172a;
+}
+
+[data-theme="light"] .irpOutputHeader,
+[data-theme="light"] .irpOutputFooter,
+[data-theme="light"] .irpTable th,
+[data-theme="light"] .irpCodeHeader {
   background: #f8fafc;
-  border-bottom-color: #e2e8f0;
-}
-
-[data-theme="light"] .irpHeaderLeft h2,
-[data-theme="light"] .irpCardHeadTitle h3,
-[data-theme="light"] .irpContentPath {
-  color: #0f172a;
-}
-
-[data-theme="light"] .irpTabSwitch {
-  background: #f1f5f9;
   border-color: #e2e8f0;
-}
-
-[data-theme="light"] .irpTabBtn {
-  color: #64748b;
-}
-
-[data-theme="light"] .irpTabBtn.active {
-  background: rgba(2, 132, 199, 0.12);
-  color: #0284c7;
-}
-
-[data-theme="light"] .irpPresetPill {
-  background: #f1f5f9;
-  border-color: #e2e8f0;
-  color: #475569;
-}
-
-[data-theme="light"] .irpPresetPill:hover {
-  background: #e2e8f0;
-  color: #0f172a;
-}
-
-[data-theme="light"] .irpPresetPill.active {
-  background: rgba(2, 132, 199, 0.12);
-  border-color: rgba(2, 132, 199, 0.4);
-  color: #0284c7;
 }
 
 [data-theme="light"] .irpInput,
@@ -6659,39 +6588,44 @@ html[data-theme="light"] body {
   color: #0f172a;
 }
 
-[data-theme="light"] .irpRawEditor,
-[data-theme="light"] .irpMarkdownPreview {
-  background: #f8fafc;
+[data-theme="light"] .irpPresetPill {
+  background: #f1f5f9;
   border-color: #e2e8f0;
-}
-
-[data-theme="light"] .irpPreWrap,
-[data-theme="light"] .irpExplorerPre {
-  color: #1e293b;
-}
-
-[data-theme="light"] .irpPublishPanel {
-  background: #f8fafc;
-  border-color: #e2e8f0;
-}
-
-[data-theme="light"] .irpPublishPathField {
-  background: #ffffff;
-  border-color: #cbd5e1;
-}
-
-[data-theme="light"] .irpPageItemBtn {
   color: #334155;
 }
 
-[data-theme="light"] .irpPageItemBtn:hover {
-  background: #f1f5f9;
+[data-theme="light"] .irpPresetPill:hover {
+  background: #e2e8f0;
   color: #0f172a;
 }
 
-[data-theme="light"] .irpPageItemBtn.active {
-  background: rgba(2, 132, 199, 0.1);
-  border-color: rgba(2, 132, 199, 0.3);
-  color: #0284c7;
+[data-theme="light"] .irpPresetPill.active {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #4f46e5;
+}
+
+[data-theme="light"] .irpRawTextarea,
+[data-theme="light"] .irpCodeBlock {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+[data-theme="light"] .irpTable td {
+  border-color: #f1f5f9;
+  color: #334155;
+}
+
+[data-theme="light"] .irpPreviewContent {
+  color: #1e293b;
+}
+
+[data-theme="light"] .irpParagraph {
+  color: #334155;
+}
+
+[data-theme="light"] .irpBlockquote {
+  background: #f1f5f9;
+  color: #334155;
 }
 

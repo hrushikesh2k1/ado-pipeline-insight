@@ -1790,17 +1790,22 @@ def get_wiki_page_content(
 
 @router.post("/irp/generate", response_model=IrpGenerateResponse)
 def generate_irp(payload: IrpGenerateRequest) -> IrpGenerateResponse:
-    """Generate a production-grade Incident Response Plan using Azure OpenAI."""
+    """Generate a production-grade Incident Response Plan using Azure OpenAI grounded in templates and ARM context."""
     irp_service = IrpService()
     try:
         result = irp_service.generate_irp(
             alert_name=payload.alert_name,
+            cvrd=payload.cvrd,
+            alert_output_columns=payload.alert_output_columns,
+            arm_template_context=payload.arm_template_context,
+            alert_details=payload.alert_details,
             target_resource=payload.target_resource,
             severity=payload.severity,
             trigger_condition=payload.trigger_condition,
             owning_team=payload.owning_team,
             environment=payload.environment,
-            existing_irp_context=payload.existing_irp_context,
+            irp_template=payload.irp_template,
+            irp_example=payload.irp_example,
             additional_notes=payload.additional_notes,
         )
         return IrpGenerateResponse(**result)

@@ -9,11 +9,17 @@ def test_irp_service_heuristic_generation():
     
     res = service.generate_irp(
         alert_name="VPN Tunnel Disconnected",
+        cvrd="CVRD-NET-8821",
+        alert_output_columns="TimeGenerated, ResourceGroup, GatewayName, ConnectionState",
+        arm_template_context='{"type": "Microsoft.Network/virtualNetworkGateways"}',
+        alert_details="Site-to-site IPsec tunnel dropped.",
         target_resource="vnet-gateway-prod-east",
         severity="Sev-1",
         trigger_condition="Tunnel status != 1 for 2 minutes",
         owning_team="Network Engineering",
         environment="Production",
+        irp_template="# IRP Template\n## 1. Overview\n## 2. Triage",
+        irp_example="# Example IRP\n## 1. Overview\n- Checklist",
     )
     
     assert res["suggested_wiki_path"] == "/Incident-Response-Plans/VPN-Tunnel-Disconnected"

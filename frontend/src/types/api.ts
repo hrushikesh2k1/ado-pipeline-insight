@@ -288,12 +288,17 @@ export type AdoWikiPage = {
 
 export type IrpGenerateRequest = {
   alert_name: string
-  target_resource: string
+  cvrd?: string | null
+  alert_output_columns?: string | null
+  arm_template_context?: string | null
+  alert_details?: string | null
+  target_resource?: string | null
   severity?: string
   trigger_condition?: string | null
   owning_team?: string | null
   environment?: string | null
-  existing_irp_context?: string | null
+  irp_template?: string | null
+  irp_example?: string | null
   additional_notes?: string | null
 }
 

@@ -336,12 +336,17 @@ class AdoWikiPage(BaseModel):
 
 class IrpGenerateRequest(BaseModel):
     alert_name: str = Field(min_length=1, max_length=256)
-    target_resource: str = Field(min_length=1, max_length=256)
+    cvrd: str | None = Field(default=None, max_length=256)
+    alert_output_columns: str | None = None
+    arm_template_context: str | None = None
+    alert_details: str | None = None
+    target_resource: str | None = Field(default=None, max_length=256)
     severity: str = Field(default="Sev-1")
     trigger_condition: str | None = None
     owning_team: str | None = None
     environment: str | None = "Production"
-    existing_irp_context: str | None = None
+    irp_template: str | None = None
+    irp_example: str | None = None
     additional_notes: str | None = None
 
 

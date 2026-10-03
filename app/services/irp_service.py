@@ -105,51 +105,96 @@ class IrpService:
     def generate_irp(
         self,
         alert_name: str,
-        target_resource: str,
+        target_resource: str | None = None,
         severity: str = "Sev-1",
         trigger_condition: str | None = None,
         owning_team: str | None = None,
         environment: str | None = "Production",
-        existing_irp_context: str | None = None,
+        cvrd: str | None = None,
+        alert_output_columns: str | None = None,
+        arm_template_context: str | None = None,
+        alert_details: str | None = None,
+        irp_template: str | None = None,
+        irp_example: str | None = None,
         additional_notes: str | None = None,
     ) -> dict[str, Any]:
-        """Generate an Incident Response Plan using Azure OpenAI with fallback to structured SRE templates."""
+        """Generate an Incident Response Plan (IRP) adhering to uploaded templates, examples, and official Azure documentation."""
         client = self._get_client()
         sanitized_alert = alert_name.strip()
+        effective_resource = (target_resource or "").strip() or "Azure Resource / Alert Target"
         slug = re.sub(r"[^a-zA-Z0-9\-_]", "-", sanitized_alert.replace(" ", "-")).strip("-")
         suggested_path = f"/Incident-Response-Plans/{slug}"
 
         user_prompt_data = {
             "alert_name": sanitized_alert,
-            "target_resource": target_resource.strip(),
-            "severity": severity,
+            "cvrd": (cvrd or "").strip(),
+            "alert_output_columns": (alert_output_columns or "").strip(),
+            "arm_template_context": (arm_template_context or "").strip(),
+            "alert_details": (alert_details or "").strip(),
+            "target_resource": effective_resource,
+            "severity": severity or "Sev-1",
             "trigger_condition": trigger_condition or "Metric threshold breached for > 5 minutes",
             "owning_team": owning_team or "Cloud Operations & SRE",
             "environment": environment or "Production",
-            "additional_notes": additional_notes or "",
+            "irp_template": (irp_template or "").strip(),
+            "irp_example": (irp_example or "").strip(),
+            "additional_notes": (additional_notes or "").strip(),
         }
-        if existing_irp_context:
-            user_prompt_data["reference_wiki_irp_template"] = existing_irp_context[:3000]
 
         if client:
             try:
+                system_prompt = (
+                    "You are a Principal Cloud Site Reliability Engineer (SRE) and Incident Commander specializing in Azure, ARM templates, and incident response runbooks.\n"
+                    "Your task is to generate a comprehensive, highly technical, and production-ready Incident Response Plan (IRP) in GitHub-flavored Markdown.\n\n"
+                    "CRITICAL INSTRUCTIONS:\n"
+                    "1. STRICT TEMPLATE & SCHEMA CONFORMANCE:\n"
+                    "   - If an IRP Template or IRP Example is provided below, you MUST follow its EXACT structure, section headings, ordering, markdown tables, checklist styles, and callouts.\n"
+                    "   - Mirror the schema and formatting conventions of the IRP Example perfectly.\n"
+                    "2. OFFICIAL DOCUMENTATION & REGULATION ACCURACY:\n"
+                    "   - Diagnostic and remediation commands MUST follow official Microsoft Azure documentation, Azure CLI (`az ...`), Azure PowerShell (`Get-Az...`, `Restart-Az...`), and KQL Log Analytics best practices.\n"
+                    "   - Incorporate the specific ARM template context, resource types, CVRD, and Alert Output Columns in queries and diagnostic tables.\n"
+                    "3. CONCRETE & ACTIONABLE:\n"
+                    "   - Provide real KQL queries filtering by the given output columns and resource properties.\n"
+                    "   - Include step-by-step triage, 3-tier remediation, rollback procedures, validation checklists, and escalation contacts.\n"
+                    "4. RETURN PURE MARKDOWN ONLY (no conversational chit-chat before or after)."
+                )
+
+                prompt_lines = [
+                    f"### ALERT METADATA:",
+                    f"- Alert Name: {user_prompt_data['alert_name']}",
+                    f"- Severity: {user_prompt_data['severity']}",
+                    f"- CVRD / Alert ID: {user_prompt_data['cvrd'] or 'N/A'}",
+                    f"- Target Resource / Service: {user_prompt_data['target_resource']}",
+                    f"- Trigger Condition: {user_prompt_data['trigger_condition']}",
+                    f"- Owning Team: {user_prompt_data['owning_team']}",
+                    f"- Environment: {user_prompt_data['environment']}",
+                ]
+
+                if user_prompt_data["alert_output_columns"]:
+                    prompt_lines.append(f"\n### ALERT OUTPUT COLUMNS:\n{user_prompt_data['alert_output_columns']}")
+
+                if user_prompt_data["alert_details"]:
+                    prompt_lines.append(f"\n### ALERT DETAILS / REPORT INFO:\n{user_prompt_data['alert_details']}")
+
+                if user_prompt_data["arm_template_context"]:
+                    prompt_lines.append(f"\n### ARM TEMPLATE / INFRASTRUCTURE CONTEXT:\n```json\n{user_prompt_data['arm_template_context'][:4000]}\n```")
+
+                if user_prompt_data["irp_template"]:
+                    prompt_lines.append(f"\n### MANDATORY IRP TEMPLATE (Follow this exact structure):\n```markdown\n{user_prompt_data['irp_template'][:5000]}\n```")
+
+                if user_prompt_data["irp_example"]:
+                    prompt_lines.append(f"\n### REFERENCE IRP EXAMPLE (Mirror this schema and style):\n```markdown\n{user_prompt_data['irp_example'][:5000]}\n```")
+
+                if user_prompt_data["additional_notes"]:
+                    prompt_lines.append(f"\n### ADDITIONAL NOTES:\n{user_prompt_data['additional_notes']}")
+
+                user_content = "\n".join(prompt_lines)
+
                 response = client.client.chat.completions.create(
                     model=client.deployment,
                     messages=[
-                        {"role": "system", "content": IRP_SYSTEM_PROMPT},
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Generate a complete Incident Response Plan for the following alert:\n"
-                                f"Alert Name: {user_prompt_data['alert_name']}\n"
-                                f"Target Resource: {user_prompt_data['target_resource']}\n"
-                                f"Severity: {user_prompt_data['severity']}\n"
-                                f"Trigger Condition: {user_prompt_data['trigger_condition']}\n"
-                                f"Owning Team: {user_prompt_data['owning_team']}\n"
-                                f"Environment: {user_prompt_data['environment']}\n"
-                                f"Notes: {user_prompt_data['additional_notes']}\n"
-                            ),
-                        },
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content},
                     ],
                     temperature=0.2,
                 )
@@ -158,19 +203,19 @@ class IrpService:
                     return {
                         "alert_name": sanitized_alert,
                         "severity": severity,
-                        "target_resource": target_resource,
+                        "target_resource": effective_resource,
                         "markdown_content": markdown_text.strip(),
                         "suggested_wiki_path": suggested_path,
                     }
             except Exception as e:
                 logger.warning("Azure OpenAI IRP generation error, using deterministic fallback: %s", e)
 
-        # High-quality deterministic fallback tailored to common patterns
+        # Fallback generation adhering to template/example if supplied
         fallback_content = self._build_deterministic_irp(user_prompt_data)
         return {
             "alert_name": sanitized_alert,
             "severity": severity,
-            "target_resource": target_resource,
+            "target_resource": effective_resource,
             "markdown_content": fallback_content,
             "suggested_wiki_path": suggested_path,
         }
