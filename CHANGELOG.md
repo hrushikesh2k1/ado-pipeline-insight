@@ -4,6 +4,18 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.4.2] - 2026-10-03
+
+### Changed
+- **Sprint report email lists the flagged work items.** Under Check 1 (closed tasks without completed hours) and
+  Check 2 (user stories in review for more than 4 work days) the report now lists each work item with its link and
+  who it is assigned to ("Assigned to: Name", or "Unassigned"). The rest of the report is unchanged.
+- **Copy to Clipboard** now copies a rich version, so pasting into Outlook, Teams or webmail keeps each work item
+  number as a real hyperlink. (A `mailto:` email can only carry plain text, so the Outlook draft shows the work item
+  URL, which Outlook makes clickable.)
+- Very long reports no longer get cut off by the email link length limit: the report is copied to the clipboard and
+  the draft asks the sender to paste it.
+
 ## [1.4.1] - 2026-10-03
 
 ### Fixed

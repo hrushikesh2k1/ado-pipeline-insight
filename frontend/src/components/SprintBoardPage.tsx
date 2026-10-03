@@ -1,3 +1,4 @@
+import { assignee, buildSprintReport, workItemUrl } from '../utils/sprintReport'
 import { formatSprintRange, formatWorkDaysRemaining, withListedDates } from '../utils/sprintDates'
 import React, { useState, useEffect, useMemo } from 'react'
 import {
@@ -92,6 +93,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
   const [emailSending, setEmailSending] = useState<boolean>(false)
   const [emailSentSuccess, setEmailSentSuccess] = useState<boolean>(false)
   const [copiedToClipboard, setCopiedToClipboard] = useState<boolean>(false)
+  const [emailNeedsPaste, setEmailNeedsPaste] = useState<boolean>(false)
 
   // Auto-switch away from Milestone if milestone plugin is disabled
   useEffect(() => {
@@ -1997,34 +1999,36 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         const teamTitle = teams.find(t => t.id === selectedTeamId)?.name || selectedTeamId
         const emailSubject = `[Azure Boards Health] Sprint Report: ${sprintTitle} (${teamTitle})`
 
-        const generateEmailReportText = () => {
-          let body = `Hi Team,\n\n`
-          body += `Here is the Azure Boards Sprint Health & Hygiene Report for ${sprintTitle} (${teamTitle}):\n\n`
-          body += `=========================================================\n`
-          body += `📌 SPRINT SUMMARY\n`
-          body += `• Sprint: ${sprintTitle}\n`
-          body += `• Team: ${teamTitle}\n`
-          body += `• Active Work Items: ${boardData?.work_items?.length || 0}\n\n`
-          body += `🔍 PROCESS HYGIENE CHECKS\n`
-          body += `• Check 1 (Closed Tasks without Completed Hours): ${checksSummary.tasks_closed_without_hours_count} violation(s)\n`
-          body += `• Check 2 (User Stories In Review > 4 Work Days): ${checksSummary.stories_in_review_stale_count} violation(s)\n\n`
-          if (computedMilestone) {
-            body += `🎯 MILESTONE & CAPACITY BREAKDOWN\n`
-            body += `• Milestone Story Progress: ${computedMilestone.closed_stories_count}/${computedMilestone.total_stories} completed (${computedMilestone.completion_rate_pct}%)\n`
-            body += `• Verified Delivered Hours: ${computedMilestone.total_delivered_hours} hrs\n`
-            body += `• Features Delivered: ${computedMilestone.features_delivered_count} | Bug Fixes: ${computedMilestone.bugs_resolved_count}\n\n`
-          }
-          body += `=========================================================\n`
-          body += `Generated via ADO Pipeline Insight & Azure Boards Extension\n`
-          body += `Dashboard URL: ${window.location.origin}\n`
-          return body
-        }
+        const buildReport = () => buildSprintReport({
+          sprintTitle,
+          teamTitle: String(teamTitle),
+          activeWorkItems: boardData?.work_items?.length || 0,
+          closedWithoutHours: closedWithoutHoursItems,
+          closedWithoutHoursCount: checksSummary.tasks_closed_without_hours_count,
+          staleInReview: staleInReviewItems,
+          staleInReviewCount: checksSummary.stories_in_review_stale_count,
+          milestone: computedMilestone,
+          organization,
+          project,
+          dashboardUrl: window.location.origin,
+        })
+        const generateEmailReportText = () => buildReport().text
 
-        const handleSendViaOutlook = () => {
+        // mailto: links are limited in length (~2000 characters). A long list of flagged items would be cut off, so in that
+        // case the full report (with links) is copied to the clipboard and the draft asks the sender to paste it.
+        const MAILTO_LIMIT = 1900
+        const handleSendViaOutlook = async () => {
           setEmailSending(true)
-          const body = generateEmailReportText()
-          const mailtoUrl = `mailto:${encodeURIComponent(emailRecipient.trim())}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(body)}`
-          
+          let body = generateEmailReportText()
+          const build = (b: string) => `mailto:${encodeURIComponent(emailRecipient.trim())}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(b)}`
+          let needsPaste = false
+          if (build(body).length > MAILTO_LIMIT) {
+            await handleCopyToClipboard()
+            body = `Hi Team,\n\nThe full Sprint Health & Hygiene Report for ${sprintTitle} (${teamTitle}) is on your clipboard - press Ctrl+V to paste it here.\n`
+            needsPaste = true
+          }
+          const mailtoUrl = build(body)
+
           // Open default email client (Outlook)
           const link = document.createElement('a')
           link.href = mailtoUrl
@@ -2035,13 +2039,22 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
           document.body.removeChild(link)
 
           setEmailSending(false)
+          setEmailNeedsPaste(needsPaste)
           setEmailSentSuccess(true)
         }
 
         const handleCopyToClipboard = async () => {
           try {
-            const text = generateEmailReportText()
-            await navigator.clipboard.writeText(text)
+            const { text, html } = buildReport()
+            // Rich copy: pasting into Outlook keeps the work item numbers as real hyperlinks.
+            if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+              await navigator.clipboard.write([new ClipboardItem({
+                'text/html': new Blob([html], { type: 'text/html' }),
+                'text/plain': new Blob([text], { type: 'text/plain' }),
+              })])
+            } else {
+              await navigator.clipboard.writeText(text)
+            }
             setCopiedToClipboard(true)
             setTimeout(() => setCopiedToClipboard(false), 2500)
           } catch (err) {
@@ -2094,7 +2107,17 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                     <p><b>Sprint:</b> {sprintTitle}</p>
                     <p><b>Team:</b> {teamTitle}</p>
                     <p><b>Hygiene Check 1:</b> {checksSummary.tasks_closed_without_hours_count} closed task(s) with blank hours</p>
+                    {closedWithoutHoursItems.map(item => (
+                      <p key={`c1-${item.id}`} style={{ paddingLeft: 14 }}>
+                        • <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - Assigned to: {assignee(item)}
+                      </p>
+                    ))}
                     <p><b>Hygiene Check 2:</b> {checksSummary.stories_in_review_stale_count} user story(s) in review &gt; 4 working days</p>
+                    {staleInReviewItems.map(item => (
+                      <p key={`c2-${item.id}`} style={{ paddingLeft: 14 }}>
+                        • <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - Assigned to: {assignee(item)}
+                      </p>
+                    ))}
                     {computedMilestone && (
                       <>
                         <p><b>Milestone Completion:</b> {computedMilestone.closed_stories_count}/{computedMilestone.total_stories} stories ({computedMilestone.completion_rate_pct}%)</p>
@@ -2111,7 +2134,9 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                       <span>Draft opened in <b>Outlook / Default Mail Client</b> for <b>{emailRecipient}</b>!</span>
                     </div>
                     <span style={{ fontSize: '11px', color: '#94a3b8', paddingLeft: '24px' }}>
-                      Review the draft in Outlook and click Send. You can also use "Copy to Clipboard" to paste into Teams or Webmail.
+                      {emailNeedsPaste
+                        ? 'The report is long, so it was copied to your clipboard: press Ctrl+V in the Outlook draft to paste it (work item numbers stay clickable), then click Send.'
+                        : 'Review the draft in Outlook and click Send. You can also use "Copy to Clipboard" to paste into Teams or Webmail.'}
                     </span>
                   </div>
                 )}
