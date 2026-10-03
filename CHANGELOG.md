@@ -4,6 +4,48 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.5.0] - 2026-10-03
+
+### Added
+- **AI Analysis now reads your real pipeline YAML.** It fetches the pipeline file from Azure Repos and every template it
+  includes (relative paths, rooted paths and `file.yml@repository` templates from other repositories, up to 8 levels deep
+  and 60 files) and gives the model the complete files. It needs the Azure DevOps PAT you connected with to have the
+  **Code (Read)** scope; if the files cannot be read the analysis still runs, and its message says why and names any
+  template that could not be read.
+- **Every insight shows a root cause, a remediation and a YAML block to paste.** A block is shown as a real change to your
+  file ("Change to your pipeline YAML", with **Copy diff** and **Copy new lines**) only when its lines were checked against
+  your files. Anything else is labelled "Example to adapt (not from your file)".
+- **Each insight says exactly where the step is:** the file, the template's repository, how many stages use it, and the
+  step's line number. Steps named with template expressions (for example `Deploy ... ${{ parameters.region }}`) are matched
+  to the step names in the run data. When a name fits several steps, or none, the insight says so and lists the candidates
+  instead of guessing.
+- **Known failure causes are recognised from the error text** and explained precisely: unset pipeline variables (also when
+  Azure reports them as an authorization error because the scope contains `$(variable)`), missing permissions (with the
+  `az role assignment create` command), resources that do not exist, empty resource group names, a stopped AKS cluster, and
+  ARM template parameter type mismatches. For these the cause's diagnosis, remediation and YAML replace the model's own
+  wording, so the text and the example always agree.
+- **Every failing step above the high-severity thresholds gets an insight** (the old limit of four is gone; up to 15 are
+  shown), and insights for the same step failing in several stages, or for one shared cause, are merged into one.
+
+### Changed
+- **Severity, impact and retries now follow the measurements.** Severity comes from the thresholds (high: failure rate of
+  15% or more, or retry rate of 20% or more; medium: 5% or more). Impact states what was measured and never promises a
+  reduction. Retries (`retryCountOnTaskFailure`) are only advised when the error looks transient, and a failure is only
+  called transient or deterministic when the error text shows it. When the log does not show the cause, the insight says so
+  and offers verbose logging instead of a guess.
+- **No invented YAML on a failing step.** A diff that does not match your file, YAML we could not verify, and "YAML" that is
+  really a comment or a shell command are removed and replaced by a block derived from the error text.
+- The Analyze request sends the PAT in the `X-ADO-PAT` header; recommendations keep a stable order; `PyYAML` is a new
+  dependency.
+
+### Fixed
+- **The header no longer runs off the screen on windows narrower than 1500px.** The Org / Project / Pipeline / Window
+  dropdowns move to a second row, so the status, theme toggle and Admin menu stay visible, and the sidebar follows the
+  header's height.
+
+### Notes
+- These changes were first deployed inside the untagged 1.4.3 build (commit `6912ca9`); 1.5.0 is their release label.
+
 ## [1.4.3] - 2026-10-03
 
 ### Fixed
