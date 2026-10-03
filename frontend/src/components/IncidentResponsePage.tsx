@@ -217,93 +217,350 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
     document.body.removeChild(link)
   }
 
-  // Formatted Markdown Preview Renderer
-  const renderMarkdownPreview = (text: string) => {
+  // Formatted Markdown Preview Renderer matching Azure DevOps Wiki Document standard
+  const renderInlineMarkdown = (text: string): React.ReactNode => {
     if (!text) return null
 
-    return (
-      <div className="irpPreviewContent">
-        {text.split('\n\n').map((block, idx) => {
-          const trimmed = block.trim()
+    // Replace literal <br> or <br/> tags
+    const parts = text.split(/(<br\s*\/?>)/gi)
 
-          // Header 1
-          if (trimmed.startsWith('# ')) {
-            return (
-              <h1 key={idx} className="irpHeading1">
-                {trimmed.replace('# ', '')}
-              </h1>
-            )
-          }
-          // Header 2
-          if (trimmed.startsWith('## ')) {
-            return (
-              <h2 key={idx} className="irpHeading2">
-                {trimmed.replace('## ', '')}
-              </h2>
-            )
-          }
-          // Header 3
-          if (trimmed.startsWith('### ')) {
-            return (
-              <h3 key={idx} className="irpHeading3">
-                {trimmed.replace('### ', '')}
-              </h3>
-            )
-          }
-          // Blockquote
-          if (trimmed.startsWith('> ')) {
-            return (
-              <blockquote key={idx} className="irpBlockquote">
-                {trimmed.replace(/> /g, '')}
-              </blockquote>
-            )
-          }
-          // Code block
-          if (trimmed.startsWith('```')) {
-            const lines = trimmed.split('\n')
-            const lang = lines[0].replace('```', '') || 'text'
-            const code = lines.slice(1, -1).join('\n')
-            return (
-              <div key={idx} className="irpCodeBlock">
-                <div className="irpCodeHeader">
-                  <Terminal size={13} style={{ opacity: 0.7 }} />
-                  <span>{lang}</span>
-                </div>
-                <pre>
-                  <code>{code}</code>
-                </pre>
-              </div>
-            )
-          }
-          // Markdown Table
-          if (trimmed.includes('|') && trimmed.split('\n').length > 1) {
-            const tableRows = trimmed.split('\n').filter((r) => r.trim().startsWith('|'))
-            if (tableRows.length >= 2) {
-              const headers = tableRows[0]
-                .split('|')
-                .map((c) => c.trim())
-                .filter(Boolean)
-              const dataRows = tableRows.slice(2).map((r) =>
-                r
-                  .split('|')
-                  .map((c) => c.trim())
-                  .filter(Boolean)
-              )
+    return parts.map((part, pIdx) => {
+      if (part.toLowerCase().startsWith('<br')) {
+        return <br key={`br-${pIdx}`} />
+      }
+
+      // Tokenize for **bold**, *italic*, `inline code`, [link](url)
+      const tokenRegex = /(\*\*[\s\S]*?\*\*|\*[\s\S]*?\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g
+      const tokens = part.split(tokenRegex)
+
+      return (
+        <React.Fragment key={`inline-${pIdx}`}>
+          {tokens.map((tok, tIdx) => {
+            if (!tok) return null
+
+            // **bold**
+            if (tok.startsWith('**') && tok.endsWith('**') && tok.length >= 4) {
+              const inner = tok.slice(2, -2)
               return (
-                <div key={idx} className="irpTableWrapper">
-                  <table className="irpTable">
+                <strong key={tIdx} className="irpWikiBold">
+                  {renderInlineMarkdown(inner)}
+                </strong>
+              )
+            }
+
+            // *italic*
+            if (tok.startsWith('*') && tok.endsWith('*') && tok.length >= 2 && !tok.startsWith('**')) {
+              const inner = tok.slice(1, -1)
+              return (
+                <em key={tIdx} className="irpWikiItalic">
+                  {renderInlineMarkdown(inner)}
+                </em>
+              )
+            }
+
+            // `code`
+            if (tok.startsWith('`') && tok.endsWith('`') && tok.length >= 2) {
+              return (
+                <code key={tIdx} className="irpWikiInlineCode">
+                  {tok.slice(1, -1)}
+                </code>
+              )
+            }
+
+            // [link](url)
+            const linkMatch = tok.match(/^\[([^\]]+)\]\(([^)]+)\)$/)
+            if (linkMatch) {
+              return (
+                <a
+                  key={tIdx}
+                  href={linkMatch[2]}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="irpWikiLink"
+                >
+                  {linkMatch[1]}
+                </a>
+              )
+            }
+
+            return <span key={tIdx}>{tok}</span>
+          })}
+        </React.Fragment>
+      )
+    })
+  }
+
+  const renderMarkdownPreview = (rawContent: string) => {
+    if (!rawContent) return null
+
+    // Clean initial backticks if response is wrapped in ```markdown ... ```
+    let text = rawContent.trim()
+    if (text.startsWith('```markdown')) {
+      text = text.replace(/^```markdown\s*/, '').replace(/```\s*$/, '')
+    } else if (text.startsWith('```')) {
+      text = text.replace(/^```\s*/, '').replace(/```\s*$/, '')
+    }
+
+    // Split text into distinct markdown blocks while preserving code blocks and tables
+    const lines = text.split('\n')
+    const blocks: Array<{ type: string; content: string; lang?: string; rows?: string[][] }> = []
+
+    let i = 0
+    while (i < lines.length) {
+      const line = lines[i]
+      const trimmed = line.trim()
+
+      // Empty line
+      if (!trimmed) {
+        i++
+        continue
+      }
+
+      // Code Block: ```lang
+      if (trimmed.startsWith('```')) {
+        const lang = trimmed.replace('```', '').trim() || 'bash'
+        const codeLines: string[] = []
+        i++
+        while (i < lines.length && !lines[i].trim().startsWith('```')) {
+          codeLines.push(lines[i])
+          i++
+        }
+        if (i < lines.length) i++ // skip closing ```
+        blocks.push({
+          type: 'code',
+          lang,
+          content: codeLines.join('\n'),
+        })
+        continue
+      }
+
+      // Table Block: starts with |
+      if (trimmed.startsWith('|')) {
+        const tableLines: string[] = []
+        while (i < lines.length && lines[i].trim().startsWith('|')) {
+          tableLines.push(lines[i].trim())
+          i++
+        }
+
+        if (tableLines.length >= 2) {
+          const parseRow = (r: string) =>
+            r
+              .split('|')
+              .slice(1, -1)
+              .map((c) => c.trim())
+
+          const headers = parseRow(tableLines[0])
+          // Skip divider row (row 1 like |---|---|)
+          const dataRows = tableLines.slice(2).map(parseRow)
+
+          blocks.push({
+            type: 'table',
+            content: '',
+            rows: [headers, ...dataRows],
+          })
+          continue
+        }
+      }
+
+      // Header 1: # Title
+      if (trimmed.startsWith('# ')) {
+        blocks.push({
+          type: 'h1',
+          content: trimmed.replace(/^#\s+/, ''),
+        })
+        i++
+        continue
+      }
+
+      // Header 2: ## Section
+      if (trimmed.startsWith('## ')) {
+        blocks.push({
+          type: 'h2',
+          content: trimmed.replace(/^##\s+/, ''),
+        })
+        i++
+        continue
+      }
+
+      // Header 3: ### Sub-section
+      if (trimmed.startsWith('### ')) {
+        blocks.push({
+          type: 'h3',
+          content: trimmed.replace(/^###\s+/, ''),
+        })
+        i++
+        continue
+      }
+
+      // Blockquote: > Quote
+      if (trimmed.startsWith('>')) {
+        const quoteLines: string[] = []
+        while (i < lines.length && lines[i].trim().startsWith('>')) {
+          quoteLines.push(lines[i].trim().replace(/^>\s*/, ''))
+          i++
+        }
+        blocks.push({
+          type: 'blockquote',
+          content: quoteLines.join('\n'),
+        })
+        continue
+      }
+
+      // List (unordered, ordered, or checklist)
+      if (
+        trimmed.startsWith('- ') ||
+        trimmed.startsWith('* ') ||
+        trimmed.startsWith('- [ ]') ||
+        trimmed.startsWith('- [x]') ||
+        /^\d+\.\s+/.test(trimmed)
+      ) {
+        const listItems: string[] = []
+        while (
+          i < lines.length &&
+          lines[i].trim() &&
+          (lines[i].trim().startsWith('- ') ||
+            lines[i].trim().startsWith('* ') ||
+            lines[i].trim().startsWith('- [') ||
+            /^\d+\.\s+/.test(lines[i].trim()))
+        ) {
+          listItems.push(lines[i].trim())
+          i++
+        }
+        blocks.push({
+          type: 'list',
+          content: listItems.join('\n'),
+        })
+        continue
+      }
+
+      // Horizontal Rule
+      if (trimmed === '---' || trimmed === '***' || trimmed === '___') {
+        blocks.push({
+          type: 'hr',
+          content: '',
+        })
+        i++
+        continue
+      }
+
+      // Paragraph: collect until blank line or next block element
+      const pLines: string[] = []
+      while (
+        i < lines.length &&
+        lines[i].trim() &&
+        !lines[i].trim().startsWith('#') &&
+        !lines[i].trim().startsWith('```') &&
+        !lines[i].trim().startsWith('|') &&
+        !lines[i].trim().startsWith('>') &&
+        !lines[i].trim().startsWith('- ') &&
+        !lines[i].trim().startsWith('* ') &&
+        !/^\d+\.\s+/.test(lines[i].trim())
+      ) {
+        pLines.push(lines[i].trim())
+        i++
+      }
+
+      blocks.push({
+        type: 'p',
+        content: pLines.join(' '),
+      })
+    }
+
+    return (
+      <div className="irpWikiPaper">
+        {/* Azure DevOps Wiki Breadcrumb & Page Ribbon */}
+        <div className="irpWikiPaperHeader">
+          <div className="irpWikiBreadcrumb">
+            <span className="irpWikiBreadcrumbOrg">Azure DevOps Wiki</span>
+            <span className="irpWikiBreadcrumbSep">/</span>
+            <span className="irpWikiBreadcrumbFolder">Incident-Response-Plans</span>
+            <span className="irpWikiBreadcrumbSep">/</span>
+            <span className="irpWikiBreadcrumbPage">{alertName || 'Incident Response Plan'}</span>
+          </div>
+          <div className="irpWikiBadge">
+            <span className="irpWikiBadgeDot" /> Production IRP Runbook
+          </div>
+        </div>
+
+        {/* Wiki Document Content */}
+        <div className="irpWikiDocument">
+          {blocks.map((block, idx) => {
+            // H1
+            if (block.type === 'h1') {
+              return (
+                <h1 key={idx} className="irpWikiH1">
+                  <span className="irpWikiH1Accent" />
+                  <span>{renderInlineMarkdown(block.content)}</span>
+                </h1>
+              )
+            }
+
+            // H2
+            if (block.type === 'h2') {
+              return (
+                <h2 key={idx} className="irpWikiH2">
+                  <span className="irpWikiH2Accent" />
+                  <span>{renderInlineMarkdown(block.content)}</span>
+                </h2>
+              )
+            }
+
+            // H3
+            if (block.type === 'h3') {
+              return (
+                <h3 key={idx} className="irpWikiH3">
+                  {renderInlineMarkdown(block.content)}
+                </h3>
+              )
+            }
+
+            // Code Block
+            if (block.type === 'code') {
+              return (
+                <div key={idx} className="irpWikiCodeBlock">
+                  <div className="irpWikiCodeHeader">
+                    <div className="irpWikiCodeHeaderLeft">
+                      <Terminal size={12} className="irpWikiCodeIcon" />
+                      <span>{block.lang || 'bash'}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="irpWikiCodeCopyBtn"
+                      onClick={() => {
+                        navigator.clipboard.writeText(block.content)
+                      }}
+                      title="Copy code"
+                    >
+                      <Copy size={12} />
+                      <span>Copy</span>
+                    </button>
+                  </div>
+                  <pre className="irpWikiCodePre">
+                    <code>{block.content}</code>
+                  </pre>
+                </div>
+              )
+            }
+
+            // Table
+            if (block.type === 'table' && block.rows && block.rows.length > 0) {
+              const headers = block.rows[0]
+              const bodyRows = block.rows.slice(1)
+              return (
+                <div key={idx} className="irpWikiTableWrapper">
+                  <table className="irpWikiTable">
                     <thead>
                       <tr>
-                        {headers.map((h, i) => (
-                          <th key={i}>{h}</th>
+                        {headers.map((h, hIdx) => (
+                          <th key={hIdx}>{renderInlineMarkdown(h)}</th>
                         ))}
                       </tr>
                     </thead>
                     <tbody>
-                      {dataRows.map((row, rIdx) => (
+                      {bodyRows.map((row, rIdx) => (
                         <tr key={rIdx}>
                           {row.map((cell, cIdx) => (
-                            <td key={cIdx}>{cell}</td>
+                            <td key={cIdx}>{renderInlineMarkdown(cell)}</td>
                           ))}
                         </tr>
                       ))}
@@ -312,41 +569,69 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
                 </div>
               )
             }
-          }
-          // Checklists or unordered list
-          if (trimmed.startsWith('- [ ]') || trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
-            const items = trimmed.split('\n')
-            return (
-              <ul key={idx} className="irpList">
-                {items.map((it, iIdx) => {
-                  const isChecklist = it.includes('[ ]') || it.includes('[x]')
-                  const isChecked = it.includes('[x]')
-                  const cleanText = it.replace(/^-\s*(\[[ x]\]\s*)?/, '')
-                  return (
-                    <li key={iIdx} className={isChecklist ? 'irpChecklistItem' : ''}>
-                      {isChecklist && (
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          readOnly
-                          style={{ marginRight: '8px', accentColor: 'var(--color-primary, #6366f1)' }}
-                        />
-                      )}
-                      <span>{cleanText}</span>
-                    </li>
-                  )
-                })}
-              </ul>
-            )
-          }
 
-          // Regular paragraph
-          return (
-            <p key={idx} className="irpParagraph">
-              {trimmed}
-            </p>
-          )
-        })}
+            // Blockquote
+            if (block.type === 'blockquote') {
+              return (
+                <blockquote key={idx} className="irpWikiQuote">
+                  {renderInlineMarkdown(block.content)}
+                </blockquote>
+              )
+            }
+
+            // List
+            if (block.type === 'list') {
+              const items = block.content.split('\n')
+              const isNumbered = /^\d+\.\s+/.test(items[0])
+
+              if (isNumbered) {
+                return (
+                  <ol key={idx} className="irpWikiOl">
+                    {items.map((it, itIdx) => {
+                      const clean = it.replace(/^\d+\.\s+/, '')
+                      return <li key={itIdx}>{renderInlineMarkdown(clean)}</li>
+                    })}
+                  </ol>
+                )
+              }
+
+              return (
+                <ul key={idx} className="irpWikiUl">
+                  {items.map((it, itIdx) => {
+                    const isChecklist = it.includes('[ ]') || it.includes('[x]')
+                    const isChecked = it.includes('[x]')
+                    const clean = it.replace(/^[-*]\s*(\[[ x]\]\s*)?/, '')
+                    return (
+                      <li key={itIdx} className={isChecklist ? 'irpWikiCheckItem' : 'irpWikiListItem'}>
+                        {isChecklist && (
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            readOnly
+                            className="irpWikiCheckbox"
+                          />
+                        )}
+                        <span>{renderInlineMarkdown(clean)}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )
+            }
+
+            // Horizontal Rule
+            if (block.type === 'hr') {
+              return <hr key={idx} className="irpWikiHr" />
+            }
+
+            // Paragraph
+            return (
+              <p key={idx} className="irpWikiParagraph">
+                {renderInlineMarkdown(block.content)}
+              </p>
+            )
+          })}
+        </div>
       </div>
     )
   }

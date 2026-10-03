@@ -6008,17 +6008,18 @@ html[data-theme="light"] body {
   font-weight: 600;
 }
 
-/* 2-Column Main Studio Grid */
+/* 2-Column Main Studio Grid with Fixed Dimensions (No Shift on Toggle) */
 .irpStudioGrid {
   display: grid;
-  grid-template-columns: 1.05fr 1.35fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
   gap: 18px;
   align-items: start;
+  width: 100%;
 }
 
 @media (max-width: 1180px) {
   .irpStudioGrid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -6027,6 +6028,8 @@ html[data-theme="light"] body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-width: 0;
+  width: 100%;
 }
 
 .irpCardSection {
@@ -6240,6 +6243,8 @@ html[data-theme="light"] body {
 .irpRightCol {
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  width: 100%;
 }
 
 .irpOutputCard {
@@ -6250,7 +6255,9 @@ html[data-theme="light"] body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-height: 680px;
+  min-height: 720px;
+  width: 100%;
+  min-width: 0;
 }
 
 .irpOutputHeader {
@@ -6347,10 +6354,15 @@ html[data-theme="light"] body {
 }
 
 .irpOutputBody {
-  padding: 20px;
+  padding: 16px;
   flex: 1;
   overflow-y: auto;
-  max-height: 720px;
+  overflow-x: hidden;
+  max-height: 780px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  background: #111116;
 }
 
 .irpOutputFooter {
@@ -6416,142 +6428,343 @@ html[data-theme="light"] body {
   color: #cbd5e1;
 }
 
-/* Markdown Rendering Elements */
-.irpPreviewContent {
-  color: #e4e4e7;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.irpHeading1 {
-  font-size: 18px;
-  font-weight: 750;
-  color: #ffffff;
-  border-bottom: 1px solid #33333f;
-  padding-bottom: 8px;
-  margin: 0 0 14px;
-}
-
-.irpHeading2 {
-  font-size: 14.5px;
-  font-weight: 700;
-  color: #a5b4fc;
-  margin: 18px 0 8px;
-}
-
-.irpHeading3 {
-  font-size: 13px;
-  font-weight: 650;
-  color: #ffffff;
-  margin: 14px 0 6px;
-}
-
-.irpBlockquote {
-  margin: 10px 0;
-  padding: 8px 14px;
-  background: #181820;
-  border-left: 3px solid #818cf8;
-  color: #cbd5e1;
-  border-radius: 0 6px 6px 0;
-  font-size: 12px;
-}
-
-.irpCodeBlock {
-  background: #131317;
-  border: 1px solid #2e2f38;
+/* =========================================================================
+   AUTHENTIC AZURE DEVOPS WIKI LIGHT DOCUMENT VIEWER (.irpWikiPaper)
+   ========================================================================= */
+.irpWikiPaper {
+  background: #ffffff;
+  color: #1f2328;
   border-radius: 8px;
-  margin: 10px 0;
-  overflow: hidden;
+  border: 1px solid #d0d7de;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+  padding: 28px 36px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.irpCodeHeader {
+.irpWikiPaperHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e1e4e8;
+  padding-bottom: 12px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.irpWikiBreadcrumb {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
-  background: #181820;
-  border-bottom: 1px solid #2e2f38;
-  font-size: 10.5px;
-  font-family: ui-monospace, monospace;
-  color: #9ca3af;
-  text-transform: uppercase;
-}
-
-.irpCodeBlock pre {
-  margin: 0;
-  padding: 12px 14px;
-  overflow-x: auto;
-}
-
-.irpCodeBlock code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  color: #38bdf8;
+  color: #57606a;
 }
 
-.irpTableWrapper {
-  margin: 12px 0;
-  overflow-x: auto;
-  border: 1px solid #2e2f38;
-  border-radius: 8px;
+.irpWikiBreadcrumbOrg {
+  font-weight: 600;
+  color: #0078d4;
 }
 
-.irpTable {
+.irpWikiBreadcrumbSep {
+  color: #8c959f;
+}
+
+.irpWikiBreadcrumbFolder {
+  color: #57606a;
+}
+
+.irpWikiBreadcrumbPage {
+  font-weight: 600;
+  color: #24292f;
+}
+
+.irpWikiBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #0078d4;
+  background: #f0f7ff;
+  border: 1px solid #bfe1ff;
+  padding: 3px 8px;
+  border-radius: 12px;
+}
+
+.irpWikiBadgeDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #0078d4;
+}
+
+.irpWikiDocument {
+  min-width: 0;
   width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
+  line-height: 1.6;
 }
 
-.irpTable th {
-  background: #181820;
-  padding: 8px 12px;
-  text-align: left;
-  color: #cbd5e1;
-  font-weight: 650;
-  border-bottom: 1px solid #2e2f38;
-}
-
-.irpTable td {
-  padding: 7px 12px;
-  border-bottom: 1px solid #252530;
-  color: #e4e4e7;
-}
-
-.irpTable tr:last-child td {
-  border-bottom: none;
-}
-
-.irpList {
-  margin: 8px 0;
-  padding-left: 20px;
-}
-
-.irpChecklistItem {
-  list-style: none;
+/* Headings with Azure DevOps Blue Left Accent Bars */
+.irpWikiH1 {
   display: flex;
   align-items: center;
-  margin-left: -20px;
+  font-size: 22px;
+  font-weight: 700;
+  color: #0078d4;
+  margin: 22px 0 14px;
+  border-bottom: 1px solid #e1e4e8;
+  padding-bottom: 8px;
+  line-height: 1.35;
+}
+
+.irpWikiH1Accent {
+  width: 4px;
+  height: 22px;
+  background: #0078d4;
+  border-radius: 2px;
+  margin-right: 10px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.irpWikiH2 {
+  display: flex;
+  align-items: center;
+  font-size: 17px;
+  font-weight: 700;
+  color: #0078d4;
+  margin: 24px 0 10px;
+  border-bottom: 1px solid #eaecef;
+  padding-bottom: 6px;
+  line-height: 1.4;
+}
+
+.irpWikiH2Accent {
+  width: 3.5px;
+  height: 17px;
+  background: #0078d4;
+  border-radius: 2px;
+  margin-right: 8px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.irpWikiH3 {
+  font-size: 14.5px;
+  font-weight: 650;
+  color: #1e293b;
+  margin: 16px 0 6px;
+}
+
+/* Authentic Azure DevOps Wiki Tables */
+.irpWikiTableWrapper {
+  margin: 16px 0;
+  overflow-x: auto;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.irpWikiTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.irpWikiTable th {
+  background: #f6f8fa;
+  padding: 10px 14px;
+  text-align: left;
+  color: #24292f;
+  font-weight: 700;
+  border: 1px solid #d0d7de;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.irpWikiTable td {
+  padding: 9px 14px;
+  border: 1px solid #d0d7de;
+  color: #24292f;
+  background: #ffffff;
+  vertical-align: top;
+}
+
+.irpWikiTable tr:nth-child(even) td {
+  background: #fbfcfd;
+}
+
+.irpWikiTable td strong {
+  color: #0f172a;
+}
+
+/* Azure DevOps Wiki Code Blocks */
+.irpWikiCodeBlock {
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  margin: 16px 0;
+  overflow: hidden;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.irpWikiCodeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  background: #eaeef2;
+  border-bottom: 1px solid #d0d7de;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: #57606a;
+}
+
+.irpWikiCodeHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.irpWikiCodeIcon {
+  color: #0078d4;
+}
+
+.irpWikiCodeCopyBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #ffffff;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  color: #24292f;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.irpWikiCodeCopyBtn:hover {
+  background: #0078d4;
+  color: #ffffff;
+  border-color: #0078d4;
+}
+
+.irpWikiCodePre {
+  margin: 0;
+  padding: 12px 16px;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  color: #0969da;
+  background: #f6f8fa;
+  line-height: 1.5;
+}
+
+.irpWikiInlineCode {
+  background: #eff1f3;
+  color: #0969da;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  border: 1px solid #e1e4e8;
+}
+
+.irpWikiBold {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.irpWikiItalic {
+  font-style: italic;
+  color: #334155;
+}
+
+.irpWikiLink {
+  color: #0078d4;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.irpWikiLink:hover {
+  text-decoration: underline;
+  color: #005a9e;
+}
+
+.irpWikiQuote {
+  margin: 14px 0;
+  padding: 10px 16px;
+  background: #f8fafc;
+  border-left: 4px solid #0078d4;
+  color: #334155;
+  border-radius: 0 6px 6px 0;
+  font-size: 13px;
+}
+
+.irpWikiUl,
+.irpWikiOl {
+  margin: 10px 0 10px 24px;
+  padding: 0;
+  color: #24292f;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+
+.irpWikiListItem {
   margin-bottom: 4px;
 }
 
-.irpParagraph {
-  margin: 8px 0;
-  color: #d4d4d8;
+.irpWikiCheckItem {
+  list-style: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-left: -20px;
+  margin-bottom: 5px;
+  color: #24292f;
 }
 
+.irpWikiCheckbox {
+  margin-top: 4px;
+  accent-color: #0078d4;
+  cursor: default;
+}
+
+.irpWikiParagraph {
+  margin: 10px 0;
+  line-height: 1.6;
+  color: #24292f;
+  font-size: 13.5px;
+}
+
+.irpWikiHr {
+  border: none;
+  border-top: 1px solid #e1e4e8;
+  margin: 22px 0;
+}
+
+/* Raw Editor Textarea */
 .irpRawTextarea {
   width: 100%;
-  height: 600px;
+  height: 640px;
   background: #131317;
   border: 1px solid #2e2f38;
   border-radius: 8px;
-  padding: 14px;
+  padding: 16px;
   color: #38bdf8;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.55;
   outline: none;
   resize: vertical;
+  box-sizing: border-box;
 }
 
 /* Light Theme Support */
@@ -6566,18 +6779,18 @@ html[data-theme="light"] body {
 [data-theme="light"] .irpHeaderTitle,
 [data-theme="light"] .irpCardHeaderTitle,
 [data-theme="light"] .irpOutputTitle,
-[data-theme="light"] .irpHeading1,
-[data-theme="light"] .irpHeading3,
 [data-theme="light"] .irpEmptyState h3 {
   color: #0f172a;
 }
 
 [data-theme="light"] .irpOutputHeader,
-[data-theme="light"] .irpOutputFooter,
-[data-theme="light"] .irpTable th,
-[data-theme="light"] .irpCodeHeader {
+[data-theme="light"] .irpOutputFooter {
   background: #f8fafc;
   border-color: #e2e8f0;
+}
+
+[data-theme="light"] .irpOutputBody {
+  background: #f1f5f9;
 }
 
 [data-theme="light"] .irpInput,
@@ -6605,27 +6818,10 @@ html[data-theme="light"] body {
   color: #4f46e5;
 }
 
-[data-theme="light"] .irpRawTextarea,
-[data-theme="light"] .irpCodeBlock {
-  background: #f8fafc;
-  border-color: #e2e8f0;
+[data-theme="light"] .irpRawTextarea {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
 }
 
-[data-theme="light"] .irpTable td {
-  border-color: #f1f5f9;
-  color: #334155;
-}
-
-[data-theme="light"] .irpPreviewContent {
-  color: #1e293b;
-}
-
-[data-theme="light"] .irpParagraph {
-  color: #334155;
-}
-
-[data-theme="light"] .irpBlockquote {
-  background: #f1f5f9;
-  color: #334155;
-}
 
