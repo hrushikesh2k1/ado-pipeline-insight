@@ -25,8 +25,9 @@ def test_irp_service_heuristic_generation():
     assert res["suggested_wiki_path"] == "/Incident-Response-Plans/VPN-Tunnel-Disconnected"
     assert "VPN Tunnel Disconnected" in res["markdown_content"]
     assert "Sev-1" in res["markdown_content"]
-    assert "vnet-gateway-prod-east" in res["markdown_content"]
-    assert "az network vnet-gateway reset" in res["markdown_content"]
+    assert "Alert Details" in res["markdown_content"]
+    assert "Testing Scenarios" in res["markdown_content"]
+    assert "Alert Enhancement" in res["markdown_content"]
     assert res["alert_name"] == "VPN Tunnel Disconnected"
 
 

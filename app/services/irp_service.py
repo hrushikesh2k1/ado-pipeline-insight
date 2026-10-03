@@ -10,70 +10,113 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-IRP_SYSTEM_PROMPT = """You are a Principal Cloud Site Reliability Engineer (SRE) and Incident Commander specializing in Azure, Kubernetes, networking, and enterprise systems.
-Your task is to generate a comprehensive, highly technical, actionable, and production-ready Incident Response Plan (IRP) for a production alert.
+IRP_SYSTEM_PROMPT = """You are a Principal Cloud Site Reliability Engineer (SRE) and Incident Commander specializing in Azure, ARM templates, and enterprise incident response plans.
+Your task is to generate an Incident Response Plan (IRP) in GitHub-flavored Markdown following the EXACT organization standard below.
 
-Formatting Guidelines:
-- Return pure GitHub-flavored Markdown.
-- Use explicit, actionable Azure CLI (`az ...`), PowerShell (`Get-Az...`, `Test-NetConnection`), and KQL (Azure Monitor / Log Analytics) queries.
-- Do NOT invent fake URLs or placeholders like `<fill_this_in>` wherever standard Azure syntax applies.
-- Include concrete diagnostic commands, precise recovery steps, safe rollback guidelines, and clear post-incident verification tests.
+MANDATORY STRUCTURE & SECTIONS TO INCLUDE:
 
-Standard IRP Structure:
-# Incident Response Plan: [Alert Name]
+# [Alert Name]
 
-> **Alert Summary**: [1-2 sentences on what this alert detects and immediate severity]
-> **Severity**: [Sev-1 / Sev-2 / Sev-3] | **Target Resource**: [Resource Name / Type] | **Owning Team**: [Team Name] | **Environment**: [Environment]
+# Alert Details
 
----
+| **Alert** | [Alert Name] |
+| --- | --- |
+| **Description** | *This alert is designed to trigger when/if [Condition / Symptoms], deployed in [Environment]. It is a critical issue when this occurs and the system cannot be accessible.* |
+| **Severity** | [Critical / Error / Warning / Info] |
+| **Source** | [Log / Metric] |
+| **Root Cause** | - **Case 1 : ** [Primary Failure Mode 1] - **Case 2 : ** [Primary Failure Mode 2] - **Case 3 : ** [Primary Failure Mode 3] - **Case 4 : ** [Primary Failure Mode 4] |
+| **Product** | [Product / Component Name, e.g. Common / Infrastructure] |
 
-## 1. Incident Overview & Impact
-- **Trigger Logic**: [Exact metric threshold and duration]
-- **User / Business Impact**: [User-facing symptoms, affected dependencies, SLA risk]
-- **Likely Root Causes**: [Bulleted list of 3-5 standard failure modes]
+# Prerequisites
 
-## 2. Immediate Triage & Diagnostics (First 5 Minutes)
-Checklist of immediate verification actions:
-- [ ] **Step 1: Authenticity & Health Check**
-```powershell
-# PowerShell verification command
-```
-- [ ] **Step 2: Metrics & Active Error Logs Inspection**
-```bash
-# Azure CLI / KQL query
-```
+- Access Packages:
+  - Commercial: https://myaccess.microsoft.com/@hexsig.onmicrosoft.com#/access-packages
+  - Gov Cloud: https://myaccess.microsoft.us/@HexSI.onmicrosoft.com#/access-packages
+- Required Azure IAM Roles: Network Contributor / Reader on Target Resource Group.
 
-## 3. Detailed Troubleshooting Workflow
-### Phase A: Connectivity, Gateway & Network Layer
-[Specific diagnostic steps, CLI commands, and expected outputs]
+# Remediation Steps
 
-### Phase B: Service, Compute & Dependencies Layer
-[Specific logs inspection, state checks, and configuration validation]
+| **STEPS** | **ACTION** | **ADDITIONAL COMMENTS** |
+| --- | --- | --- |
+| **Check **the connection / resource status | 1. Review the **Query Result** and check the **Error Details**.<br>2. Check if the root cause indicates transient glitches, configuration drift, or host events.<br>3. Run Azure CLI / PowerShell command to verify live status: `az ...` or `Get-Az...` | Ref : |
+| **Check **the resource health | 1. Navigate to Azure portal -> Resource Health blade.<br>2. Verify status is **Available**.<br>3. If Unavailable, inspect platform maintenance logs. | |
+| **Case 1**: [Primary Failure Mode 1] | [Detailed actionable remediation steps, CLI/PowerShell commands] | |
+| **Case 2**: [Primary Failure Mode 2] | [Detailed actionable remediation steps, CLI/PowerShell commands] | |
+| **Case 3**: [Primary Failure Mode 3] | [Detailed actionable remediation steps, CLI/PowerShell commands] | |
+| **Case 4**: [Primary Failure Mode 4] | [Detailed actionable remediation steps, CLI/PowerShell commands] | |
+| Please find the KUSTO queries for the respective Causes | [Kusto Analysis - KQL queries for investigating alert logs] | |
+| Health Check | Repeat Step 1 & 2 to ensure resource status is Healthy / Available. | |
+| **Confirm **that the alert has stopped firing in CNC / Monitoring | Confirm alert resolution in Azure Monitor / CNC. | |
 
-## 4. Mitigation & Remediation Procedures
-### Option 1: Fast Recovery / Reset (Preferred)
-```powershell
-# Precise reset / restart / reconnect commands
-```
-### Option 2: Failover & Secondary Route Activation
-[Steps to redirect traffic or activate secondary backup paths]
-### Option 3: Hard Recovery / Resource Recreation
-[Emergency procedure if standard reset fails]
+## Testing Scenarios
 
-## 5. Post-Incident Validation & Health Checks
-- [ ] Validation Check 1 (e.g., End-to-end ping, throughput, connection status)
-- [ ] Validation Check 2 (e.g., Downstream application health check probes)
-- [ ] Validation Check 3 (e.g., Azure Monitor Alert auto-resolves to Healthy)
+| **Scenario** | **Steps** |
+| --- | --- |
+| **[Test Scenario 1 (e.g. Deletion / Reset)]** | 1. Via Azure Portal: Navigate to resource -> Settings -> Action -> Confirm.<br>2. Via PowerShell: `Remove-Az...` or `Restart-Az...`<br>3. Via Azure CLI: `az ...` |
+| **[Test Scenario 2 (e.g. Config Mismatch)]** | 1. Navigate to resource -> Configuration.<br>2. Edit setting to simulate mismatch.<br>3. Verify alert triggers within latency window. |
 
-## 6. Escalation Matrix & Contacts
-| Tier | Role / Team | Contact Method | SLA / Response Time |
-| :--- | :--- | :--- | :--- |
-| **Tier 1** | Primary On-Call Engineer | PagerDuty / On-Call Channel | 5 mins |
-| **Tier 2** | Infrastructure / Network SME | Escalation Hotline / Teams | 15 mins |
-| **Tier 3** | Cloud Provider Support (Azure) | Azure Portal Severity-A Ticket | 30 mins |
+## Overview
 
-## 7. Preventive Measures & Follow-Up
-- Post-incident review action items (monitoring threshold tuning, Bicep/Terraform updates, redundancy improvements).
+*This alert is designed to trigger when/if [Detailed trigger statement]. It is a critical operational issue when this occurs.*
+
+## Alert Properties
+
+|  |  |
+| --- | --- |
+| **Severity:** | * [x] Critical * [ ] Error * [ ] Warning * [ ] Info |
+| **Signal Type:** | * [x] Log * [ ] Metric |
+
+## Remediation Overview
+
+## Investigation Steps
+
+- Access Packages:
+  - Commercial: https://myaccess.microsoft.com/@hexsig.onmicrosoft.com#/access-packages
+  - Gov Cloud: https://myaccess.microsoft.us/@HexSI.onmicrosoft.com#/access-packages
+- Step-by-step diagnostic workflow:
+  1. Navigate to the Azure Portal.
+  2. Locate the resource group (Naming convention: `<location>-<resourceType>-<customerProjectName>`).
+  3. Run diagnostic commands:
+     ```powershell
+     # Diagnostic verification command
+     Get-AzResource -Name "<ResourceName>" -ResourceGroupName "<ResourceGroupName>"
+     ```
+  4. Inspect live metrics & diagnostic logs in Log Analytics.
+
+## RCA & Mitigation
+
+| **Scenario** | **Application Impact** | **Alert Latency (min)** | **Related alerts** | **Response Plan** |
+| --- | --- | --- | --- | --- |
+| **[Scenario 1]** | Users unable to connect; risk of SLA breach. | [X] mins | - Critical: [Alert Name] | - [Response Guide Link / Steps] |
+| **[Scenario 2]** | Partial service degradation / latency spike. | [X] mins | - Warning: [Alert Name] | - [Troubleshooting Guide Link / Steps] |
+
+## Example Story Submissions
+
+- [User Story 123456](https://dev.azure.com/org/proj/_workitems/edit/123456): Critical - [Alert Name]
+
+## References
+
+- [Official Azure Documentation](https://learn.microsoft.com/en-us/azure/)
+
+## Alert Enhancement
+
+- Enhanced result set mapping:
+
+| **Field Name** | **Description** |
+| --- | --- |
+| [Field 1 from Output Columns] | [Detailed description of Field 1] |
+| [Field 2 from Output Columns] | [Detailed description of Field 2] |
+| [Field 3 from Output Columns] | [Detailed description of Field 3] |
+
+## Lessons learned
+
+- [Key post-incident insight 1]
+- [Key post-incident insight 2]
+
+CRITICAL RULES:
+1. Ground all commands in official Azure documentation CLI (`az ...`), PowerShell (`Get-Az...`), and KQL queries.
+2. Fill every field from the provided Alert Name, CVRD, Alert Output Columns, ARM Template Context, and Alert Details.
+3. Return pure Markdown only.
 """
 
 
@@ -227,84 +270,112 @@ class IrpService:
         team = data["owning_team"]
         env = data["environment"]
         trigger = data["trigger_condition"]
+        cvrd = data.get("cvrd") or "CVRD-OPS-001"
+        cols = data.get("alert_output_columns") or "TimeGenerated, ResourceGroup, GatewayName, ConnectionState, RemoteIP, ErrorDetails"
+        details = data.get("alert_details") or f"This alert is designed to trigger when/if {name} occurs on {resource}, deployed in {env}."
 
-        return f"""# Incident Response Plan: {name}
+        # Parse column list for Alert Enhancement table
+        col_rows = []
+        for col in [c.strip() for c in cols.split(",") if c.strip()]:
+            col_rows.append(f"| {col} | Telemetry metric / log property captured during failure event. |")
+        col_table = "\n".join(col_rows) if col_rows else "| FieldName | Description of the field |"
 
-> **Alert Summary**: {name} has triggered for `{resource}` in {env}. Immediate triage is required to avoid service downtime.
-> **Severity**: {sev} | **Target Resource**: {resource} | **Owning Team**: {team} | **Environment**: {env}
+        return f"""# {name}
 
----
+# Alert Details
 
-## 1. Incident Overview & Impact
-- **Trigger Logic**: `{trigger}`
-- **User / Business Impact**: Disruptions or latency in user workflows relying on `{resource}`. Risk of SLA breaches.
-- **Likely Root Causes**:
-  - Transient network latency or network route peering outage.
-  - Resource saturation (CPU/Memory/IOPS exhaustion or connection limits).
-  - Upstream certificate expiration, IPsec re-key failure, or firewall policy changes.
-  - Infrastructure maintenance or hardware node failover in Azure datacenter.
+| **Alert** | {name} |
+| --- | --- |
+| **Description** | *{details}* |
+| **Severity** | {sev} |
+| **Source** | Log |
+| **Root Cause** | - **Case 1 : ** Deleted / Unprovisioned Connection - **Case 2 : ** Shared Key (PSK) or Policy Mismatch - **Case 3 : ** Azure Platform / Host Maintenance - **Case 4 : ** Customer On-Premises Device Unreachable |
+| **Product** | Common |
 
-## 2. Immediate Triage & Diagnostics (First 5 Minutes)
-Checklist of immediate verification actions:
-- [ ] **Step 1: Check Resource & Alert Status**
-```powershell
-# Verify current status in Azure
-az resource show --name "{resource}" --resource-type "Microsoft.Network/virtualNetworkGateways" --output table
-```
-- [ ] **Step 2: Inspect Live Diagnostic Logs**
-```kql
-// Query Log Analytics for recent disconnect / error events
-AzureDiagnostics
-| where Resource == "{resource}"
-| where TimeGenerated >= ago(30m)
-| where Level in ("Error", "Critical", "Warning")
-| project TimeGenerated, OperationName, Message, Level
-| order by TimeGenerated desc
-```
+# Prerequisites
 
-## 3. Detailed Troubleshooting Workflow
-### Phase A: Connectivity & Health Validation
-1. Verify network path reachability and DNS resolution.
-2. Confirm that dependent services and security group rules allow traffic on required ports.
-```bash
-# Network reachability test
-nc -zv -w 5 <target-endpoint> 443
-```
+- Access Packages:
+  - Commercial: [Commercial Access Package](https://myaccess.microsoft.com/@hexsig.onmicrosoft.com#/access-packages)
+  - Gov Cloud: [Gov Cloud Access Package](https://myaccess.microsoft.us/@HexSI.onmicrosoft.com#/access-packages)
+- Required Azure IAM Roles: Network Contributor / Reader on Target Resource Group.
 
-### Phase B: Service Logs & Gateway Health
-1. Check resource health blade in Azure Portal (`Resource Health` -> `Health History`).
-2. Verify CPU, Memory, and Active Connection metrics in Azure Monitor.
+# Remediation Steps
 
-## 4. Mitigation & Remediation Procedures
-### Option 1: Fast Recovery / Connection Reset (Preferred)
-```powershell
-# Reset Azure connection / gateway instance
-az network vnet-gateway reset --name "{resource}" --resource-group "rg-{env.lower()}"
-```
-### Option 2: Traffic Rerouting & Secondary Path Activation
-1. If secondary redundant link is provisioned, increase BGP route weight or update route table to direct traffic to standby gateway.
-2. Verify failover route propagation across all Virtual Networks.
+| **STEPS** | **ACTION** | **ADDITIONAL COMMENTS** |
+| --- | --- | --- |
+| **Check **the connection status | 1. Review the **Query Result** and check the **Error Details**.<br>2. Check if the root cause indicates transient glitches, configuration drift, or host events.<br>3. Verify connection state in Azure CLI:<br>`az network vpn-connection show --name "<ConnectionName>" --resource-group "<ResourceGroupName>" --query "{{connectionStatus:connectionStatus, provisioningState:provisioningState}}" -o tsv` | Ref : |
+| **Check **the resource health | 1. Locate the resource group associated with `{resource}`.<br>2. Under **Help**, click on **Resource health**.<br>3. Ensure that the resource health is **Available**.<br>4. If Unavailable, inspect platform maintenance logs. | |
+| **Case 1**: Deleted / Unprovisioned Connection | Recreate or restore the connection resource in Azure Portal -> Settings -> Connections -> Add, or via Azure CLI / Terraform. | |
+| **Case 2**: Shared Key (PSK) / Policy Mismatch | Verify that the pre-shared key (PSK) and IPsec/IKE policies configured in Azure match the customer on-premises device settings. | |
+| **Case 3**: Azure Host / Platform Maintenance | This is an Azure-initiated event. Monitor the health status every 5 minutes until maintenance completes and connection transitions back to Connected. | |
+| **Case 4**: Customer On-Premises Device Unreachable | 1. Confirm Azure-side config is correct (public IP on Local Network Gateway matches on-prem).<br>2. Confirm UDP 500 (IKE) and UDP 4500 (NAT-T) are open inbound.<br>3. Pull `IKEDiagnosticLog` in Log Analytics.<br>4. Escalate to Customer On-Call Network POC. | |
+| Please find the KUSTO queries for the respective Causes | [Kusto Analysis - KQL queries for investigating alert logs] | |
+| Health Check | Repeat Step 1 & 2 to ensure connection status is **Connected** and provisioning state is **Succeeded**. | |
+| **Confirm **that the alert has stopped firing in CNC / Monitoring | Confirm alert resolution in Azure Monitor / CNC. | |
 
-### Option 3: Hard Service Restart / Failover
-1. Escalate to Cloud Infrastructure SME if connection does not recover after reset.
-2. Initiate failover to paired Azure region if disaster recovery criteria are met.
+## Testing Scenarios
 
-## 5. Post-Incident Validation & Health Checks
-- [ ] Continuous ping / synthetic probe passes with 0% packet loss for 10 minutes.
-- [ ] Downstream dependent applications confirm successful connectivity.
-- [ ] Azure Monitor Alert status transitions back to **Resolved / Healthy**.
+| **Scenario** | **Steps** |
+| --- | --- |
+| **Simulating Connection Disconnect / Delete** | 1. Via Azure Portal: Navigate to target gateway -> Settings -> Connections -> Delete.<br>2. Via PowerShell:<br>`Remove-AzVirtualNetworkGatewayConnection -ResourceGroupName "<ResourceGroup>" -VirtualNetworkGatewayName "<GatewayName>" -Name "<ConnectionName>"`<br>3. Via Azure CLI:<br>`az network vnet-gateway connection delete -g "<ResourceGroup>" -n "<GatewayName>" --connection-name "<ConnectionName>"` |
+| **Simulating Shared Key (PSK) Mismatch** | 1. Navigate to target connection -> Settings -> Authentication Type.<br>2. Edit Shared Key (PSK) to simulate mismatch.<br>3. Verify alert triggers within expected latency window. |
 
-## 6. Escalation Matrix & Contacts
-| Tier | Role / Team | Contact Method | SLA / Response Time |
-| :--- | :--- | :--- | :--- |
-| **Tier 1** | Primary On-Call Engineer | PagerDuty / Teams (`#ops-incidents`) | 5 mins |
-| **Tier 2** | {team} SME | Phone / Escalation Rota | 15 mins |
-| **Tier 3** | Microsoft Premier Azure Support | Azure Portal Severity-A Case | 30 mins |
+## Overview
 
-## 7. Preventive Measures & Follow-Up
-- Audit alarm thresholds to eliminate transient false positives.
-- Ensure automated health probes and dual-redundant paths are active.
-- Schedule Post-Mortem review within 48 hours.
+*{details}*
+
+## Alert Properties
+
+|  |  |
+| --- | --- |
+| **Severity:** | * [x] Critical * [ ] Error * [ ] Warning * [ ] Info |
+| **Signal Type:** | * [x] Log * [ ] Metric |
+
+## Remediation Overview
+
+## Investigation Steps
+
+- Access Packages:
+  - Commercial: [Commercial Access Package](https://myaccess.microsoft.com/@hexsig.onmicrosoft.com#/access-packages)
+  - Gov Cloud: [Gov Cloud Access Package](https://myaccess.microsoft.us/@HexSI.onmicrosoft.com#/access-packages)
+- Check the resource status:
+  1. Navigate to the Azure portal.
+  2. Locate the resource group associated with `{resource}`.
+  3. Under resources, navigate to `{resource}`.
+  4. Under Settings, verify connection state is **Connected** or **Available**.
+  5. Run PowerShell command:
+     ```powershell
+     Get-AzResource -Name "{resource}" -ResourceGroupName "<ResourceGroupName>"
+     ```
+  6. If status is Unknown or Disconnected, execute response plans in **RCA & Mitigation**.
+
+## RCA & Mitigation
+
+| **Scenario** | **Application Impact** | **Alert Latency (min)** | **Related alerts** | **Response Plan** |
+| --- | --- | --- | --- | --- |
+| **Deleted / Missing Connection** | Users unable to access applications; risk of SLA breach. | 4 mins | - Critical: {name} | - [Adding a connection via Virtual network gateway] |
+| **Shared Key (PSK) Mismatch** | Connection status drops to Unknown; tunnel blocked. | 6 mins | - Critical: {name} due to config change | - [Troubleshooting Virtual network gateway connections] |
+
+## Example Story Submissions
+
+- [User Story 123456](https://dev.azure.com/org/proj/_workitems/edit/123456): Critical - {name} ({cvrd})
+
+## References
+
+- [Troubleshoot Azure Resources](https://learn.microsoft.com/en-us/azure/)
+
+## Alert Enhancement
+
+- Enhanced result set mapping:
+
+| **Field Name** | **Description** |
+| --- | --- |
+{col_table}
+
+## Lessons learned
+
+- In cases where a tunnel is disconnected due to configuration testing, Azure will make continuous attempts to re-establish connection once settings match.
+- The Shared key (PSK) and traffic selectors must match symmetrically on both sides to establish connection.
 """
 
     def publish_irp(
