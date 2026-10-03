@@ -1,8 +1,8 @@
 import React from 'react'
-import { Activity, GitPullRequest, FolderKanban, Puzzle, Rocket } from 'lucide-react'
+import { Activity, GitPullRequest, FolderKanban, Puzzle, Rocket, ShieldAlert } from 'lucide-react'
 import { usePlugins } from '../context/PluginContext'
 
-export type NavPage = 'pipelines' | 'pull-requests' | 'sprints' | 'releases'
+export type NavPage = 'pipelines' | 'pull-requests' | 'sprints' | 'releases' | 'irp'
 
 interface NavSidebarProps {
   activePage: NavPage
@@ -65,6 +65,19 @@ export const NavSidebar: React.FC<NavSidebarProps> = ({ activePage, onSelectPage
             <Rocket size={20} strokeWidth={2.2} />
           </div>
           <span className="navTooltip">Release Readiness</span>
+        </button>
+
+        <button
+          type="button"
+          className={`navSidebarBtn ${activePage === 'irp' ? 'active' : ''}`}
+          onClick={() => onSelectPage('irp')}
+          aria-label="Incident Response & Wiki Hub"
+        >
+          <div className="navSidebarActiveIndicator" />
+          <div className="navIconWrapper">
+            <ShieldAlert size={20} strokeWidth={2.2} />
+          </div>
+          <span className="navTooltip">Incident Response & IRPs</span>
         </button>
       </div>
 

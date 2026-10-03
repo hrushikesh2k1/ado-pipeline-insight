@@ -1,4 +1,31 @@
-import type { Options, Recommendation, Runs, Summary, Trends, RunAnalysis, AdoConnection, UserProfile, AdoRepository, AdoPullRequest, PullRequestReviewResponse, AdoTeam, AdoIteration, AdoSprintBoardResponse, MilestoneAiSummaryResponse, ReleaseBranchCandidate, ReleaseDefinition, ReleaseDefinitionCreate, ReleaseScorecard, ReleaseScorecardHistoryItem } from '../types/api'
+import type {
+  Options,
+  Recommendation,
+  Runs,
+  Summary,
+  Trends,
+  RunAnalysis,
+  AdoConnection,
+  UserProfile,
+  AdoRepository,
+  AdoPullRequest,
+  PullRequestReviewResponse,
+  AdoTeam,
+  AdoIteration,
+  AdoSprintBoardResponse,
+  MilestoneAiSummaryResponse,
+  ReleaseBranchCandidate,
+  ReleaseDefinition,
+  ReleaseDefinitionCreate,
+  ReleaseScorecard,
+  ReleaseScorecardHistoryItem,
+  AdoWiki,
+  AdoWikiPage,
+  IrpGenerateRequest,
+  IrpGenerateResponse,
+  IrpPublishRequest,
+  IrpPublishResponse,
+} from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 async function request<T>(path:string, init?:RequestInit):Promise<T>{
@@ -158,6 +185,37 @@ export const api = {
   },
   getReleaseHistory: (releaseId: string, limit = 20) => {
     return request<ReleaseScorecardHistoryItem[]>(`/api/v1/releases/${releaseId}/history?limit=${limit}`)
+  },
+  listWikis: (organization: string, project: string, pat?: string) => {
+    const p = new URLSearchParams({ organization, project })
+    if (pat) p.set('pat', pat)
+    return request<AdoWiki[]>(`/api/v1/wiki/list?${p.toString()}`)
+  },
+  getWikiPages: (organization: string, project: string, wikiId: string, path = '/', pat?: string) => {
+    const p = new URLSearchParams({ organization, project, wiki_id: wikiId, path })
+    if (pat) p.set('pat', pat)
+    return request<AdoWikiPage[]>(`/api/v1/wiki/pages?${p.toString()}`)
+  },
+  getWikiPageContent: (organization: string, project: string, wikiId: string, path: string, pat?: string) => {
+    const p = new URLSearchParams({ organization, project, wiki_id: wikiId, path })
+    if (pat) p.set('pat', pat)
+    return request<AdoWikiPage>(`/api/v1/wiki/page?${p.toString()}`)
+  },
+  generateIrp: (payload: IrpGenerateRequest) => {
+    return request<IrpGenerateResponse>('/api/v1/irp/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  },
+  publishIrp: (payload: IrpPublishRequest, pat?: string) => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (pat) headers['X-ADO-PAT'] = pat
+    return request<IrpPublishResponse>('/api/v1/irp/publish', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    })
   },
 }
 

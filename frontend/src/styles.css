@@ -5903,3 +5903,795 @@ html[data-theme="light"] body {
 [data-theme="light"] .loginInput{background:#fafafa;border-color:#d4d4d8}
 [data-theme="light"] .loginInput input{color:#18181b}
 [data-theme="light"] .loginError{background:#fef2f2;border-color:#fecaca;color:#b91c1c}
+
+/* ==========================================================================
+   INCIDENT RESPONSE & WIKI IRP HUB STYLES
+   ========================================================================== */
+
+.irpPageContainer {
+  max-width: 1500px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 26px 30px 50px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.irpHeaderBanner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 22px;
+  background: #202026;
+  border: 1px solid #2e2f38;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.irpHeaderLeft {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.irpHeaderIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(0, 251, 251, 0.12);
+  border: 1px solid rgba(0, 251, 251, 0.3);
+  display: grid;
+  place-items: center;
+}
+
+.irpHeaderLeft h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.irpHeaderLeft p {
+  margin: 3px 0 0;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.irpTabSwitch {
+  display: flex;
+  align-items: center;
+  background: #141418;
+  border: 1px solid #2e2f38;
+  border-radius: 24px;
+  padding: 3px;
+  gap: 4px;
+}
+
+.irpTabBtn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 16px;
+  border-radius: 20px;
+  background: transparent;
+  border: none;
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.irpTabBtn:hover {
+  color: #ffffff;
+}
+
+.irpTabBtn.active {
+  background: rgba(0, 251, 251, 0.12);
+  color: #00fbfb;
+  box-shadow: 0 0 10px rgba(0, 251, 251, 0.2);
+}
+
+/* Generator 2-Column Grid */
+.irpGeneratorGrid {
+  display: grid;
+  grid-template-columns: 1.05fr 1.35fr;
+  gap: 18px;
+  align-items: stretch;
+}
+
+@media (max-width: 1200px) {
+  .irpGeneratorGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.irpConfigCard,
+.irpOutputCard {
+  background: #202026;
+  border: 1px solid #2e2f38;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.irpCardHead {
+  padding: 14px 20px;
+  background: #1a1a20;
+  border-bottom: 1px solid #2e2f38;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.irpCardHeadTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.irpCardHeadTitle h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #f4f4f5;
+}
+
+.irpBadgeAi {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: rgba(0, 251, 251, 0.12);
+  color: #00fbfb;
+  border: 1px solid rgba(0, 251, 251, 0.3);
+}
+
+.irpCardBody {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+}
+
+/* Preset Pills */
+.irpPresetsWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.irpPresetPill {
+  background: #18181f;
+  border: 1px solid #2f2f3c;
+  color: #a1a1aa;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.irpPresetPill:hover {
+  background: #272733;
+  color: #ffffff;
+  border-color: #4a4d5a;
+}
+
+.irpPresetPill.active {
+  background: rgba(0, 251, 251, 0.12);
+  border-color: rgba(0, 251, 251, 0.4);
+  color: #00fbfb;
+  font-weight: 600;
+}
+
+.irpFormGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.irpFormRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.irpLabel {
+  font-size: 11px;
+  font-weight: 700;
+  color: #a1a1aa;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.irpInput,
+.irpSelect,
+.irpTextarea {
+  background: #141418;
+  border: 1px solid #33333d;
+  border-radius: 6px;
+  padding: 8px 12px;
+  color: #ffffff;
+  font-size: 12.5px;
+  outline: none;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.irpInput:focus,
+.irpSelect:focus,
+.irpTextarea:focus {
+  border-color: #00fbfb;
+  box-shadow: 0 0 0 2px rgba(0, 251, 251, 0.2);
+}
+
+.irpPrimaryBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: #00fbfb;
+  color: #000000;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 6px;
+  transition: all 0.15s ease;
+}
+
+.irpPrimaryBtn:hover:not(:disabled) {
+  background: #38ffff;
+  box-shadow: 0 0 14px rgba(0, 251, 251, 0.4);
+}
+
+.irpPrimaryBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Output Card Area */
+.irpCardHeadActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.irpViewToggle {
+  display: flex;
+  background: #141418;
+  border: 1px solid #2e2f38;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.irpViewBtn {
+  background: transparent;
+  border: none;
+  color: #a1a1aa;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.irpViewBtn.active {
+  background: #2a2a35;
+  color: #00fbfb;
+}
+
+.irpSecondaryBtn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: #272733;
+  border: 1px solid #3e3e4f;
+  color: #e4e4e7;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.irpSecondaryBtn:hover:not(:disabled) {
+  background: #333342;
+  color: #ffffff;
+}
+
+.irpOutputBody {
+  min-height: 480px;
+  position: relative;
+}
+
+.irpEmptyState,
+.irpLoadingState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+  gap: 10px;
+  color: #a1a1aa;
+}
+
+.irpEmptyIconWrap {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: #18181f;
+  border: 1px solid #2c2c38;
+  display: grid;
+  place-items: center;
+  margin-bottom: 6px;
+}
+
+.irpEmptyState h4,
+.irpLoadingState h4 {
+  margin: 0;
+  font-size: 15px;
+  color: #f4f4f5;
+  font-weight: 700;
+}
+
+.irpEmptyState p,
+.irpLoadingState p {
+  margin: 0;
+  font-size: 12px;
+  max-width: 380px;
+  line-height: 1.45;
+}
+
+.irpRawEditor {
+  width: 100%;
+  height: 380px;
+  background: #121216;
+  border: 1px solid #2e2f38;
+  border-radius: 8px;
+  padding: 14px;
+  color: #38bdf8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  outline: none;
+  resize: vertical;
+}
+
+.irpMarkdownPreview {
+  max-height: 420px;
+  overflow-y: auto;
+  background: #121216;
+  border: 1px solid #2e2f38;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.irpPreWrap {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #e4e4e7;
+}
+
+/* Publishing Panel */
+.irpPublishPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: #17171e;
+  border: 1px solid #2d2d3a;
+  border-radius: 8px;
+  margin-top: 10px;
+}
+
+.irpPublishPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.irpPublishTitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #00fbfb;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.irpWikiTargetBadge {
+  font-size: 11px;
+  color: #9ca3af;
+  background: #202028;
+  border: 1px solid #333342;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.irpPublishRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.irpPublishPathField {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  background: #111115;
+  border: 1px solid #333340;
+  border-radius: 6px;
+  padding: 2px 10px;
+}
+
+.irpPublishPathField label {
+  font-size: 11px;
+  color: #a1a1aa;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.irpPublishInput {
+  background: transparent;
+  border: none;
+  color: #38bdf8;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  width: 100%;
+  padding: 6px 0;
+  outline: none;
+}
+
+.irpPublishBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #0078d4;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  white-space: nowrap;
+}
+
+.irpPublishBtn:hover:not(:disabled) {
+  background: #106ebe;
+}
+
+.irpPublishBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.irpCheckboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  cursor: pointer;
+}
+
+.irpCheckboxLabel code {
+  color: #00fbfb;
+  font-family: monospace;
+}
+
+.irpSuccessBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.irpErrorBanner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+/* Explorer Layout */
+.irpExplorerLayout {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 18px;
+  min-height: 580px;
+}
+
+.irpExplorerSidebar {
+  background: #202026;
+  border: 1px solid #2e2f38;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.irpExplorerSidebarHeader {
+  padding: 12px 14px;
+  background: #1a1a20;
+  border-bottom: 1px solid #2e2f38;
+}
+
+.irpSearchWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.irpSearchIcon {
+  position: absolute;
+  left: 10px;
+  color: #71717a;
+  pointer-events: none;
+}
+
+.irpSearchInput {
+  width: 100%;
+  background: #121216;
+  border: 1px solid #2f2f3c;
+  border-radius: 6px;
+  padding: 6px 10px 6px 30px;
+  color: #ffffff;
+  font-size: 12px;
+  outline: none;
+}
+
+.irpSearchInput:focus {
+  border-color: #00fbfb;
+}
+
+.irpExplorerPageList {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.irpPageItemBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #cbd5e1;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.irpPageItemBtn:hover {
+  background: #262633;
+  color: #ffffff;
+}
+
+.irpPageItemBtn.active {
+  background: rgba(0, 251, 251, 0.12);
+  border-color: rgba(0, 251, 251, 0.3);
+  color: #00fbfb;
+  font-weight: 600;
+}
+
+.irpPageItemIcon {
+  color: #71717a;
+  flex-shrink: 0;
+}
+
+.irpPageItemBtn.active .irpPageItemIcon {
+  color: #00fbfb;
+}
+
+.irpPageItemText {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.irpPageItemArrow {
+  color: #71717a;
+  flex-shrink: 0;
+}
+
+.irpListLoading,
+.irpListEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 30px 10px;
+  color: #71717a;
+  font-size: 12px;
+  text-align: center;
+}
+
+.irpExplorerContent {
+  background: #202026;
+  border: 1px solid #2e2f38;
+  border-radius: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.irpExplorerContentHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: #1a1a20;
+  border-bottom: 1px solid #2e2f38;
+}
+
+.irpContentPathWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.irpContentPath {
+  font-size: 13px;
+  font-weight: 600;
+  color: #ffffff;
+  font-family: ui-monospace, monospace;
+}
+
+.irpExplorerBody {
+  padding: 18px;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.irpExplorerPre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: #e4e4e7;
+}
+
+/* Light Theme Overrides for IRP */
+[data-theme="light"] .irpHeaderBanner,
+[data-theme="light"] .irpConfigCard,
+[data-theme="light"] .irpOutputCard,
+[data-theme="light"] .irpExplorerSidebar,
+[data-theme="light"] .irpExplorerContent {
+  background: #ffffff;
+  border-color: #e2e8f0;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+}
+
+[data-theme="light"] .irpCardHead,
+[data-theme="light"] .irpExplorerSidebarHeader,
+[data-theme="light"] .irpExplorerContentHead {
+  background: #f8fafc;
+  border-bottom-color: #e2e8f0;
+}
+
+[data-theme="light"] .irpHeaderLeft h2,
+[data-theme="light"] .irpCardHeadTitle h3,
+[data-theme="light"] .irpContentPath {
+  color: #0f172a;
+}
+
+[data-theme="light"] .irpTabSwitch {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+}
+
+[data-theme="light"] .irpTabBtn {
+  color: #64748b;
+}
+
+[data-theme="light"] .irpTabBtn.active {
+  background: rgba(2, 132, 199, 0.12);
+  color: #0284c7;
+}
+
+[data-theme="light"] .irpPresetPill {
+  background: #f1f5f9;
+  border-color: #e2e8f0;
+  color: #475569;
+}
+
+[data-theme="light"] .irpPresetPill:hover {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+[data-theme="light"] .irpPresetPill.active {
+  background: rgba(2, 132, 199, 0.12);
+  border-color: rgba(2, 132, 199, 0.4);
+  color: #0284c7;
+}
+
+[data-theme="light"] .irpInput,
+[data-theme="light"] .irpSelect,
+[data-theme="light"] .irpTextarea {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+
+[data-theme="light"] .irpRawEditor,
+[data-theme="light"] .irpMarkdownPreview {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+[data-theme="light"] .irpPreWrap,
+[data-theme="light"] .irpExplorerPre {
+  color: #1e293b;
+}
+
+[data-theme="light"] .irpPublishPanel {
+  background: #f8fafc;
+  border-color: #e2e8f0;
+}
+
+[data-theme="light"] .irpPublishPathField {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+[data-theme="light"] .irpPageItemBtn {
+  color: #334155;
+}
+
+[data-theme="light"] .irpPageItemBtn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+[data-theme="light"] .irpPageItemBtn.active {
+  background: rgba(2, 132, 199, 0.1);
+  border-color: rgba(2, 132, 199, 0.3);
+  color: #0284c7;
+}
+

@@ -268,4 +268,65 @@ export type ReleaseScorecardHistoryItem = {
   dimension_statuses: Record<string, string>
 }
 
+export type AdoWiki = {
+  id: string
+  name: string
+  type?: string | null
+  url?: string | null
+  remote_url?: string | null
+}
+
+export type AdoWikiPage = {
+  id?: number | null
+  path: string
+  order?: number | null
+  is_parent_page?: boolean | null
+  git_item_path?: string | null
+  sub_pages?: any[]
+  content?: string
+}
+
+export type IrpGenerateRequest = {
+  alert_name: string
+  target_resource: string
+  severity?: string
+  trigger_condition?: string | null
+  owning_team?: string | null
+  environment?: string | null
+  existing_irp_context?: string | null
+  additional_notes?: string | null
+}
+
+export type IrpGenerateResponse = {
+  alert_name: string
+  severity: string
+  target_resource: string
+  markdown_content: string
+  suggested_wiki_path: string
+}
+
+export type IrpPublishRequest = {
+  organization: string
+  project: string
+  pat?: string | null
+  wiki_id: string
+  path: string
+  content: string
+  comment?: string | null
+  update_inventory?: boolean
+  inventory_page_path?: string | null
+  alert_name?: string | null
+  severity?: string | null
+  owning_team?: string | null
+}
+
+export type IrpPublishResponse = {
+  success: boolean
+  page_path: string
+  wiki_id: string
+  inventory_updated: boolean
+  page_details?: Record<string, any>
+}
+
+
 

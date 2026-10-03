@@ -316,3 +316,63 @@ class ReleaseScorecardHistoryItem(BaseModel):
     overall_status: str
     dimension_statuses: dict[str, str] = Field(default_factory=dict)
 
+
+class AdoWiki(BaseModel):
+    id: str
+    name: str
+    type: str | None = None
+    url: str | None = None
+    remote_url: str | None = None
+
+
+class AdoWikiPage(BaseModel):
+    id: int | None = None
+    path: str
+    order: int | None = None
+    is_parent_page: bool | None = None
+    git_item_path: str | None = None
+    sub_pages: list[Any] = Field(default_factory=list)
+
+
+class IrpGenerateRequest(BaseModel):
+    alert_name: str = Field(min_length=1, max_length=256)
+    target_resource: str = Field(min_length=1, max_length=256)
+    severity: str = Field(default="Sev-1")
+    trigger_condition: str | None = None
+    owning_team: str | None = None
+    environment: str | None = "Production"
+    existing_irp_context: str | None = None
+    additional_notes: str | None = None
+
+
+class IrpGenerateResponse(BaseModel):
+    alert_name: str
+    severity: str
+    target_resource: str
+    markdown_content: str
+    suggested_wiki_path: str
+
+
+class IrpPublishRequest(_Validated):
+    organization: str = Field(min_length=1, max_length=256)
+    project: str = Field(min_length=1, max_length=256)
+    pat: str | None = Field(default=None, min_length=1, max_length=512)
+    wiki_id: str = Field(min_length=1, max_length=256)
+    path: str = Field(min_length=1, max_length=512)
+    content: str = Field(min_length=1)
+    comment: str | None = "Add Incident Response Plan"
+    update_inventory: bool = True
+    inventory_page_path: str | None = "/Alert-Inventory"
+    alert_name: str | None = None
+    severity: str | None = "Sev-1"
+    owning_team: str | None = "Cloud Operations"
+
+
+class IrpPublishResponse(BaseModel):
+    success: bool
+    page_path: str
+    wiki_id: str
+    inventory_updated: bool
+    page_details: dict[str, Any] = Field(default_factory=dict)
+
+

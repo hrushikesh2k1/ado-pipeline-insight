@@ -44,9 +44,16 @@ from app.schemas.connection import (
     ReleaseDefinition,
     ReleaseScorecard,
     ReleaseScorecardHistoryItem,
+    AdoWiki,
+    AdoWikiPage,
+    IrpGenerateRequest,
+    IrpGenerateResponse,
+    IrpPublishRequest,
+    IrpPublishResponse,
 )
 from app.repositories.release_repository import ReleaseRepository
 from app.services.release_service import ReleaseService
+from app.services.irp_service import IrpService
 from app.services.board_service import (
     evaluate_sprint_work_items,
     is_work_item_in_iteration,
@@ -1713,5 +1720,120 @@ def get_release_scorecard_history(
     if not release:
         raise HTTPException(status_code=404, detail=f"Release '{release_id}' was not found.")
     return repo.get_scorecard_history(release_id, limit=limit)
+
+
+# ==============================================================================
+# Azure DevOps Wiki & Incident Response Plan (IRP) Endpoints
+# ==============================================================================
+
+@router.get("/wiki/list", response_model=list[AdoWiki])
+def list_wikis(
+    organization: str = Query(..., min_length=1),
+    project: str = Query(..., min_length=1),
+    pat: str | None = Query(None),
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
+) -> list[AdoWiki]:
+    """List all project and code wikis in an Azure DevOps project."""
+    resolved_pat = _resolve_pat(organization, pat or x_ado_pat)
+    client = AzureDevOpsClient(organization, resolved_pat)
+    try:
+        raw_wikis = client.list_wikis(project)
+        return [
+            AdoWiki(
+                id=w.get("id", ""),
+                name=w.get("name", ""),
+                type=w.get("type"),
+                url=w.get("url"),
+                remote_url=w.get("remoteUrl"),
+            )
+            for w in raw_wikis
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch wikis: {e}")
+
+
+@router.get("/wiki/pages")
+def get_wiki_pages(
+    organization: str = Query(..., min_length=1),
+    project: str = Query(..., min_length=1),
+    wiki_id: str = Query(..., min_length=1),
+    path: str = Query("/", min_length=1),
+    pat: str | None = Query(None),
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
+) -> list[dict[str, Any]]:
+    """Get the full navigation tree and pages in an Azure DevOps Wiki."""
+    resolved_pat = _resolve_pat(organization, pat or x_ado_pat)
+    client = AzureDevOpsClient(organization, resolved_pat)
+    try:
+        return client.get_wiki_pages(project, wiki_id, path=path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch wiki pages: {e}")
+
+
+@router.get("/wiki/page")
+def get_wiki_page_content(
+    organization: str = Query(..., min_length=1),
+    project: str = Query(..., min_length=1),
+    wiki_id: str = Query(..., min_length=1),
+    path: str = Query(..., min_length=1),
+    pat: str | None = Query(None),
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
+) -> dict[str, Any]:
+    """Get raw markdown content and metadata for a specific wiki page."""
+    resolved_pat = _resolve_pat(organization, pat or x_ado_pat)
+    client = AzureDevOpsClient(organization, resolved_pat)
+    try:
+        return client.get_wiki_page(project, wiki_id, path=path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch wiki page content: {e}")
+
+
+@router.post("/irp/generate", response_model=IrpGenerateResponse)
+def generate_irp(payload: IrpGenerateRequest) -> IrpGenerateResponse:
+    """Generate a production-grade Incident Response Plan using Azure OpenAI."""
+    irp_service = IrpService()
+    try:
+        result = irp_service.generate_irp(
+            alert_name=payload.alert_name,
+            target_resource=payload.target_resource,
+            severity=payload.severity,
+            trigger_condition=payload.trigger_condition,
+            owning_team=payload.owning_team,
+            environment=payload.environment,
+            existing_irp_context=payload.existing_irp_context,
+            additional_notes=payload.additional_notes,
+        )
+        return IrpGenerateResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"IRP generation failed: {e}")
+
+
+@router.post("/irp/publish", response_model=IrpPublishResponse)
+def publish_irp(
+    payload: IrpPublishRequest,
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
+) -> IrpPublishResponse:
+    """Publish an Incident Response Plan directly to Azure DevOps Wiki and update Alert Inventory."""
+    resolved_pat = _resolve_pat(payload.organization, payload.pat or x_ado_pat)
+    irp_service = IrpService()
+    try:
+        result = irp_service.publish_irp(
+            organization=payload.organization,
+            project=payload.project,
+            pat=resolved_pat,
+            wiki_id=payload.wiki_id,
+            path=payload.path,
+            content=payload.content,
+            comment=payload.comment or "Add Incident Response Plan",
+            update_inventory=payload.update_inventory,
+            inventory_page_path=payload.inventory_page_path or "/Alert-Inventory",
+            alert_name=payload.alert_name,
+            severity=payload.severity,
+            owning_team=payload.owning_team,
+        )
+        return IrpPublishResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to publish IRP to Wiki: {e}")
+
 
 

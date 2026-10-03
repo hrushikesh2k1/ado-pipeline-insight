@@ -62,6 +62,53 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response).get("value", [])
 
+    def list_wikis(self, project: str) -> list[dict[str, Any]]:
+        response = self.session.get(
+            self._url(project, "_apis/wiki/wikis"),
+            params={"api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def get_wiki_pages(self, project: str, wiki_id: str, path: str = "/") -> list[dict[str, Any]]:
+        response = self.session.get(
+            self._url(project, f"_apis/wiki/wikis/{quote(wiki_id, safe='')}/pages"),
+            params={"path": path, "recursionLevel": "full", "api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        res = self._json_response(response)
+        if "value" in res and isinstance(res["value"], list):
+            return res["value"]
+        if "subPages" in res:
+            return [res]
+        return [res] if res else []
+
+    def get_wiki_page(self, project: str, wiki_id: str, path: str) -> dict[str, Any]:
+        response = self.session.get(
+            self._url(project, f"_apis/wiki/wikis/{quote(wiki_id, safe='')}/pages"),
+            params={"path": path, "includeContent": "true", "api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response)
+
+    def create_or_update_wiki_page(
+        self, project: str, wiki_id: str, path: str, content: str, comment: str = "Update Incident Response Plan"
+    ) -> dict[str, Any]:
+        url = self._url(project, f"_apis/wiki/wikis/{quote(wiki_id, safe='')}/pages")
+        headers = {"Comment": comment, "Content-Type": "application/json"}
+        response = self.session.put(
+            url,
+            params={"path": path, "api-version": self.api_version},
+            headers=headers,
+            json={"content": content},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response)
+
     def list_pull_requests(
         self, project: str, repository_id: str, status: str = "active", top: int = 100
     ) -> list[dict[str, Any]]:

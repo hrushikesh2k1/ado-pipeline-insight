@@ -4,6 +4,15 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.6.0] - 2026-10-03
+
+### Added
+- **Incident Response & IRP Hub page**: A dedicated operations page to generate production-ready Incident Response Plans (IRPs) and publish directly to Azure DevOps Wiki.
+- **AI-Powered IRP Generator**: Synthesizes structured SRE runbooks with diagnostic commands (CLI/PowerShell), live KQL telemetry queries, 3-tier remediation procedures, rollback plans, and escalation matrices using Azure OpenAI or deterministic SRE heuristics.
+- **Direct 1-Click Azure DevOps Wiki Publishing**: Publishes generated markdown runbooks directly to project wikis (`/Incident-Response-Plans/...`) with optional auto-registration in the `/Alert-Inventory` master table.
+- **Interactive ADO Wiki Explorer**: Live visual tree to browse and preview existing wiki pages and incident response runbooks directly from the dashboard.
+- **Wiki REST API Integrations**: Added backend endpoints `/api/v1/wiki/list`, `/api/v1/wiki/pages`, `/api/v1/wiki/page`, `/api/v1/irp/generate`, and `/api/v1/irp/publish`.
+
 ## [1.5.0] - 2026-10-03
 
 ### Added
