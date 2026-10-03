@@ -245,6 +245,30 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response)
 
+    def get_build_definition(self, project: str, pipeline_id: int) -> dict[str, Any]:
+        """A pipeline's definition: process type, YAML file name and the repository that holds it."""
+        url = self._url(project, f"_apis/build/definitions/{int(pipeline_id)}")
+        response = self.session.get(url, params={"api-version": self.api_version}, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response)
+
+    def get_repository_file(self, project: str, repository_id: str, path: str, version: str | None,
+                            version_type: str = "branch", max_chars: int = 200_000) -> str:
+        """Raw text of one file in an Azure Repos Git repository at a branch, tag or commit (the default branch when version is None)."""
+        url = self._url(project, f"_apis/git/repositories/{quote(str(repository_id), safe='')}/items")
+        params = {
+            "api-version": self.api_version,
+            "path": path if path.startswith("/") else f"/{path}",
+            "includeContent": "true",
+            "$format": "text",
+        }
+        if version:
+            params["versionDescriptor.version"] = version
+            params["versionDescriptor.versionType"] = version_type if version_type in ("branch", "tag", "commit") else "branch"
+        response = self.session.get(url, params=params, headers={"Accept": "text/plain"}, timeout=30)
+        response.raise_for_status()
+        return response.text[:max_chars]
+
     def get_iteration_node(self, project: str, relative_path: str) -> dict[str, Any]:
         """The project's iteration node (Project settings > Iterations); carries the sprint start/finish dates."""
         node_path = quote(relative_path.replace("\\", "/"), safe="/")

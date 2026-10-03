@@ -52,6 +52,15 @@ describe('extractProductFromStage', () => {
 })
 
 
+describe('product badge of a finding', () => {
+  it('comes from the stage, not from other stages that a merged finding mentions in its text', () => {
+    expect(extractProductFromStage('cops - Analytics - DEV - Monitoring', 'Remove access', null)).toBe('Analytics')
+    expect(extractProductFromStage('cldops - Stamp - Monitoring', 'Install MDC chart', null)).toBe('General')
+    // the old behaviour: the text of a merged finding lists "cops - Records - DEV - Monitoring" and won
+    expect(extractProductFromStage('cops - Analytics - DEV - Monitoring', null, 'also fails in cops - Records - DEV - Monitoring')).toBe('Records')
+  })
+})
+
 describe('extractYamlFromRemediation', () => {
   it('extracts explicit yaml blocks from remediation text', () => {
     const raw = "Add caching to your task:\n\n```yaml\n- task: Cache@2\n  inputs:\n    key: 'test'\n```\n\nEnsure path exists."
@@ -60,16 +69,14 @@ describe('extractYamlFromRemediation', () => {
     expect(text).toContain('Add caching to your task:')
   })
 
-  it('generates contextual Cache@2 YAML when no block is provided for caching', () => {
-    const { yaml } = extractYamlFromRemediation('Configure build caching.', 'caching_opportunity', 'Deploy cops Records Dev', 'npm install')
-    expect(yaml).toContain('task: Cache@2')
-    expect(yaml).toContain('Pipeline.Workspace')
+  it('extracts a diff block against the customer pipeline file', () => {
+    const raw = 'Retry the step:\n\n```diff\n--- a/azure-pipelines.yml\n+++ b/azure-pipelines.yml\n+  retryCountOnTaskFailure: 2\n```'
+    expect(extractYamlFromRemediation(raw).yaml).toContain('+  retryCountOnTaskFailure: 2')
   })
 
-  it('generates retry and timeout YAML for flaky steps', () => {
-    const { yaml } = extractYamlFromRemediation('Task failed intermittently.', 'flaky_step', 'Deploy cops Analytics Dev', 'Helm Upgrade')
-    expect(yaml).toContain('retryCountOnTaskFailure: 2')
-    expect(yaml).toContain('Helm Upgrade')
+  it('never invents a snippet when the recommendation has no code block', () => {
+    expect(extractYamlFromRemediation('Configure build caching.', 'caching_opportunity', 'Deploy cops Records Dev', 'npm install').yaml).toBe('')
+    expect(extractYamlFromRemediation('Task failed intermittently.', 'flaky_step', 'Deploy cops Analytics Dev', 'Helm Upgrade').yaml).toBe('')
   })
 })
 

@@ -77,7 +77,9 @@ def test_analyze_uses_model_findings_then_falls_back(monkeypatch):
             return RecommendationResponse(findings=holder["findings"])
 
     monkeypatch.setattr(ai_module, "PipelineRecommendationClient", Client)
-    assert AIService().analyze(1, 30)["findings"][0]["category"] == "bottleneck"
+    kept = AIService().analyze(1, 30)["findings"]
+    assert "bottleneck" in {f["category"] for f in kept}  # the model's own finding is kept...
+    assert kept[0]["category"] == "flaky_step" and kept[0]["task_name"] == "npm install"  # ...and the 20%-failing step it skipped is added, first
     holder["findings"] = []
     assert AIService().analyze(1, 30)["findings"][0]["category"] == "flaky_step"
     assert len(saved) == 2

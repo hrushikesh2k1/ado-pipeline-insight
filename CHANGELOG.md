@@ -4,6 +4,11 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.4.3] - 2026-10-03
+
+### Fixed
+- **Fixed page width and layout bounds across all views.** Constrained the Sprint Board and subpages to the standard 1500px centered layout with consistent container margins and padding, matching Pipeline Insights and Pull Requests.
+
 ## [1.4.2] - 2026-10-03
 
 ### Changed

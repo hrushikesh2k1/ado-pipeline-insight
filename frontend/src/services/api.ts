@@ -46,7 +46,7 @@ export const api = {
     const qs = p.toString() ? `?${p.toString()}` : ''
     return request<{status:'idle'|'running'|'completed'|'failed';organization?:string;project?:string;pipeline_id?:number;pipeline_name?:string;processed_runs:number;total_runs:number|null;current_run_date?:string|null;records_upserted:number;error?:string|null}>(`/api/v1/ado/ingest/status${qs}`)
   },
-  analyze:(pipelineId:number,months:number)=>request<{pipeline_id:number;findings:Recommendation[];message?:string}>(`/api/v1/pipelines/${pipelineId}/analyze`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({months})}),
+  analyze:(pipelineId:number,months:number,pat?:string)=>request<{pipeline_id:number;findings:Recommendation[];message?:string}>(`/api/v1/pipelines/${pipelineId}/analyze`,{method:'POST',headers:{'Content-Type':'application/json',...(pat?{'X-ADO-PAT':pat}:{})},body:JSON.stringify({months})}),
   repositories:(organization:string,project:string,pat?:string)=>{
     const p = new URLSearchParams({ organization, project })
     if (pat) p.set('pat', pat)

@@ -90,10 +90,10 @@ def test_run_analysis_returns_metrics(api):
 
 def test_analyze_delegates_to_service_and_hides_internal_errors(api, monkeypatch):
     client, _ = api
-    monkeypatch.setattr(routes.ai_service, "analyze", lambda pipeline_id, days: {"pipeline_id": pipeline_id, "days": days})
+    monkeypatch.setattr(routes.ai_service, "analyze", lambda pipeline_id, days, **kw: {"pipeline_id": pipeline_id, "days": days})
     assert client.post("/api/v1/pipelines/3/analyze", json={"months": 2}).json() == {"pipeline_id": 3, "days": 62}
 
-    def boom(*_a):
+    def boom(*_a, **_k):
         raise RuntimeError("password=hunter2")
 
     monkeypatch.setattr(routes.ai_service, "analyze", boom)

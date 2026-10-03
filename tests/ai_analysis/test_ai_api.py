@@ -11,7 +11,7 @@ def test_analyze_delegates_to_service_and_hides_internal_errors(monkeypatch):
     monkeypatch.setattr(
         ai_service_module.AIService,
         "analyze",
-        lambda self, pipeline_id, window_days: {
+        lambda self, pipeline_id, window_days, **kw: {
             "status": "ready",
             "findings": [
                 {

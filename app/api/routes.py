@@ -254,9 +254,16 @@ def pools(days: int = Query(30, ge=1, le=730)):
 
 
 @router.post("/pipelines/{pipeline_id}/analyze")
-def analyze(pipeline_id: PipelineId, request: AnalyzeRequest):
+def analyze(pipeline_id: PipelineId, request: AnalyzeRequest, x_ado_pat: str | None = Header(default=None, alias="X-ADO-PAT")):
+    def resolve_pat(organization: str) -> str | None:
+        """The caller's PAT, else the server-side PAT for allow-listed organizations; used only to read the pipeline YAML."""
+        try:
+            return _resolve_pat(organization, x_ado_pat)
+        except HTTPException:
+            return None
+
     try:
-        return ai_service.analyze(pipeline_id, request.months * 31)
+        return ai_service.analyze(pipeline_id, request.months * 31, resolve_pat=resolve_pat)
     except Exception as exc:
         raise _unavailable(exc) from exc
 

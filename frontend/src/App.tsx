@@ -70,7 +70,7 @@ Your mission is to provide world-class, concrete, actionable diagnoses and remed
 Return strict JSON: {"findings":[{"category":"flaky_step|bottleneck|regression|caching_opportunity|parallelization_opportunity|queue_capacity|other","severity":"high|medium|low","stage_name":"<exact stage name>","task_name":"<exact task name or null>","recommendation":"<structured recommendation text>","evidence":"<metric-backed proof and log snippet>"}]}
 
 Guidelines for World-Class Findings:
-1. Coverage & Prioritization: Return between 1 and 4 high-impact, non-overlapping findings across:
+1. Coverage & Prioritization: The tasks in the input are sorted by failure rate, worst first. Return one finding for EVERY task with \`failure_rate_pct\` >= 15 or \`retry_rate_pct\` >= 20 (all severity high; up to 8, worst first), then up to 3 more non-overlapping findings for the largest bottlenecks, regressions or optimization opportunities, across:
    - Critical Failures / Flakiness (category: flaky_step, severity: high) when failure_rate_pct > 0 or error_excerpt is provided.
    - Duration Bottlenecks & Regressions (category: bottleneck or regression) for stages/tasks consuming the largest portion of pipeline execution time.
    - Optimization & Caching (category: caching_opportunity or parallelization_opportunity) for tasks with long execution times that can be cached (e.g. package restores, Docker builds, artifact downloads).
@@ -80,43 +80,51 @@ Guidelines for World-Class Findings:
 3. Structure of \`recommendation\`:
    Format every recommendation with three distinct markdown sections:
    **Diagnosis**: Precise root cause explanation (referencing the error excerpt if present).
-   **Remediation**: Concrete, actionable engineering fix. ALWAYS include a clean, copy-pasteable Azure DevOps pipeline YAML snippet enclosed in a \`\`\`yaml ... \`\`\` code block (e.g., using \`Cache@2\`, task retry policy \`retryCountOnTaskFailure: 2\`, \`--timeout\` flags, or matrix execution).
-   **Impact**: Quantified expected benefit (e.g., "Eliminates ~25% failure rate in Build / Test stage", "Saves ~4.5 minutes per pipeline run").
+   **Remediation**: Concrete, actionable engineering fix. It MUST contain exactly one code block with the YAML fix, ready to copy and paste. When \`pipeline_yaml\` shows the step (see rule 6), the block is a unified diff in a \`\`\`diff ... \`\`\` block against the file that defines the step. Otherwise it is a short \`\`\`yaml ... \`\`\` snippet whose first line is the comment \`# example, not from your file\`.
+   **Impact**: What was measured and what fixing the cause removes, using only numbers from the input (for example "This step failed in 31.8% of runs in the analysed window"). Never promise a result such as "Eliminates ~30% failure rate" or "Saves 4 minutes": nothing in the data supports a prediction.
+   Every finding MUST have all three sections: the root cause, the remediation and the YAML fix inside it.
 4. Structure of \`evidence\`:
    Concise summary of measured metrics (duration, failure rate, retry rate, % of stage). If \`error_excerpt\` is provided, quote the relevant log snippet cleanly (e.g., 'Error Log: "dial tcp 13.77.233.102:443: i/o timeout"').
 5. Severity Guidelines:
    - high: Failure rate >= 15%, or stage duration > 15m, or timeout errors blocking deployments.
    - medium: Failure rate between 5% and 15%, or task taking > 30% of stage time, or duration regression > 25%.
-   - low: Minor duration optimizations, non-blocking retries, or small caching candidates.`
+   - low: Minor duration optimizations, non-blocking retries, or small caching candidates.
+6. The customer's real pipeline files (\`pipeline_yaml\`):
+   - When the input contains \`pipeline_yaml\` ({file, branch, content, truncated, templates, templates_not_expanded, template_errors}), \`content\` is the complete pipeline YAML that produced these runs and \`templates\` holds the complete template files that were read ({file, content}); read all of them before answering. A step can live in any of them. If \`truncated\` is true, part of a file was cut for size: do not describe what you could not see. Base every remediation on the files: name the exact file, stage, job and step it applies to, and write the fix as a unified diff (\`\`\`diff, with \`--- a/<file>\` and \`+++ b/<file>\` headers and context and removed lines copied exactly from that file) against the file that defines the step. A diff whose lines do not exist in the file is discarded.
+   - Never recommend something the files already do (for example caching when the job already has a \`Cache@2\` step, or retries when the step already has \`retryCountOnTaskFailure\`). If the file already applies a fix and the problem persists, say the fix is not working and diagnose why from the error log instead.
+   - Templates listed in \`templates_not_expanded\` could not be read (\`template_errors\` says why): do not guess their contents or invent the step's task type or inputs, and do not write a diff against files you cannot see. Name the template, describe the change in words, and give a short example snippet marked \`# example, not from your file\` that is derived from the error text (for example defining a variable that the error shows is empty), not from a guess about the step.
+   - If \`pipeline_yaml\` is absent, the files could not be read: keep the snippet minimal, mark it \`# example, not from your file\`, and do not claim anything about the customer's YAML.
+   - When several steps or stages fail with the same error, write one finding for the worst occurrence and name the others in its Diagnosis.
+7. Retries (\`retryCountOnTaskFailure\`):
+   - Recommend a retry only when \`error_excerpt\` shows a transient cause (timeout, connection reset or refused, DNS failure, 429/502/503/504 throttling, a lock held by another operation) or the task's \`retry_rate_pct\` is above 0.
+   - A generic exit code or a deterministic error (not found, permission denied, invalid input, failing tests) will fail again on every retry. For those, do NOT recommend retries and do NOT describe the failures as transient; quote the first error line from \`error_excerpt\` and tell the customer to fix that cause. If there is no usable error text, say the cause is unknown and to open the step log.`
 
+/** A unified diff is a change to the customer's own pipeline file; any other snippet is only an example to adapt. */
+export function isDiffSnippet(snippet: string): boolean {
+  return /^---\s/.test(snippet) || /^@@ /m.test(snippet)
+}
+
+/** The lines a diff adds, without the leading '+': exactly what to paste into the file. */
+export function diffNewLines(snippet: string): string {
+  return snippet.split(/\r?\n/).filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1)).join('\n')
+}
+
+/** Splits the first fenced code block (```yaml, ```diff or plain) out of a remediation. Nothing is ever made up:
+ * when the recommendation carries no code block, no snippet is shown. */
 export function extractYamlFromRemediation(
   remText: string,
-  category: string,
-  stageName: string,
-  taskName?: string | null
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _category?: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _stageName?: string,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _taskName?: string | null
 ): { text: string; yaml: string } {
-  // Check if there is an explicit ```yaml or ``` block in the remediation text
-  const match = remText.match(/```(?:ya?ml)?\s*\n([\s\S]*?)\n```/i)
+  const match = remText.match(/```(?:ya?ml|diff|patch)?[ \t]*\r?\n([\s\S]*?)\r?\n```/i)
   if (match) {
-    const yaml = match[1].trim()
-    const text = remText.replace(match[0], '').trim()
-    return { text, yaml }
+    return { text: remText.replace(match[0], '').trim(), yaml: match[1].trim() }
   }
-
-  // Synthesize an Azure DevOps YAML snippet based on finding category
-  const targetName = taskName || stageName
-  let generatedYaml = ''
-  if (category === 'caching_opportunity' || category === 'bottleneck') {
-    generatedYaml = `- task: Cache@2\n  displayName: 'Cache Pipeline Dependencies'\n  inputs:\n    key: '"$(Agent.OS)" | **/packages.lock.json'\n    restoreKeys: |\n      "$(Agent.OS)"\n    path: $(Pipeline.Workspace)/.cache`
-  } else if (category === 'flaky_step') {
-    generatedYaml = `- task: AzureCLI@2\n  displayName: '${targetName}'\n  retryCountOnTaskFailure: 2\n  inputs:\n    scriptType: bash\n    scriptLocation: inlineScript\n    inlineScript: |\n      # Extended network timeout with automated retry resiliency\n      helm upgrade --install --wait --timeout 10m0s ...`
-  } else if (category === 'parallelization_opportunity') {
-    generatedYaml = `strategy:\n  parallel: 2\n  matrix:\n    Batch_1:\n      testCategory: 'Core'\n    Batch_2:\n      testCategory: 'Integration'`
-  } else {
-    generatedYaml = `# Task reliability & timeout configuration for ${targetName}\ntimeoutInMinutes: 30\nretryCountOnTaskFailure: 1`
-  }
-
-  return { text: remText, yaml: generatedYaml }
+  return { text: remText, yaml: '' }
 }
 
 export function ThemeToggle({ theme, onChange }: { theme: 'dark' | 'light'; onChange: (t: 'dark' | 'light') => void }) {
@@ -412,7 +420,7 @@ function App() {
   const trends = useTrends(pipelineId, days)
   const runs = useRuns(pipelineId, days)
   const recs = useRecommendations(pipelineId)
-  const analyze = useAnalyze(pipelineId)
+  const analyze = useAnalyze(pipelineId, adoPat)
   const [trendViewMode, setTrendViewMode] = useState<'individual' | 'daily'>('individual')
   const detail = useRunAnalysis(selectedRun)
   const loading = summary.isFetching || trends.isFetching
@@ -427,7 +435,8 @@ function App() {
   // Enrich findings with product extracted directly from stage name, task name, or text
   const enrichedFindings = useMemo(() => {
     return (displayFindings as Recommendation[]).map(f => {
-      const prod = extractProductFromStage(f.stage_name, f.task_name, f.recommendation)
+      // Stage and task only: the recommendation text can list other stages (merged findings) and would pick the wrong product.
+      const prod = extractProductFromStage(f.stage_name, f.task_name, null)
       return { ...f, productName: prod }
     })
   }, [displayFindings])
@@ -757,8 +766,19 @@ function App() {
     }
   }, [summary.data?.stages, theme])
 
+  // On narrower windows the header wraps onto a second row; the sidebar's height follows the header's real height (--header-h in styles.css).
+  const headerObserver = useRef<ResizeObserver | null>(null)
+  const trackHeaderHeight = useCallback((el: HTMLElement | null) => {
+    headerObserver.current?.disconnect()
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const update = () => document.documentElement.style.setProperty('--header-h', `${Math.round(el.getBoundingClientRect().height)}px`)
+    update()
+    headerObserver.current = new ResizeObserver(update)
+    headerObserver.current.observe(el)
+  }, [])
+
   return <div className="app" data-theme={theme}>
-    <header><div className="brand"><div className="logo brandLogo"><img src={octaveLogo} alt="Octave" className="logoImg" /></div><div><h1>ADO Pipeline Insight</h1><p>Pipeline Performance & AI Duration Optimizer</p></div><span className="enterprise">ENTERPRISE</span>{appVersion && <span className="versionBadge" data-testid="app-version" title={`Release v${appVersion.version} - build ${appVersion.git_commit ?? 'unknown'}${appVersion.build_timestamp ? ` (${appVersion.build_timestamp})` : ''}`}>v{appVersion.version}</span>}</div><div className="controls"><Select testId="organization-select" label="Org" value={org} options={orgs} placeholder="All Organizations" onChange={v => { updateOrg(v); updateProject(''); updatePipelineId(null) }} /><Select testId="project-select" label="Project" value={project} options={projects} placeholder="All Projects" onChange={v => { updateProject(v); updatePipelineId(null) }} /><Select testId="pipeline-select" label="Pipeline" value={pipelineId?.toString() ?? ''} options={filtered.map(p => p.pipeline_id.toString())} labels={Object.fromEntries(filtered.map(p => [p.pipeline_id.toString(), p.pipeline_name]))} placeholder="All Pipelines" onChange={v => updatePipelineId(v ? Number(v) : null)} /><Select testId="window-select" label="Window" value={days.toString()} options={WINDOWS.map(w => w.days.toString())} labels={Object.fromEntries(WINDOWS.map(w => [w.days.toString(), w.label]))} onChange={v => updateDays(Number(v))} /></div><div className="status" data-testid="connection-status"><span className={`dot ${options.isError ? 'bad' : ''}`} />{options.isError ? 'ERROR' : 'CONNECTED'}</div><ThemeToggle theme={theme} onChange={setTheme} /><UserProfileMenu /></header>
+    <header ref={trackHeaderHeight}><div className="brand"><div className="logo brandLogo"><img src={octaveLogo} alt="Octave" className="logoImg" /></div><div><h1>ADO Pipeline Insight</h1><p>Pipeline Performance & AI Duration Optimizer</p></div><span className="enterprise">ENTERPRISE</span>{appVersion && <span className="versionBadge" data-testid="app-version" title={`Release v${appVersion.version} - build ${appVersion.git_commit ?? 'unknown'}${appVersion.build_timestamp ? ` (${appVersion.build_timestamp})` : ''}`}>v{appVersion.version}</span>}</div><div className="controls"><Select testId="organization-select" label="Org" value={org} options={orgs} placeholder="All Organizations" onChange={v => { updateOrg(v); updateProject(''); updatePipelineId(null) }} /><Select testId="project-select" label="Project" value={project} options={projects} placeholder="All Projects" onChange={v => { updateProject(v); updatePipelineId(null) }} /><Select testId="pipeline-select" label="Pipeline" value={pipelineId?.toString() ?? ''} options={filtered.map(p => p.pipeline_id.toString())} labels={Object.fromEntries(filtered.map(p => [p.pipeline_id.toString(), p.pipeline_name]))} placeholder="All Pipelines" onChange={v => updatePipelineId(v ? Number(v) : null)} /><Select testId="window-select" label="Window" value={days.toString()} options={WINDOWS.map(w => w.days.toString())} labels={Object.fromEntries(WINDOWS.map(w => [w.days.toString(), w.label]))} onChange={v => updateDays(Number(v))} /></div><div className="status" data-testid="connection-status"><span className={`dot ${options.isError ? 'bad' : ''}`} />{options.isError ? 'ERROR' : 'CONNECTED'}</div><ThemeToggle theme={theme} onChange={setTheme} /><UserProfileMenu /></header>
     <div className="appLayout">
       <NavSidebar activePage={activePage} onSelectPage={handleSelectPage} />
       <div className="appContent">
@@ -1330,6 +1350,7 @@ function FindingCard({
 }) {
   const [copied, setCopied] = useState(false)
   const [yamlCopied, setYamlCopied] = useState(false)
+  const [newLinesCopied, setNewLinesCopied] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
   const parsed = useMemo(() => parseRecommendation(f.recommendation || ''), [f.recommendation])
   const ev = useMemo(() => parseEvidence(f.evidence || ''), [f.evidence])
@@ -1351,6 +1372,13 @@ function FindingCard({
     navigator.clipboard.writeText(yamlCode)
     setYamlCopied(true)
     setTimeout(() => setYamlCopied(false), 2000)
+  }
+
+  const copyNewLines = () => {
+    if (!yamlCode) return
+    navigator.clipboard.writeText(diffNewLines(yamlCode))
+    setNewLinesCopied(true)
+    setTimeout(() => setNewLinesCopied(false), 2000)
   }
 
   const categoryLabels: Record<string, { label: string; icon: ReactNode }> = {
@@ -1416,23 +1444,44 @@ function FindingCard({
             <div className="findingDiagnosis">{f.recommendation}</div>
           )}
 
+          {!yamlCode && (
+            <div className="yamlFixBox" data-testid="no-yaml-fix">
+              <div className="yamlFixHeader"><div className="yamlFixTitle"><FileCode size={12} color="#818cf8" /><span>No YAML fix stored for this finding</span></div></div>
+              <pre className="yamlFixCode"><code>This finding was created before every finding carried a YAML fix. Run AI Analysis again to get one.</code></pre>
+            </div>
+          )}
           {yamlCode && (
             <div className="yamlFixBox">
               <div className="yamlFixHeader">
                 <div className="yamlFixTitle">
                   <FileCode size={12} color="#818cf8" />
-                  <span>Azure DevOps YAML Fix</span>
-                  <span className="yamlBadge">ADO YAML</span>
+                  <span>{isDiffSnippet(yamlCode) ? 'Change to your pipeline YAML' : 'Example to adapt (not from your file)'}</span>
+                  <span className="yamlBadge">{isDiffSnippet(yamlCode) ? 'DIFF' : 'EXAMPLE'}</span>
                 </div>
-                <button
-                  type="button"
-                  className="copyYamlBtn"
-                  onClick={copyYamlSnippet}
-                  title="Copy Azure DevOps YAML snippet"
-                >
-                  {yamlCopied ? <Check size={11} /> : <Copy size={11} />}
-                  <span>{yamlCopied ? 'YAML Copied!' : 'Copy YAML'}</span>
-                </button>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {isDiffSnippet(yamlCode) && (
+                    <button
+                      type="button"
+                      className="copyYamlBtn"
+                      onClick={copyNewLines}
+                      title="Copy only the lines this change adds, ready to paste into the file"
+                      data-testid="copy-new-lines"
+                    >
+                      {newLinesCopied ? <Check size={11} /> : <Copy size={11} />}
+                      <span>{newLinesCopied ? 'Copied!' : 'Copy new lines'}</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="copyYamlBtn"
+                    onClick={copyYamlSnippet}
+                    title={isDiffSnippet(yamlCode) ? 'Copy the whole diff (usable with git apply)' : 'Copy the YAML snippet'}
+                    data-testid="copy-yaml"
+                  >
+                    {yamlCopied ? <Check size={11} /> : <Copy size={11} />}
+                    <span>{yamlCopied ? 'Copied!' : isDiffSnippet(yamlCode) ? 'Copy diff' : 'Copy YAML'}</span>
+                  </button>
+                </div>
               </div>
               <pre className="yamlFixCode"><code>{yamlCode}</code></pre>
             </div>

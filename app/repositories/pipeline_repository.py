@@ -52,7 +52,7 @@ class PipelineRepository:
         return {"build_trend":build,"daily_trend":daily,"stage_trend":stage}
 
     def recommendations(self,pipeline_id:int,limit:int=50)->list[dict[str,Any]]:
-        return fetch_all("SELECT TOP (?) id,pipeline_id,category,severity,stage_name,task_name,recommendation,evidence,generated_at FROM dbo.ai_recommendations WHERE pipeline_id=? ORDER BY generated_at DESC,id DESC",(limit,pipeline_id))
+        return fetch_all("SELECT TOP (?) id,pipeline_id,category,severity,stage_name,task_name,recommendation,evidence,generated_at FROM dbo.ai_recommendations WHERE pipeline_id=? ORDER BY id ASC",(limit,pipeline_id))
 
     def timeline(self,run_id:int)->dict[str,Any]:
         stages=fetch_all("SELECT id,record_id,stage_name,agent_name,start_time,finish_time,duration_seconds,result,retry_count,failure_log_excerpt FROM dbo.pipeline_stages WHERE run_id=? ORDER BY start_time",(run_id,))
