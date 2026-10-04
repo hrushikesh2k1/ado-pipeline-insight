@@ -290,6 +290,33 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
     })
   }
 
+  const splitTableRow = (r: string): string[] => {
+    let trimmed = r.trim()
+    if (trimmed.startsWith('|')) trimmed = trimmed.slice(1)
+    if (trimmed.endsWith('|')) trimmed = trimmed.slice(0, -1)
+
+    const cells: string[] = []
+    let current = ''
+    let inCode = false
+
+    for (let idx = 0; idx < trimmed.length; idx++) {
+      const char = trimmed[idx]
+      const prev = idx > 0 ? trimmed[idx - 1] : ''
+
+      if (char === '`' && prev !== '\\') {
+        inCode = !inCode
+        current += char
+      } else if (char === '|' && !inCode && prev !== '\\') {
+        cells.push(current.trim())
+        current = ''
+      } else {
+        current += char
+      }
+    }
+    cells.push(current.trim())
+    return cells
+  }
+
   const renderMarkdownPreview = (rawContent: string) => {
     if (!rawContent) return null
 
@@ -300,6 +327,9 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
     } else if (text.startsWith('```')) {
       text = text.replace(/^```\s*/, '').replace(/```\s*$/, '')
     }
+
+    // Strip any Authoring Checklist section completely
+    text = text.replace(/\n*#+\s*(?:IRP\s+)?Authoring\s+Checklist[\s\S]*$/i, '').trim()
 
     // Split text into distinct markdown blocks while preserving code blocks and tables
     const lines = text.split('\n')
@@ -343,15 +373,41 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
         }
 
         if (tableLines.length >= 2) {
-          const parseRow = (r: string) =>
-            r
-              .split('|')
-              .slice(1, -1)
-              .map((c) => c.trim())
+          let headers = splitTableRow(tableLines[0])
+          
+          // Check if this is the Remediation Steps table
+          const isRemediationTable = headers.some((h) => /steps/i.test(h)) && headers.some((h) => /action/i.test(h))
+          if (isRemediationTable) {
+            headers = ['**STEPS**', '**ACTION**', '**ADDITIONAL COMMENTS**']
+          }
 
-          const headers = parseRow(tableLines[0])
+          const expectedCols = headers.length
+
           // Skip divider row (row 1 like |---|---|)
-          const dataRows = tableLines.slice(2).map(parseRow)
+          const dataRows = tableLines.slice(2).map((r) => {
+            const rawCells = splitTableRow(r)
+            if (rawCells.length === expectedCols) {
+              return rawCells
+            }
+            if (rawCells.length > expectedCols && expectedCols === 3) {
+              // Merge overflow cells (from KQL unescaped pipes) into the ACTION column (index 1)
+              const first = rawCells[0]
+              const last = rawCells[rawCells.length - 1]
+              const middle = rawCells.slice(1, rawCells.length - 1).join(' | ')
+              return [first, middle, last]
+            }
+            if (rawCells.length > expectedCols) {
+              const head = rawCells.slice(0, expectedCols - 1)
+              const tail = rawCells.slice(expectedCols - 1).join(' | ')
+              return [...head, tail]
+            }
+            // Pad if fewer cells
+            const padded = [...rawCells]
+            while (padded.length < expectedCols) {
+              padded.push('')
+            }
+            return padded
+          })
 
           blocks.push({
             type: 'table',

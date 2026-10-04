@@ -116,8 +116,26 @@ MANDATORY STRUCTURE & SECTIONS TO INCLUDE:
 CRITICAL RULES:
 1. Ground all commands in official Azure documentation CLI (`az ...`), PowerShell (`Get-Az...`), and KQL queries.
 2. Fill every field from the provided Alert Name, CVRD, Alert Output Columns, ARM Template Context, and Alert Details.
-3. Return pure Markdown only.
+3. REMEDIATION STEPS TABLE FORMAT: The Remediation Steps table MUST have EXACTLY 3 columns with the exact header:
+   | **STEPS** | **ACTION** | **ADDITIONAL COMMENTS** |
+   DO NOT create a 4th column (such as "EXPECTED OUTCOME"). All diagnostic actions, commands, and expected outcomes belong in the ACTION or ADDITIONAL COMMENTS column. Escape any pipe character in queries as `\\|` or enclose in backticks.
+4. ABSOLUTELY NO AUTHORING CHECKLIST:
+   DO NOT generate or include any "IRP Authoring Checklist", "Authoring Checklist", "Checklist (with Examples)", or template writing guidelines anywhere in the output. The output must contain ONLY the actual runbook content.
+5. Return pure Markdown only.
 """
+
+
+def _clean_irp_markdown(text: str) -> str:
+    """Post-process generated IRP markdown to strip authoring checklists and normalize tables."""
+    if not text:
+        return ""
+    # Strip any authoring checklist section (e.g., ## IRP Authoring Checklist, # IRP Authoring Checklist, etc.)
+    cleaned = re.sub(
+        r"(?i)\n*#+\s*(?:IRP\s+)?Authoring\s+Checklist[\s\S]*$",
+        "",
+        text,
+    )
+    return cleaned.strip()
 
 
 class IrpService:
@@ -191,15 +209,19 @@ class IrpService:
                     "Your task is to generate a comprehensive, highly technical, and production-ready Incident Response Plan (IRP) in GitHub-flavored Markdown.\n\n"
                     "CRITICAL INSTRUCTIONS:\n"
                     "1. STRICT TEMPLATE & SCHEMA CONFORMANCE:\n"
-                    "   - If an IRP Template or IRP Example is provided below, you MUST follow its EXACT structure, section headings, ordering, markdown tables, checklist styles, and callouts.\n"
+                    "   - If an IRP Template or IRP Example is provided below, you MUST follow its EXACT structure, section headings, ordering, markdown tables, and callouts.\n"
                     "   - Mirror the schema and formatting conventions of the IRP Example perfectly.\n"
-                    "2. OFFICIAL DOCUMENTATION & REGULATION ACCURACY:\n"
+                    "2. REMEDIATION STEPS TABLE FORMAT (MANDATORY 3 COLUMNS ONLY):\n"
+                    "   - The Remediation Steps table MUST contain EXACTLY 3 columns with the exact header:\n"
+                    "     | **STEPS** | **ACTION** | **ADDITIONAL COMMENTS** |\n"
+                    "   - NEVER create 4 columns or extra columns like 'EXPECTED OUTCOME'. Put all diagnostics, KQL queries, CLI commands, and expected outcomes in ACTION or ADDITIONAL COMMENTS.\n"
+                    "   - If table cells contain pipe characters `|` (e.g. in KQL queries), you MUST escape them as `\\|` or wrap in backticks so they do not break table column delimiters.\n"
+                    "3. DO NOT INCLUDE ANY AUTHORING CHECKLIST:\n"
+                    "   - DO NOT output any 'IRP Authoring Checklist', 'Authoring Checklist', or template guidance at the bottom. Only output the actual runbook content.\n"
+                    "4. OFFICIAL DOCUMENTATION & REGULATION ACCURACY:\n"
                     "   - Diagnostic and remediation commands MUST follow official Microsoft Azure documentation, Azure CLI (`az ...`), Azure PowerShell (`Get-Az...`, `Restart-Az...`), and KQL Log Analytics best practices.\n"
                     "   - Incorporate the specific ARM template context, resource types, CVRD, and Alert Output Columns in queries and diagnostic tables.\n"
-                    "3. CONCRETE & ACTIONABLE:\n"
-                    "   - Provide real KQL queries filtering by the given output columns and resource properties.\n"
-                    "   - Include step-by-step triage, 3-tier remediation, rollback procedures, validation checklists, and escalation contacts.\n"
-                    "4. RETURN PURE MARKDOWN ONLY (no conversational chit-chat before or after)."
+                    "5. RETURN PURE MARKDOWN ONLY (no conversational chit-chat before or after)."
                 )
 
                 prompt_lines = [
@@ -242,19 +264,20 @@ class IrpService:
                     temperature=0.2,
                 )
                 markdown_text = response.choices[0].message.content or ""
-                if markdown_text.strip():
+                cleaned_text = _clean_irp_markdown(markdown_text)
+                if cleaned_text:
                     return {
                         "alert_name": sanitized_alert,
                         "severity": severity,
                         "target_resource": effective_resource,
-                        "markdown_content": markdown_text.strip(),
+                        "markdown_content": cleaned_text,
                         "suggested_wiki_path": suggested_path,
                     }
             except Exception as e:
                 logger.warning("Azure OpenAI IRP generation error, using deterministic fallback: %s", e)
 
         # Fallback generation adhering to template/example if supplied
-        fallback_content = self._build_deterministic_irp(user_prompt_data)
+        fallback_content = _clean_irp_markdown(self._build_deterministic_irp(user_prompt_data))
         return {
             "alert_name": sanitized_alert,
             "severity": severity,
@@ -271,8 +294,8 @@ class IrpService:
         env = data["environment"]
         trigger = data["trigger_condition"]
         cvrd = data.get("cvrd") or "CVRD-OPS-001"
-        cols = data.get("alert_output_columns") or "TimeGenerated, ResourceGroup, GatewayName, ConnectionState, RemoteIP, ErrorDetails"
-        details = data.get("alert_details") or f"This alert is designed to trigger when/if {name} occurs on {resource}, deployed in {env}."
+        cols = data.get("alert_output_columns") or "TimeGenerated, ResourceGroup, ContainerName, PodName, CpuUsageNanoCores, NodeName"
+        details = data.get("alert_details") or f"This alert triggers when/if {name} occurs on {resource}, deployed in {env}."
 
         # Parse column list for Alert Enhancement table
         col_rows = []
@@ -280,6 +303,209 @@ class IrpService:
             col_rows.append(f"| {col} | Telemetry metric / log property captured during failure event. |")
         col_table = "\n".join(col_rows) if col_rows else "| FieldName | Description of the field |"
 
+        lower_name = name.lower()
+        lower_res = resource.lower()
+
+        # =========================================================================
+        # 1. AKS / CONTAINER / KUBERNETES / CPU EXCEEDED
+        # =========================================================================
+        if any(k in lower_name or k in lower_res for k in ["aks", "container", "cpu", "kubernetes", "k8s", "pod", "node"]):
+            return f"""# {name}
+
+# Alert Details
+
+| **Alert** | {name} |
+| --- | --- |
+| **Description** | *{details}* |
+| **Severity** | {sev} |
+| **Source** | Metrics / Log Analytics |
+| **Root Cause** | - **Case 1 : ** Container CPU spike due to application workload increase or infinite loop<br>- **Case 2 : ** Insufficient CPU resource requests/limits configured in pod specs<br>- **Case 3 : ** Node resource exhaustion or node under-provisioned<br>- **Case 4 : ** Misbehaving or runaway container process<br>- **Case 5 : ** Cluster autoscaler not scaling out nodes as expected |
+| **Product** | Azure Kubernetes Service (AKS) |
+
+# Prerequisites
+
+- **AKS Cluster Name:** `<aksClusterName>`
+- **Resource Group:** `<resourceGroup>`
+- **Namespace:** `<namespace>` (if applicable)
+- **Access to Azure CLI** with sufficient permissions to query and manage AKS resources
+- **Access to Azure Portal** and Azure Monitor Logs (Log Analytics workspace linked to AKS)
+- **kubectl configured** to connect to the AKS cluster
+- **Azure subscription ID** where the AKS cluster is deployed
+
+# Remediation Steps
+
+| **STEPS** | **ACTION** | **ADDITIONAL COMMENTS** |
+| --- | --- | --- |
+| **Verify **high CPU container(s) and identify affected pods | 1. Run in Azure Cloud Shell or local CLI with kubectl:<br>`kubectl top pods -n <namespace> --sort-by=cpu`<br>2. Run KQL Log Analytics query:<br>`Perf \| where ObjectName == "K8SContainer" and CounterName == "cpuUsageNanoCores" \| summarize AvgCPU = avg(CounterValue) / 1e9 by InstanceName, bin(TimeGenerated, 5m)` | Identify top offending pods |
+| **Check **node resource utilization and health | 1. Run `kubectl top nodes` to check if the underlying node is under CPU pressure.<br>2. Run `kubectl describe node <nodeName>` to check for `MemoryPressure`, `DiskPressure`, or scheduling constraints. | Verify node capacity |
+| **Case 1**: Application Workload Spike / Heavy Traffic | 1. Scale out the deployment replicas to distribute the load:<br>`kubectl scale deployment <deploymentName> --replicas=<newCount> -n <namespace>`<br>2. Verify Horizontal Pod Autoscaler (HPA) triggers scaling:<br>`kubectl get hpa -n <namespace>` | Scale replicas |
+| **Case 2**: Insufficient CPU Limits in Pod Specification | 1. Inspect pod resource configuration in deployment manifest:<br>`kubectl get deployment <deploymentName> -n <namespace> -o yaml \| grep -A 5 resources:`<br>2. Update `resources.limits.cpu` and `resources.requests.cpu` to accommodate burst traffic and reapply manifest. | Adjust resource limits |
+| **Case 3**: Runaway Container Process / Thread Lock | 1. Inspect container logs for stack traces, infinite loops, or unhandled exceptions:<br>`kubectl logs <podName> -n <namespace> --tail=200`<br>2. Perform a graceful rolling restart of the deployment:<br>`kubectl rollout restart deployment/<deploymentName> -n <namespace>` | Restart runaway pods |
+| **Case 4**: Node Pool Exhaustion / Cluster Scaling | 1. Check cluster autoscaler events: `kubectl get events -n kube-system \| grep -i autoscaler`<br>2. Manually scale node pool if autoscaler is constrained:<br>`az aks nodepool scale -g <resourceGroup> --cluster-name <clusterName> -n <nodePoolName> --node-count <count>` | Scale node pool |
+| **KQL Diagnostic Query** | `ContainerLog \| where TimeGenerated > ago(30m) \| where LogEntry contains "error" or LogEntry contains "exception" \| project TimeGenerated, PodName, LogEntry` | KQL analysis |
+| **Health Check & Validation** | 1. Monitor container CPU utilization until it stabilizes below 70%.<br>2. Verify all pods are in `Running` state: `kubectl get pods -n <namespace>` | Confirm health |
+| **Confirm **Alert Resolution | Confirm that the alert has stopped firing in Azure Monitor and CNC portal. | Resolution check |
+
+## Testing Scenarios
+
+| **Scenario** | **Steps** |
+| --- | --- |
+| **Simulating High CPU Workload** | 1. Deploy a test CPU stress pod: `kubectl run cpu-stress --image=progrium/stress --restart=Never -- --cpu 2`<br>2. Verify container CPU exceeds 80% and alert fires within latency window.<br>3. Delete stress pod: `kubectl delete pod cpu-stress` |
+| **Simulating Pod Auto-Recovery** | 1. Apply updated HPA threshold to scale out pods when CPU hits 75%.<br>2. Verify automated replica creation mitigates CPU breach. |
+
+## Overview
+
+*{details}*
+
+## Alert Properties
+
+|  |  |
+| --- | --- |
+| **Severity:** | * [x] Critical * [ ] Error * [ ] Warning * [ ] Info |
+| **Signal Type:** | * [x] Log * [ ] Metric |
+
+## Remediation Overview
+
+## Investigation Steps
+
+- Access Packages:
+  - Commercial: [Commercial Access Package](https://myaccess.microsoft.com/@hexsig.onmicrosoft.com#/access-packages)
+  - Gov Cloud: [Gov Cloud Access Package](https://myaccess.microsoft.us/@HexSI.onmicrosoft.com#/access-packages)
+- Diagnostic Execution:
+  1. Connect to AKS cluster context:
+     ```bash
+     az aks get-credentials --resource-group "<resourceGroup>" --name "<aksClusterName>"
+     ```
+  2. Inspect high CPU pods:
+     ```bash
+     kubectl top pods -n "<namespace>" --sort-by=cpu
+     ```
+  3. Inspect pod lifecycle and events:
+     ```bash
+     kubectl describe pod "<podName>" -n "<namespace>"
+     ```
+
+## RCA & Mitigation
+
+| **Scenario** | **Application Impact** | **Alert Latency (min)** | **Related alerts** | **Response Plan** |
+| --- | --- | --- | --- | --- |
+| **Application Traffic Spike** | Degraded API response times; elevated p99 latency. | 3 mins | - Warning: High HTTP 5xx errors | - [Scale pod replicas or tune HPA thresholds] |
+| **Runaway Process / Deadlock** | Single pod 100% CPU lock; restart loops. | 5 mins | - Critical: Pod CrashLoopBackOff | - [Rollout restart deployment and patch process] |
+| **Node Pool CPU Exhaustion** | New pods stuck in Pending state. | 8 mins | - Critical: Pods Unschedulable | - [Scale AKS node pool count] |
+
+## Example Story Submissions
+
+- [User Story 123456](https://dev.azure.com/org/proj/_workitems/edit/123456): Critical - {name} ({cvrd})
+
+## References
+
+- [Azure Monitor Container Insights Documentation](https://learn.microsoft.com/en-us/azure/azure-monitor/containers/container-insights-overview)
+- [Manage AKS Node Pools](https://learn.microsoft.com/en-us/azure/aks/use-multiple-node-pools)
+
+## Alert Enhancement
+
+- Enhanced result set mapping:
+
+| **Field Name** | **Description** |
+| --- | --- |
+{col_table}
+
+## Lessons learned
+
+- Set proportional CPU requests and limits in pod specifications to prevent "noisy neighbor" container throttling.
+- Implement Horizontal Pod Autoscalers (HPA) configured at 70% CPU threshold for smooth traffic bursting.
+"""
+
+        # =========================================================================
+        # 2. APP SERVICE / WEB APP / SERVER FARM HIGH CPU
+        # =========================================================================
+        if any(k in lower_name or k in lower_res for k in ["app service", "webapp", "serverfarm", "asp"]):
+            return f"""# {name}
+
+# Alert Details
+
+| **Alert** | {name} |
+| --- | --- |
+| **Description** | *{details}* |
+| **Severity** | {sev} |
+| **Source** | Metrics / App Service Logs |
+| **Root Cause** | - **Case 1 : ** Traffic surge exceeding App Service Plan worker capacity<br>- **Case 2 : ** Thread pool starvation / synchronous blocking I/O<br>- **Case 3 : ** High Garbage Collection CPU overhead due to memory pressure<br>- **Case 4 : ** Misconfigured or disabled autoscale rules |
+| **Product** | Azure App Service |
+
+# Prerequisites
+
+- **App Service Plan Name:** `<appServicePlanName>`
+- **Resource Group:** `<resourceGroup>`
+- **Azure CLI & Azure Portal Access** (Website Contributor role)
+
+# Remediation Steps
+
+| **STEPS** | **ACTION** | **ADDITIONAL COMMENTS** |
+| --- | --- | --- |
+| **Verify **App Service CPU utilization and queue length | 1. Navigate to Azure Portal -> App Service Plan -> Metrics (CPU Percentage, HttpQueueLength).<br>2. Check active instances in Azure CLI:<br>`az appservice plan show -g <resourceGroup> -n <planName> --query "{{sku:sku.name, capacity:sku.capacity}}"` | Identify capacity |
+| **Scale Out / Scale Up App Service Plan** | Scale out workers immediately to absorb load:<br>`az appservice plan update -g <resourceGroup> -n <planName> --number-of-workers <newCount>` | Scale workers |
+| **Case 1**: Unresponsive worker process | Restart the specific Web App instances:<br>`az webapp restart -g <resourceGroup> -n <appName>` | Restart app |
+| **Case 2**: Inspect Profiler / Diagnostic Logs | Navigate to App Service -> Diagnose and solve problems -> Availability and Performance -> CPU Analysis. | Diagnostic analysis |
+| **Health Check** | Verify CPU Percentage drops below 70% and HTTP 5xx errors cease. | Health check |
+| **Confirm **Alert Resolution | Confirm alert stops firing in Azure Monitor. | Resolution check |
+
+## Testing Scenarios
+
+| **Scenario** | **Steps** |
+| --- | --- |
+| **Simulating App Service Load** | Run synthetic HTTP load test to verify autoscale rule fires at 80% CPU. |
+
+## Overview
+
+*{details}*
+
+## Alert Properties
+
+|  |  |
+| --- | --- |
+| **Severity:** | * [x] Critical * [ ] Error * [ ] Warning * [ ] Info |
+| **Signal Type:** | * [x] Log * [ ] Metric |
+
+## Remediation Overview
+
+## Investigation Steps
+
+- Access Packages:
+  - Commercial: [Commercial Access Package](https://myaccess.microsoft.com/@hexsig.onmicrosoft.com#/access-packages)
+  - Gov Cloud: [Gov Cloud Access Package](https://myaccess.microsoft.us/@HexSI.onmicrosoft.com#/access-packages)
+- Diagnostic commands:
+  ```powershell
+  Get-AzAppServicePlan -ResourceGroupName "<resourceGroup>" -Name "<planName>"
+  ```
+
+## RCA & Mitigation
+
+| **Scenario** | **Application Impact** | **Alert Latency (min)** | **Related alerts** | **Response Plan** |
+| --- | --- | --- | --- | --- |
+| **Traffic Surge** | Elevated HTTP 503 / 504 errors | 3 mins | - Warning: High HTTP Queue Length | - [Scale out App Service instances] |
+
+## Example Story Submissions
+
+- [User Story 123456](https://dev.azure.com/org/proj/_workitems/edit/123456): Critical - {name} ({cvrd})
+
+## References
+
+- [Azure App Service CPU Troubleshooting](https://learn.microsoft.com/en-us/azure/app-service/overview-diagnostics)
+
+## Alert Enhancement
+
+| **Field Name** | **Description** |
+| --- | --- |
+{col_table}
+
+## Lessons learned
+
+- Enable automatic scaling with minimum and maximum instance count thresholds.
+"""
+
+        # =========================================================================
+        # 3. VPN / VIRTUAL NETWORK GATEWAY DISCONNECTED (DEFAULT/VPN)
+        # =========================================================================
         return f"""# {name}
 
 # Alert Details

@@ -113,6 +113,8 @@ def health():
         row = fetch_one("SELECT 1 AS ok")
         return {"status": "ok", "database": "ok" if row and row["ok"] == 1 else "unknown"}
     except Exception as exc:
+        if not get_settings().sql_connection_string:
+            return {"status": "ok", "database": "local_dev"}
         raise _unavailable(exc, "Database unavailable.") from exc
 
 class LoginRequest(BaseModel):
@@ -154,6 +156,8 @@ def get_auth_me(request: Request):
     signed_in = session_auth.session_user(request)
     if signed_in:
         return {"authenticated": True, "loginRequired": True, "userId": signed_in, "email": None, "name": signed_in, "provider": "Key Vault sign-in"}
+    if not get_settings().require_login:
+        return {"authenticated": True, "loginRequired": False, "userId": "local-dev", "email": "dev@local", "name": "Local Admin", "provider": "Local Dev"}
     user_id = request.headers.get("x-ms-client-principal-id")
     user_name = request.headers.get("x-ms-client-principal-name")
     display_name = None
@@ -187,6 +191,8 @@ def options():
     try:
         return service.options()
     except Exception as exc:
+        if not get_settings().sql_connection_string:
+            return {"organizations": [], "projects": [], "pipelines": []}
         raise _unavailable(exc) from exc
 
 @router.get("/version", tags=["system"])
@@ -200,6 +206,18 @@ def summary(pipeline_id: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, d
     try:
         return service.summary(pipeline_id, days)
     except Exception as exc:
+        if not get_settings().sql_connection_string:
+            return {
+                "total_runs": 0,
+                "successful_runs": 0,
+                "failed_runs": 0,
+                "success_rate_pct": 0,
+                "failure_rate_pct": 0,
+                "average_duration_seconds": None,
+                "p90_duration_seconds": None,
+                "average_queue_seconds": None,
+                "stages": [],
+            }
         raise _unavailable(exc) from exc
 
 @router.get("/trends")
@@ -207,6 +225,8 @@ def trends(pipeline_id: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, da
     try:
         return service.trends(pipeline_id, days)
     except Exception as exc:
+        if not get_settings().sql_connection_string:
+            return {"build_trend": [], "daily_trend": []}
         raise _unavailable(exc) from exc
 
 @router.get("/runs")
@@ -220,6 +240,8 @@ def runs(
     try:
         return service.runs(pipeline_id, page, page_size, status, days)
     except Exception as exc:
+        if not get_settings().sql_connection_string:
+            return {"runs": [], "total": 0, "page": page, "page_size": page_size}
         raise _unavailable(exc) from exc
 
 @router.get("/runs/{run_id}/timeline")
