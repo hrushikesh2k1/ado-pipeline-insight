@@ -356,6 +356,8 @@ class IrpGenerateResponse(BaseModel):
     target_resource: str
     markdown_content: str
     suggested_wiki_path: str
+    generated_by: str = "ai"  # "ai" when the model wrote it, "built-in" when the canned plan was used
+    notice: str | None = None  # why the built-in plan was used, or what could not be repaired
 
 
 class IrpPublishRequest(_Validated):

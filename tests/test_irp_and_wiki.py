@@ -25,10 +25,12 @@ def test_irp_service_heuristic_generation():
     assert res["suggested_wiki_path"] == "/Incident-Response-Plans/VPN-Tunnel-Disconnected"
     assert "VPN Tunnel Disconnected" in res["markdown_content"]
     assert "Sev-1" in res["markdown_content"]
-    assert "Alert Details" in res["markdown_content"]
-    assert "Testing Scenarios" in res["markdown_content"]
-    assert "Alert Enhancement" in res["markdown_content"]
+    md = res["markdown_content"]
+    assert [line for line in md.splitlines() if line.startswith("#")] == ["# VPN Tunnel Disconnected", "# Alert Details", "# Prerequisites", "# Remediation Steps"]
+    assert "| **STEPS** | **ACTIONS** | **ADDITIONAL INFO** |" in md
+    assert "Testing Scenarios" not in md and "Alert Enhancement" not in md  # only the three sections of the IRP example
     assert res["alert_name"] == "VPN Tunnel Disconnected"
+    assert res["generated_by"] == "built-in" and "were not read" in res["notice"]  # the built-in plan never reads uploads: it says so
 
 
 def test_irp_service_publish_flow():

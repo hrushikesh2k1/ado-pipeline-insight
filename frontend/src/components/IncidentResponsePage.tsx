@@ -107,6 +107,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
   const [isGenerating, setIsGenerating] = useState<boolean>(false)
   const [generatedIrp, setGeneratedIrp] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
+  const [irpNotice, setIrpNotice] = useState<string>('')
   const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview')
   const [copied, setCopied] = useState<boolean>(false)
 
@@ -157,6 +158,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
 
     setIsGenerating(true)
     setErrorMessage('')
+    setIrpNotice('')
 
     try {
       const res: IrpGenerateResponse = await api.generateIrp({
@@ -176,6 +178,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
       })
 
       setGeneratedIrp(res.markdown_content)
+      setIrpNotice(res.notice || '')
     } catch (err: any) {
       setErrorMessage(err?.response?.data?.detail || err?.message || 'Failed to generate Incident Response Plan.')
     } finally {
@@ -217,9 +220,72 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
     document.body.removeChild(link)
   }
 
+  // In-table code snippet with line numbers matching Azure DevOps Wiki & screenshot
+  const WikiCellCodeSnippet: React.FC<{ rawCode: string }> = ({ rawCode }) => {
+    const [isCopied, setIsCopied] = useState(false)
+
+    // Clean HTML entities & <br>
+    const cleanCode = rawCode
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/\\\|/g, '|')
+      .trim()
+
+    const lines = cleanCode.split('\n')
+
+    const handleCopy = (e: React.MouseEvent) => {
+      e.stopPropagation()
+      navigator.clipboard.writeText(cleanCode)
+      setIsCopied(true)
+      setTimeout(() => setIsCopied(false), 2000)
+    }
+
+    return (
+      <div className="irpWikiCellCodeSnippet">
+        <button
+          type="button"
+          className="irpWikiCellCopyBtn"
+          onClick={handleCopy}
+          title="Copy query / command"
+        >
+          {isCopied ? <Check size={11} color="#16a34a" /> : <Copy size={11} />}
+          <span>{isCopied ? 'Copied' : 'Copy'}</span>
+        </button>
+        <table className="irpWikiCellCodeTable">
+          <tbody>
+            {lines.map((ln, lIdx) => (
+              <tr key={lIdx}>
+                <td className="irpWikiCellLineNum">{lIdx + 1}</td>
+                <td className="irpWikiCellLineContent">{ln}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
   // Formatted Markdown Preview Renderer matching Azure DevOps Wiki Document standard
   const renderInlineMarkdown = (text: string): React.ReactNode => {
     if (!text) return null
+
+    // Check for <pre><code>...</code></pre> or <pre>...</pre> blocks in cell text
+    const preRegex = /(<pre[\s\S]*?<\/pre>)/gi
+    if (preRegex.test(text)) {
+      const preParts = text.split(preRegex)
+      return preParts.map((pPart, pIdx) => {
+        if (/^<pre[\s\S]*?<\/pre>$/i.test(pPart.trim())) {
+          // Extract inner code
+          const codeMatch = pPart.match(/<code[\s\S]*?>([\s\S]*?)<\/code>/i)
+          const innerCode = codeMatch ? codeMatch[1] : pPart.replace(/<\/?pre[^>]*>/gi, '')
+          return <WikiCellCodeSnippet key={`pre-${pIdx}`} rawCode={innerCode} />
+        }
+        return <React.Fragment key={`non-pre-${pIdx}`}>{renderInlineMarkdown(pPart)}</React.Fragment>
+      })
+    }
 
     // Replace literal <br> or <br/> tags
     const parts = text.split(/(<br\s*\/?>)/gi)
@@ -262,7 +328,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
             if (tok.startsWith('`') && tok.endsWith('`') && tok.length >= 2) {
               return (
                 <code key={tIdx} className="irpWikiInlineCode">
-                  {tok.slice(1, -1)}
+                  {tok.slice(1, -1).replace(/\\\|/g, '|')}
                 </code>
               )
             }
@@ -298,15 +364,23 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
     const cells: string[] = []
     let current = ''
     let inCode = false
+    let inPre = false
 
     for (let idx = 0; idx < trimmed.length; idx++) {
       const char = trimmed[idx]
       const prev = idx > 0 ? trimmed[idx - 1] : ''
+      const rest = trimmed.slice(idx).toLowerCase()
+
+      if (rest.startsWith('<pre') || rest.startsWith('<code')) {
+        inPre = true
+      } else if (rest.startsWith('</pre>') || rest.startsWith('</code>')) {
+        inPre = false
+      }
 
       if (char === '`' && prev !== '\\') {
         inCode = !inCode
         current += char
-      } else if (char === '|' && !inCode && prev !== '\\') {
+      } else if (char === '|' && !inCode && !inPre && prev !== '\\') {
         cells.push(current.trim())
         current = ''
       } else {
@@ -373,14 +447,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
         }
 
         if (tableLines.length >= 2) {
-          let headers = splitTableRow(tableLines[0])
-          
-          // Check if this is the Remediation Steps table
-          const isRemediationTable = headers.some((h) => /steps/i.test(h)) && headers.some((h) => /action/i.test(h))
-          if (isRemediationTable) {
-            headers = ['**STEPS**', '**ACTION**', '**ADDITIONAL COMMENTS**']
-          }
-
+          const headers = splitTableRow(tableLines[0])
           const expectedCols = headers.length
 
           // Skip divider row (row 1 like |---|---|)
@@ -388,13 +455,6 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
             const rawCells = splitTableRow(r)
             if (rawCells.length === expectedCols) {
               return rawCells
-            }
-            if (rawCells.length > expectedCols && expectedCols === 3) {
-              // Merge overflow cells (from KQL unescaped pipes) into the ACTION column (index 1)
-              const first = rawCells[0]
-              const last = rawCells[rawCells.length - 1]
-              const middle = rawCells.slice(1, rawCells.length - 1).join(' | ')
-              return [first, middle, last]
             }
             if (rawCells.length > expectedCols) {
               const head = rawCells.slice(0, expectedCols - 1)
@@ -873,16 +933,16 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
             </div>
 
             <p className="irpSectionHint">
-              Upload your company's standard markdown IRP template. The AI will strictly follow its exact structure and headings.
+              Optional. Your IRP template is read as writing guidelines only. The output structure always comes from the IRP example below: Alert Details, Prerequisites and Remediation Steps, with the columns STEPS, ACTIONS and ADDITIONAL INFO.
             </p>
 
             <div className="irpUploadRow">
               <label className="irpUploadBtn">
                 <Upload size={14} style={{ marginRight: '6px' }} />
-                {irpTemplateFileName ? `Uploaded: ${irpTemplateFileName}` : 'Upload Template (.md, .txt, .json)'}
+                {irpTemplateFileName ? `Uploaded: ${irpTemplateFileName}` : 'Upload Template (.md, .txt)'}
                 <input
                   type="file"
-                  accept=".md,.txt,.json,.doc,.docx"
+                  accept=".md,.markdown,.txt"
                   style={{ display: 'none' }}
                   onChange={handleTemplateFileUpload}
                 />
@@ -931,7 +991,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
             </div>
 
             <p className="irpSectionHint">
-              Upload a completed reference IRP. The AI will mirror this exact schema, depth, checklist format, and command style.
+              Upload a completed reference IRP (.md or .txt). It is the skeleton: the output mirrors its first three sections (Alert Details, Prerequisites, Remediation Steps) exactly, with a 3-column Remediation Steps table. The whole example is sent to the AI; the sections after Remediation Steps are not used.
             </p>
 
             <div className="irpUploadRow">
@@ -940,7 +1000,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
                 {irpExampleFileName ? `Uploaded: ${irpExampleFileName}` : 'Upload Example (.md, .txt)'}
                 <input
                   type="file"
-                  accept=".md,.txt,.json"
+                  accept=".md,.markdown,.txt"
                   style={{ display: 'none' }}
                   onChange={handleExampleFileUpload}
                 />
@@ -1002,6 +1062,12 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
 
         {/* ================= RIGHT COLUMN: GENERATED IRP ================= */}
         <div className="irpRightCol">
+          {irpNotice && (
+            <div className="irpErrorNotice" data-testid="irp-notice">
+              <AlertTriangle size={16} style={{ marginRight: '8px', flexShrink: 0 }} />
+              <span>{irpNotice}</span>
+            </div>
+          )}
           <div className="irpOutputCard">
             <div className="irpOutputHeader">
               <div className="irpOutputHeaderLeft">

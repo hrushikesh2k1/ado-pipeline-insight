@@ -308,6 +308,8 @@ export type IrpGenerateResponse = {
   target_resource: string
   markdown_content: string
   suggested_wiki_path: string
+  generated_by?: 'ai' | 'built-in'
+  notice?: string | null
 }
 
 export type IrpPublishRequest = {

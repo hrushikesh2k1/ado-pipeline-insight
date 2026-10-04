@@ -226,7 +226,7 @@ def trends(pipeline_id: Annotated[int | None, Query(ge=1, le=MAX_ID)] = None, da
         return service.trends(pipeline_id, days)
     except Exception as exc:
         if not get_settings().sql_connection_string:
-            return {"build_trend": [], "daily_trend": []}
+            return {"build_trend": [], "daily_trend": [], "stage_trend": []}
         raise _unavailable(exc) from exc
 
 @router.get("/runs")
@@ -241,7 +241,7 @@ def runs(
         return service.runs(pipeline_id, page, page_size, status, days)
     except Exception as exc:
         if not get_settings().sql_connection_string:
-            return {"runs": [], "total": 0, "page": page, "page_size": page_size}
+            return {"page": page, "page_size": page_size, "total_count": 0, "total_pages": 0, "items": []}
         raise _unavailable(exc) from exc
 
 @router.get("/runs/{run_id}/timeline")
