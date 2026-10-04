@@ -4,14 +4,39 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
-## [1.6.0] - 2026-10-03
+## [1.6.0] - 2026-10-05
 
 ### Added
-- **Incident Response & IRP Hub page**: A dedicated operations page to generate production-ready Incident Response Plans (IRPs) and publish directly to Azure DevOps Wiki.
-- **AI-Powered IRP Generator**: Synthesizes structured SRE runbooks with diagnostic commands (CLI/PowerShell), live KQL telemetry queries, 3-tier remediation procedures, rollback plans, and escalation matrices using Azure OpenAI or deterministic SRE heuristics.
-- **Direct 1-Click Azure DevOps Wiki Publishing**: Publishes generated markdown runbooks directly to project wikis (`/Incident-Response-Plans/...`) with optional auto-registration in the `/Alert-Inventory` master table.
-- **Interactive ADO Wiki Explorer**: Live visual tree to browse and preview existing wiki pages and incident response runbooks directly from the dashboard.
-- **Wiki REST API Integrations**: Added backend endpoints `/api/v1/wiki/list`, `/api/v1/wiki/pages`, `/api/v1/wiki/page`, `/api/v1/irp/generate`, and `/api/v1/irp/publish`.
+- **Incident Response Plan (IRP) Studio.** A new page that writes an IRP for an alert from the alert's name, CVRD, output
+  columns, description, ARM/Bicep context, severity, trigger condition and owning team. The plan can be previewed as a
+  wiki page, copied to the clipboard or downloaded as Markdown.
+- **The IRP follows the organisation's IRP example exactly.** The result is the alert title plus three sections only:
+  **Alert Details**, **Prerequisites** and **Remediation Steps**. The Remediation Steps table has exactly three columns,
+  **STEPS | ACTIONS | ADDITIONAL INFO**, and about ten rows (a guide, not a limit). The expected outcome of an action goes
+  in ADDITIONAL INFO.
+- **Upload your own IRP example and template.** The example is the skeleton: its first three sections are sent to the AI
+  whole (up to 60,000 characters; the old 5,000-character cap is gone) and the sections after Remediation Steps are not
+  used. The template is optional and is read as writing guidelines only (up to 30,000 characters); where it disagrees with
+  the example about sections or columns, the example wins. Only `.md` and `.txt` files are accepted.
+- **The page says which engine wrote the plan.** When Azure OpenAI is not configured or its call fails, a built-in plan for
+  AKS/container, App Service or VPN alerts is used instead (any other alert gets the VPN plan), and a notice says why and
+  that the uploaded files were not read.
+- **API endpoints** `/api/v1/irp/generate` and `/api/v1/irp/publish`, and the Azure DevOps wiki endpoints
+  `/api/v1/wiki/list`, `/api/v1/wiki/pages` and `/api/v1/wiki/page`. The page itself offers copy and download; publishing
+  to the wiki is available through the API.
+
+### Changed
+- **The shape of the IRP is enforced in code, not only requested in the prompt.** Whatever the AI returns is cut down to
+  the three sections: extra sections (Post-Incident Analysis, Testing Scenarios, Lessons learned and the rest, however
+  they are written), the authoring checklist, notes and second tables are removed; a fourth "Expected outcome" column is
+  folded into ADDITIONAL INFO; and a pipe inside a query is escaped so that Azure DevOps wiki and GitHub keep three columns.
+- The formatted preview shows exactly the Markdown the server returned (it no longer rewrites table headers).
+
+### Fixed
+- The dashboard no longer goes blank on a machine with no database configured (the local `/runs` and `/trends` answers
+  had the wrong shape).
+- Sign-in credentials come only from Key Vault (or `AUTH_USERNAME` / `AUTH_PASSWORD` for local development). There is no
+  built-in default account or session secret: with neither configured, nobody can sign in.
 
 ## [1.5.0] - 2026-10-03
 
