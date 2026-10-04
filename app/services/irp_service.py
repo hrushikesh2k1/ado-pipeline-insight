@@ -125,6 +125,30 @@ CRITICAL RULES:
 """
 
 
+def _split_markdown_table_row(row: str) -> list[str]:
+    trimmed = row.strip()
+    if trimmed.startswith("|"):
+        trimmed = trimmed[1:]
+    if trimmed.endswith("|"):
+        trimmed = trimmed[:-1]
+
+    cells = []
+    current = []
+    in_code = False
+    for idx, ch in enumerate(trimmed):
+        prev = trimmed[idx - 1] if idx > 0 else ""
+        if ch == "`" and prev != "\\":
+            in_code = not in_code
+            current.append(ch)
+        elif ch == "|" and not in_code and prev != "\\":
+            cells.append("".join(current).strip())
+            current = []
+        else:
+            current.append(ch)
+    cells.append("".join(current).strip())
+    return cells
+
+
 def _clean_irp_markdown(text: str) -> str:
     """Post-process generated IRP markdown to strip authoring checklists and normalize tables."""
     if not text:
@@ -134,8 +158,67 @@ def _clean_irp_markdown(text: str) -> str:
         r"(?i)\n*#+\s*(?:IRP\s+)?Authoring\s+Checklist[\s\S]*$",
         "",
         text,
-    )
-    return cleaned.strip()
+    ).strip()
+
+    # Process tables to ensure Remediation Steps has strictly 3 columns: STEPS | ACTION | ADDITIONAL COMMENTS
+    lines = cleaned.split("\n")
+    new_lines = []
+    in_remediation_table = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        trimmed = line.strip()
+
+        # Check if line is a table header for Remediation Steps
+        if trimmed.startswith("|") and ("STEPS" in trimmed.upper() or "STEP" in trimmed.upper()) and "ACTION" in trimmed.upper():
+            in_remediation_table = True
+            new_lines.append("| **STEPS** | **ACTION** | **ADDITIONAL COMMENTS** |")
+            # Check next line for divider
+            if i + 1 < len(lines) and lines[i + 1].strip().startswith("|"):
+                new_lines.append("| --- | --- | --- |")
+                i += 2
+                continue
+            i += 1
+            continue
+
+        if in_remediation_table:
+            if not trimmed.startswith("|") or trimmed.startswith("#") or not trimmed:
+                in_remediation_table = False
+                new_lines.append(line)
+                i += 1
+                continue
+
+            # It's a row in the remediation table
+            raw_cells = _split_markdown_table_row(trimmed)
+            # Skip divider rows if any
+            if all(c.replace("-", "").strip() == "" for c in raw_cells):
+                i += 1
+                continue
+
+            if len(raw_cells) == 3:
+                step = raw_cells[0]
+                action = raw_cells[1]
+                comments = raw_cells[2]
+                new_lines.append(f"| {step} | {action} | {comments} |")
+            elif len(raw_cells) == 2:
+                new_lines.append(f"| {raw_cells[0]} | {raw_cells[1]} | |")
+            elif len(raw_cells) > 3:
+                # More than 3 cells (e.g. from EXPECTED OUTCOME column or unescaped KQL pipes)
+                step = raw_cells[0]
+                comments = raw_cells[-1] if len(raw_cells[-1]) < 60 and not any(k in raw_cells[-1].lower() for k in ["where", "project", "summarize", "az ", "kubectl"]) else ""
+                middle_cells = raw_cells[1:-1] if comments else raw_cells[1:]
+                action = "<br>".join([c for c in middle_cells if c])
+                new_lines.append(f"| {step} | {action} | {comments} |")
+            else:
+                new_lines.append(line)
+            i += 1
+            continue
+
+        new_lines.append(line)
+        i += 1
+
+    return "\n".join(new_lines).strip()
 
 
 class IrpService:
