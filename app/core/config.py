@@ -24,9 +24,9 @@ class Settings(BaseSettings):
     auth_username_secret_name: str = "app-auth-username"
     auth_password_secret_name: str = "app-auth-password"
     auth_session_secret_name: str = "app-auth-session-secret"
-    auth_username: str = "admin"
-    auth_password: str = "admin"
-    auth_session_secret: str = "local-dev-secret-key-32-chars-long!"
+    auth_username: str = ""  # empty means closed: with no Key Vault and no AUTH_USERNAME/AUTH_PASSWORD nobody can sign in
+    auth_password: str = ""
+    auth_session_secret: str = ""
     session_hours: int = 8
     model_config = SettingsConfigDict(
         env_file=(PROJECT_ROOT / ".env",),
