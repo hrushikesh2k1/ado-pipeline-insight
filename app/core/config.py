@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     enable_api_docs: bool = False
     allowed_ado_orgs: str = ""
     max_request_bytes: int = 65536
+    # File uploads travel as base64 inside JSON: a 5 MB file is about 6.7 MB. Only the upload routes get this larger limit.
+    max_upload_request_bytes: int = 7_200_000
     # Username/password sign-in. Credentials live in Key Vault; auth_username/auth_password are a local-dev fallback
     # used only when key_vault_url is empty. Set REQUIRE_LOGIN=false to run without sign-in (local development).
     require_login: bool = True

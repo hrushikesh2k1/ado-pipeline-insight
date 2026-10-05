@@ -250,11 +250,14 @@ class AzureDevOpsClient:
             return data["value"]
         return []
 
-    def query_wiql(self, project: str, wiql_query: str) -> list[int]:
-        """Execute a WIQL query and return a list of matching work item IDs."""
+    def query_wiql(self, project: str, wiql_query: str, top: int | None = None) -> list[int]:
+        """Execute a WIQL query and return a list of matching work item IDs (at most `top`, when given)."""
         url = self._url(project, "_apis/wit/wiql")
         payload = {"query": wiql_query}
-        response = self.session.post(url, json=payload, params={"api-version": self.api_version}, timeout=30)
+        params: dict[str, Any] = {"api-version": self.api_version}
+        if top:
+            params["$top"] = int(top)
+        response = self.session.post(url, json=payload, params=params, timeout=60)
         response.raise_for_status()
         data = self._json_response(response)
 
@@ -282,6 +285,15 @@ class AzureDevOpsClient:
                         except (ValueError, TypeError):
                             pass
         return list(dict.fromkeys(item_ids))
+
+    def list_work_item_types(self, project: str) -> list[dict[str, Any]]:
+        """The work item types of a project (Bug, Task, User Story, ... as defined by its process)."""
+        return self._get(project, "_apis/wit/workitemtypes").get("value", [])
+
+    def list_work_item_type_states(self, project: str, type_name: str) -> list[dict[str, Any]]:
+        """The states of one work item type, each with its category (Proposed, InProgress, Resolved, Completed)."""
+        path = f"_apis/wit/workitemtypes/{quote(type_name, safe='')}/states"
+        return self._get(project, path).get("value", [])
 
     def get_team_iteration(
         self, project: str, team: str, iteration_id: str

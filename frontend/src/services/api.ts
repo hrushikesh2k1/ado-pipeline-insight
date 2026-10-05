@@ -25,6 +25,11 @@ import type {
   IrpGenerateResponse,
   IrpPublishRequest,
   IrpPublishResponse,
+  InsightJob,
+  InsightInventory,
+  InsightScope,
+  AlertInventoryUploadRequest,
+  WorkItemInsights,
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
@@ -57,6 +62,10 @@ async function request<T>(path:string, init?:RequestInit):Promise<T>{
   }
   return response.json()
 }
+function insightQuery(scope: InsightScope): string {
+  return new URLSearchParams({ organization: scope.organization, project: scope.project, team: scope.team, tag: scope.tag }).toString()
+}
+
 export const api = {
   options:()=>request<Options>('/api/v1/options'),
   summary:(pipelineId:number|null,days:number)=>request<Summary>(`/api/v1/summary?days=${days}${pipelineId?`&pipeline_id=${pipelineId}`:''}`),
@@ -216,6 +225,31 @@ export const api = {
       headers,
       body: JSON.stringify(payload),
     })
+  },
+  workItemInsights: (scope: InsightScope) => {
+    return request<WorkItemInsights>(`/api/v1/insights/work-items?${insightQuery(scope)}`)
+  },
+  workItemInsightsStatus: (scope: InsightScope) => {
+    return request<InsightJob>(`/api/v1/insights/work-items/status?${insightQuery(scope)}`)
+  },
+  refreshWorkItemInsights: (scope: InsightScope, options: { regroup?: boolean; months?: number }, pat?: string) => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (pat) headers['X-ADO-PAT'] = pat
+    return request<InsightJob>('/api/v1/insights/work-items/refresh', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ ...scope, ...options }),
+    })
+  },
+  uploadAlertInventory: (payload: AlertInventoryUploadRequest) => {
+    return request<InsightInventory>('/api/v1/insights/work-items/inventory', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  },
+  deleteAlertInventory: (scope: InsightScope) => {
+    return request<{ status: string }>(`/api/v1/insights/work-items/inventory?${insightQuery(scope)}`, { method: 'DELETE' })
   },
 }
 

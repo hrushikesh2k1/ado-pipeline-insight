@@ -4,6 +4,44 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.7.0] - 2026-10-05
+
+### Added
+- **Work Item Insights.** A new page that shows what a team's work items are about, who closes them, where bugs come
+  from and how many alerts exist. It works for any team or project: pick a **Team** (its area paths), a **Tag** (for
+  example `monitoring`), or both, or neither for the whole project. It reads everything still open, whatever its age,
+  plus everything that closed in the last 6 months. Which states mean "closed" comes from Azure DevOps itself (the
+  state categories of each work item type), so it does not depend on one team's process. The team and tag are
+  remembered per organization and project.
+  1. **Work items closed per sprint**, one colour per person, with filters for people and work item types.
+  2. **Work items by area** (for example VPN, login, AKS restarts), split into backlog, active and closed.
+  3. **Bugs raised by area**, by area and over time. The bug types can be chosen; open bugs raised before the
+     6 months are counted in a note instead of the charts.
+  4. **Alert scope.** Upload your alert inventory (`.xlsx`, `.csv`, `.tsv`, `.md` or `.txt`, up to 5 MB, with a header
+     row) to see how many alerts exist, grouped by a column such as Service, next to the work items that were raised to
+     build new alerts. The alert-name and grouping columns can be changed after the upload.
+  Clicking any bar lists the work items behind it, with links to Azure DevOps.
+- **Areas come from the AI reading each work item's title and description.** The AI proposes the list of areas once
+  from a spread of the work items and the list is saved; every work item is then put in exactly one of those areas.
+  Only new or changed work items are sent to the AI on later refreshes, so the counts stay stable and a refresh is
+  cheap. **Regroup areas** asks for a new list. The same pass decides whether a work item asks for a new alert, but only
+  when an alert inventory has been uploaded. Without Azure OpenAI the areas follow the Azure DevOps Area Path and the
+  page says so. Work items the AI could not answer for are shown as "Not grouped", never guessed.
+- **A refresh runs in the background** and reports its progress; the saved result opens straight away on the next visit.
+- **API endpoints** `/api/v1/insights/work-items` (read), `.../refresh`, `.../status` and `.../inventory` (upload and
+  remove).
+
+### Changed
+- The request size guard can give a named route a larger limit. Only the alert inventory upload has one (the file is
+  sent inside the request); every other route keeps the 64 KB limit.
+
+### Notes
+- It needs a personal access token with the **Work Items: Read** scope. Azure OpenAI is optional.
+- It saves the work items' id, type, title, state, assignee, dates, sprint, area path and area (not their descriptions)
+  in a new table, `dbo.wi_insight_scopes`, which is created in the app's database on first use, like the release
+  tables. Titles and descriptions are sent to the configured Azure OpenAI deployment to be grouped.
+- `openpyxl` is a new dependency (it reads Excel files).
+
 ## [1.6.0] - 2026-10-05
 
 ### Added

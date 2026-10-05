@@ -22,18 +22,23 @@ CONTENT_SECURITY_POLICY = (
 
 
 class RequestSizeLimit:
-    """Reject request bodies larger than max_bytes, both by Content-Length and while streaming."""
+    """Reject request bodies larger than max_bytes, both by Content-Length and while streaming.
 
-    def __init__(self, app: ASGIApp, max_bytes: int):
+    `path_limits` raises the limit for named routes only (a file upload), so every other route keeps the small default.
+    """
+
+    def __init__(self, app: ASGIApp, max_bytes: int, path_limits: dict[str, int] | None = None):
         self.app = app
         self.max_bytes = max_bytes
+        self.path_limits = path_limits or {}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
+        limit = self.path_limits.get(scope.get("path", ""), self.max_bytes)
         declared = dict(scope["headers"]).get(b"content-length")
-        if declared and declared.isdigit() and int(declared) > self.max_bytes:
+        if declared and declared.isdigit() and int(declared) > limit:
             await self._reject(scope, receive, send)
             return
 
@@ -45,7 +50,7 @@ class RequestSizeLimit:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
+                if received > limit:
                     raise _BodyTooLarge
             return message
 

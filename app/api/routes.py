@@ -54,6 +54,9 @@ from app.schemas.connection import (
 from app.repositories.release_repository import ReleaseRepository
 from app.services.release_service import ReleaseService
 from app.services.irp_service import IrpService
+from app.schemas.insights import AlertInventoryUpload, InsightsRefreshRequest
+from app.services.work_item_insights import WorkItemInsightsService
+from app.repositories import work_item_insights_repository as insights_store
 from app.services.board_service import (
     evaluate_sprint_work_items,
     is_work_item_in_iteration,
@@ -1864,3 +1867,90 @@ def publish_irp(
 
 
 
+
+
+# ============================================================================
+# Work Item Insights (areas, closed work per sprint, bugs by area, alert scope)
+# ============================================================================
+
+wi_insights = WorkItemInsightsService()
+
+
+def _insights_scope(organization: str, project: str, team: str, tag: str) -> tuple[str, str, str, str]:
+    try:
+        return validate_organization(organization), validate_project(project), team.strip(), tag.strip()
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get("/insights/work-items", tags=["insights"])
+def get_work_item_insights(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    team: str = Query("", max_length=256),
+    tag: str = Query("", max_length=256),
+) -> dict[str, Any]:
+    """The saved work items of a scope with their areas, the alert inventory summary and the refresh status."""
+    org, proj, team_name, tag_name = _insights_scope(organization, project, team, tag)
+    try:
+        return wi_insights.snapshot(org, proj, team_name, tag_name)
+    except Exception as exc:
+        raise _unavailable(exc, "Work item insights are unavailable.") from exc
+
+
+@router.post("/insights/work-items/refresh", tags=["insights"])
+def refresh_work_item_insights(
+    payload: InsightsRefreshRequest,
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
+) -> dict[str, Any]:
+    """Start reading the scope's work items from Azure DevOps and grouping them (runs in the background)."""
+    pat = _resolve_pat(payload.organization, payload.pat or x_ado_pat)
+    return wi_insights.start_refresh(
+        payload.organization, payload.project, pat,
+        team=payload.team, tag=payload.tag, months=payload.months, regroup=payload.regroup,
+    )
+
+
+@router.get("/insights/work-items/status", tags=["insights"])
+def get_work_item_insights_status(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    team: str = Query("", max_length=256),
+    tag: str = Query("", max_length=256),
+) -> dict[str, Any]:
+    org, proj, team_name, tag_name = _insights_scope(organization, project, team, tag)
+    return wi_insights.status(insights_store.scope_key(org, proj, team_name, tag_name))
+
+
+@router.post("/insights/work-items/inventory", tags=["insights"])
+def upload_alert_inventory(payload: AlertInventoryUpload) -> dict[str, Any]:
+    """Save the uploaded alert inventory (.xlsx, .csv, .tsv, .md or .txt) for a scope."""
+    try:
+        data = base64.b64decode(payload.content_base64, validate=True)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="The file could not be decoded.") from exc
+    try:
+        return wi_insights.save_inventory(
+            payload.organization, payload.project, payload.team, payload.tag,
+            payload.filename, data, payload.name_column, payload.category_column,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logging.warning("Alert inventory upload failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=422, detail="The file could not be read. Check that it is a valid .xlsx, .csv, .tsv, .md or .txt file.") from exc
+
+
+@router.delete("/insights/work-items/inventory", tags=["insights"])
+def delete_alert_inventory(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    team: str = Query("", max_length=256),
+    tag: str = Query("", max_length=256),
+) -> dict[str, Any]:
+    org, proj, team_name, tag_name = _insights_scope(organization, project, team, tag)
+    try:
+        wi_insights.clear_inventory(org, proj, team_name, tag_name)
+    except Exception as exc:
+        raise _unavailable(exc, "Work item insights are unavailable.") from exc
+    return {"status": "removed"}

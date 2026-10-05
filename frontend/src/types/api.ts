@@ -337,3 +337,73 @@ export type IrpPublishResponse = {
 
 
 
+
+// ---- Work Item Insights ----
+
+export type InsightItem = {
+  id: number
+  type: string
+  title: string
+  state: string
+  /** Azure DevOps state category: proposed (not started), inprogress, resolved, completed (closed). */
+  state_category: string
+  assigned_to: string
+  created: string | null
+  closed: string | null
+  /** Iteration path below the project root, for example "2026\Sprint 5". */
+  sprint: string
+  area_path: string
+  /** The area the AI (or the Azure DevOps area path) put the item in. */
+  area: string
+  /** True when the item asks for a new alert to be built; null when not checked (no inventory or no AI). */
+  alert_work: boolean | null
+}
+
+export type InsightArea = { name: string; description: string }
+
+export type InsightInventory = {
+  filename: string | null
+  sheet: string | null
+  uploaded_at: string | null
+  count: number
+  duplicates: number
+  columns: string[]
+  name_column: string | null
+  category_column: string | null
+  categories: { name: string; count: number }[]
+  sample: string[]
+}
+
+export type InsightJob = {
+  status: 'idle' | 'running' | 'done' | 'error'
+  phase: string | null
+  done: number
+  total: number
+  message: string
+  error: string | null
+  notes?: string[]
+}
+
+export type InsightScope = { organization: string; project: string; team: string; tag: string }
+
+export type WorkItemInsights = {
+  scope: InsightScope & { months: number }
+  has_data: boolean
+  refreshed_at: string | null
+  area_source: 'ai' | 'area_path' | null
+  areas: InsightArea[]
+  items: InsightItem[]
+  types: { name: string; count: number }[]
+  bug_types: string[]
+  inventory: InsightInventory | null
+  notes: string[]
+  ai_configured: boolean
+  job: InsightJob
+}
+
+export type AlertInventoryUploadRequest = InsightScope & {
+  filename: string
+  content_base64: string
+  name_column?: string | null
+  category_column?: string | null
+}

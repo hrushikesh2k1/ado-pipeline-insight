@@ -57,3 +57,19 @@ class Recorder:
     def _one(self, query, params=()):
         self.calls.append((query, tuple(params)))
         return self.one_row
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _clean_work_item_insights():
+    """Saved insights and refresh jobs live in module-level memory; every test starts without them."""
+    import app.repositories.work_item_insights_repository as insights_store
+    import app.services.work_item_insights as insights_service
+
+    insights_store.clear_memory()
+    insights_service._jobs.clear()
+    yield
+    insights_store.clear_memory()
+    insights_service._jobs.clear()
