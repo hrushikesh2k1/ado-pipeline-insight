@@ -31,6 +31,11 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   they are written), the authoring checklist, notes and second tables are removed; a fourth "Expected outcome" column is
   folded into ADDITIONAL INFO; and a pipe inside a query is escaped so that Azure DevOps wiki and GitHub keep three columns.
 - The formatted preview shows exactly the Markdown the server returned (it no longer rewrites table headers).
+- **The IRP Studio form is shorter.** The quick-fill alert presets, the CVRD / Alert Identifier field and the Target
+  Resource / Service field are gone; the request no longer sends them (the API still accepts them).
+- **Severity uses Azure Monitor's scale:** Sev0 (Critical), Sev1 (Error), Sev2 (Warning), Sev3 (Informational) and
+  Sev4 (Verbose), with Sev0 (Critical) selected by default. The IRP's Severity row shows the plain name, for example
+  Critical, as in the IRP example.
 
 ### Fixed
 - The dashboard no longer goes blank on a machine with no database configured (the local `/runs` and `/trends` answers
