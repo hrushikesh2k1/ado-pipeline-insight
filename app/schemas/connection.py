@@ -341,7 +341,7 @@ class IrpGenerateRequest(BaseModel):
     arm_template_context: str | None = None
     alert_details: str | None = None
     target_resource: str | None = Field(default=None, max_length=256)
-    severity: str = Field(default="Sev-1")
+    severity: str = Field(default="Sev0 (Critical)")
     trigger_condition: str | None = None
     owning_team: str | None = None
     environment: str | None = "Production"

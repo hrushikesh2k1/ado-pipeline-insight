@@ -403,3 +403,51 @@ class TestPipesInsideCellsDoNotBecomeColumns:
         for alert, resource in (("High CPU on AKS pods", "aks-prod"), ("App Service slow responses", "my app service"), ("VPN down", "vpn-gw")):
             md = IrpService(settings=SimpleNamespace(azure_openai_endpoint="", azure_openai_deployment="")).generate_irp(alert_name=alert, target_resource=resource)["markdown_content"]
             assert {len(gfm_cells(line)) for line in md[md.index("# Remediation Steps"):].splitlines() if line.startswith("|")} == {3}, alert
+
+
+class TestSeverityAndTheFieldsRemovedFromThePage:
+    """The page no longer asks for CVRD or a target resource, and Severity is Azure Monitor's Sev0..Sev4."""
+
+    DATA = {"alert_name": "A", "severity": "Sev1 (Error)", "cvrd": "", "target_resource": fmt.DEFAULT_TARGET_RESOURCE, "trigger_condition": "t",
+            "owning_team": "o", "environment": "Production", "alert_output_columns": "", "alert_details": "", "arm_template_context": "", "additional_notes": ""}
+    NO_AI = SimpleNamespace(azure_openai_endpoint="", azure_openai_deployment="")
+
+    @pytest.mark.parametrize("sent,name", [
+        ("Sev0 (Critical)", "Critical"), ("Sev1 (Error)", "Error"), ("Sev2 (Warning)", "Warning"), ("Sev3 (Informational)", "Informational"),
+        ("Sev4 (Verbose)", "Verbose"), ("Sev-1", "Sev-1"), ("", ""), (None, ""),
+    ])
+    def test_the_severity_is_written_as_its_plain_name(self, sent, name):
+        assert fmt.severity_name(sent) == name
+
+    def test_the_metadata_has_no_cvrd_or_target_lines_when_they_were_not_given(self):
+        message = fmt.build_user_prompt(self.DATA, "", "")
+        assert "CVRD" not in message and "Target Resource" not in message and fmt.DEFAULT_TARGET_RESOURCE not in message
+        assert "Severity: Sev1 (Error)" in message
+
+    def test_a_cvrd_or_target_from_an_api_caller_is_still_passed_on(self):
+        message = fmt.build_user_prompt({**self.DATA, "cvrd": "CVRD-1", "target_resource": "vnet-gw"}, "", "")
+        assert "CVRD / Alert ID: CVRD-1" in message and "Target Resource / Service: vnet-gw" in message
+
+    def test_the_prompt_asks_for_the_severity_name_only_and_no_longer_mentions_cvrd(self):
+        assert "the severity name only" in fmt.IRP_SYSTEM_PROMPT and "CVRD" not in fmt.IRP_SYSTEM_PROMPT
+
+    def test_nothing_about_a_missing_cvrd_or_resource_reaches_the_model(self):
+        completions = FakeCompletions(BAD_MODEL_REPLY)
+        service_with(completions).generate_irp(alert_name="A", severity="Sev2 (Warning)")
+        user = completions.calls[0]["messages"][1]["content"]
+        assert "CVRD" not in user and "Target Resource" not in user and "<ResourceName>" not in user and "Severity: Sev2 (Warning)" in user
+
+    def test_the_builtin_plan_writes_the_severity_name_like_the_example(self):
+        md = IrpService(settings=self.NO_AI).generate_irp(alert_name="VPN down", severity="Sev2 (Warning)")["markdown_content"]
+        assert "| **Severity** | Warning |" in md and "Sev2" not in md
+
+    def test_without_a_severity_the_default_is_critical(self):
+        md = IrpService(settings=self.NO_AI).generate_irp(alert_name="VPN down")["markdown_content"]
+        assert "| **Severity** | Critical |" in md
+        from app.schemas.connection import IrpGenerateRequest
+
+        assert IrpGenerateRequest(alert_name="x").severity == fmt.DEFAULT_SEVERITY == "Sev0 (Critical)"
+
+    def test_the_builtin_plan_uses_a_clean_placeholder_when_no_resource_is_given(self):
+        md = IrpService(settings=self.NO_AI).generate_irp(alert_name="VPN down")["markdown_content"]
+        assert "Azure Resource / Alert Target" not in md and "<ResourceName>" in md

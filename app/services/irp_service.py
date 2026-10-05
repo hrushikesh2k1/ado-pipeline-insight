@@ -8,11 +8,14 @@ from core.ado_client import AzureDevOpsClient
 from core.openai_client import PipelineRecommendationClient
 from app.core.config import get_settings
 from app.services.irp_format import (
+    DEFAULT_SEVERITY,
+    DEFAULT_TARGET_RESOURCE,
     IRP_SYSTEM_PROMPT,
     MAX_EXAMPLE_CHARS,
     build_user_prompt,
     extract_skeleton,
     normalize_irp_markdown,
+    severity_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,7 +50,7 @@ class IrpService:
         self,
         alert_name: str,
         target_resource: str | None = None,
-        severity: str = "Sev-1",
+        severity: str = DEFAULT_SEVERITY,
         trigger_condition: str | None = None,
         owning_team: str | None = None,
         environment: str | None = "Production",
@@ -62,7 +65,7 @@ class IrpService:
         """Generate an Incident Response Plan (IRP) adhering to uploaded templates, examples, and official Azure documentation."""
         client = self._get_client()
         sanitized_alert = alert_name.strip()
-        effective_resource = (target_resource or "").strip() or "Azure Resource / Alert Target"
+        effective_resource = (target_resource or "").strip() or DEFAULT_TARGET_RESOURCE
         slug = re.sub(r"[^a-zA-Z0-9\-_]", "-", sanitized_alert.replace(" ", "-")).strip("-")
         suggested_path = f"/Incident-Response-Plans/{slug}"
 
@@ -73,7 +76,7 @@ class IrpService:
             "arm_template_context": (arm_template_context or "").strip(),
             "alert_details": (alert_details or "").strip(),
             "target_resource": effective_resource,
-            "severity": severity or "Sev-1",
+            "severity": severity or DEFAULT_SEVERITY,
             "trigger_condition": trigger_condition or "Metric threshold breached for > 5 minutes",
             "owning_team": owning_team or "Cloud Operations & SRE",
             "environment": environment or "Production",
@@ -130,7 +133,7 @@ class IrpService:
     def _build_deterministic_irp(self, data: dict[str, Any]) -> str:
         name = data["alert_name"]
         resource = data["target_resource"]
-        sev = data["severity"]
+        sev = severity_name(data["severity"])  # the plain name ("Critical"), as the IRP example writes it
         team = data["owning_team"]
         env = data["environment"]
         trigger = data["trigger_condition"]

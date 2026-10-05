@@ -17,6 +17,17 @@ REMEDIATION_COLUMNS = ("STEPS", "ACTIONS", "ADDITIONAL INFO")
 REMEDIATION_HEADER = "| " + " | ".join(f"**{name}**" for name in REMEDIATION_COLUMNS) + " |"
 REMEDIATION_DIVIDER = "| " + " | ".join("---" for _ in REMEDIATION_COLUMNS) + " |"
 
+DEFAULT_SEVERITY = "Sev0 (Critical)"  # Azure Monitor: Sev0 Critical, Sev1 Error, Sev2 Warning, Sev3 Informational, Sev4 Verbose
+DEFAULT_TARGET_RESOURCE = "<ResourceName>"  # what the built-in plans write when no resource is given; never sent to the model
+
+
+def severity_name(severity: str | None) -> str:
+    """'Sev0 (Critical)' -> 'Critical', the way the IRP example writes it; a value without brackets ('Sev-1') is returned as it is."""
+    text = (severity or "").strip()
+    inside = re.search(r"\(([^)]+)\)", text)
+    return inside.group(1).strip() if inside else text
+
+
 # These are our own limits, not the model's: the example is the skeleton the model copies, so it is sent whole.
 MAX_EXAMPLE_CHARS = 60_000
 MAX_TEMPLATE_CHARS = 30_000
@@ -33,7 +44,7 @@ Return EXACTLY this skeleton and nothing else. It is the organisation's IRP exam
 | **Alert** | <alert name> |
 | --- | --- |
 | **Description** | *This alert is designed to trigger when/if <condition>, deployed in <environment>. It is a critical issue when this occurs and the system cannot be accessible.* |
-| **Severity** | <severity exactly as given in the alert metadata> |
+| **Severity** | <the severity name only: Critical, Error, Warning, Informational or Verbose> |
 | **Source** | <Log or Metric> |
 | **Root Cause** | - **Case 1 : ** <failure mode> - **Case 2 : ** <failure mode> - **Case 3 : ** <failure mode> |
 | **Product** | <product or component> |
@@ -62,7 +73,7 @@ RULES:
    (Azure Portal, Azure Cloud Shell, CLI, Log Analytics). Write values the reader must supply in angle brackets, for example <ResourceGroupName>.
    Escape every pipe character inside a query or command as \\| so it cannot split the table.
 5. Any step that changes something (scale, delete, reset, restart, configuration change) starts with "**Inform to the management for approval**." before the command.
-6. Commands must follow the official Azure documentation: Azure CLI (az ...), Azure PowerShell and KQL for Log Analytics. Use the ARM template context, the CVRD
+6. Commands must follow the official Azure documentation: Azure CLI (az ...), Azure PowerShell and KQL for Log Analytics. Use the ARM template context
    and the alert output columns when they are given.
 7. When an IRP example is given, copy its skeleton exactly: the same Alert Details row labels in the same order, the same style, the same row pattern. Take the
    content from the alert metadata, not from the example.
@@ -179,8 +190,12 @@ def build_user_prompt(data: dict[str, Any], example_skeleton: str, template: str
         "### ALERT METADATA:",
         f"- Alert Name: {data['alert_name']}",
         f"- Severity: {data['severity']}",
-        f"- CVRD / Alert ID: {data['cvrd'] or 'N/A'}",
-        f"- Target Resource / Service: {data['target_resource']}",
+    ]
+    if data.get("cvrd"):  # no longer asked for on the page, but still accepted from API callers
+        parts.append(f"- CVRD / Alert ID: {data['cvrd']}")
+    if data.get("target_resource") and data["target_resource"] != DEFAULT_TARGET_RESOURCE:
+        parts.append(f"- Target Resource / Service: {data['target_resource']}")
+    parts += [
         f"- Trigger Condition: {data['trigger_condition']}",
         f"- Owning Team: {data['owning_team']}",
         f"- Environment: {data['environment']}",

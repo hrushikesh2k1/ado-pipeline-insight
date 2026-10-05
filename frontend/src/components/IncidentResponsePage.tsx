@@ -32,46 +32,20 @@ interface IncidentResponsePageProps {
   theme?: 'dark' | 'light'
 }
 
-const DEFAULT_ALERT_PRESETS = [
-  {
-    name: 'VPN Tunnel Disconnected',
-    cvrd: 'CVRD-NET-8821',
-    columns: 'TimeGenerated, ResourceGroup, GatewayName, ConnectionState, PeerIP, DisconnectReason',
-    details: 'IPsec Phase 2 tunnel dropped between on-prem datacenter and Azure Virtual Network Gateway. High risk of database replication drop and internal API failure.',
-    arm: `{\n  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",\n  "contentVersion": "1.0.0.0",\n  "resources": [\n    {\n      "type": "Microsoft.Network/virtualNetworkGateways",\n      "apiVersion": "2023-04-01",\n      "name": "vnet-gw-prod-east",\n      "location": "eastus",\n      "properties": {\n        "gatewayType": "Vpn",\n        "vpnType": "RouteBased",\n        "enableBgp": true,\n        "sku": { "name": "VpnGw2", "tier": "VpnGw2" }\n      }\n    }\n  ]\n}`,
-    severity: 'Sev-1',
-    resource: 'vnet-gw-prod-east (Microsoft.Network/virtualNetworkGateways)',
-    trigger: 'Gateway Connection Status != Connected for > 2 minutes',
-    team: 'Cloud Network Operations',
-  },
-  {
-    name: 'High CPU & Request Queuing on App Service',
-    cvrd: 'CVRD-COMP-4019',
-    columns: 'TimeGenerated, AppName, InstanceId, CpuPercentage, MemoryPercentage, HttpQueueLength, Http5xxCount',
-    details: 'Production web application exceeding 90% CPU threshold across all P2v3 scale workers with elevated HTTP 503 errors.',
-    arm: `{\n  "type": "Microsoft.Web/serverfarms",\n  "apiVersion": "2022-03-01",\n  "name": "asp-prod-checkout",\n  "sku": { "name": "P2v3", "tier": "PremiumV3", "capacity": 4 }\n}`,
-    severity: 'Sev-2',
-    resource: 'asp-prod-checkout (Microsoft.Web/serverfarms)',
-    trigger: 'CpuPercentage >= 85% for 5 continuous minutes',
-    team: 'Platform SRE',
-  },
-  {
-    name: 'Storage Account Throttling & 503 Errors',
-    cvrd: 'CVRD-STR-1022',
-    columns: 'TimeGenerated, AccountName, ApiName, StatusCode, ClientIpAddress, ServerTimeoutMs',
-    details: 'Blob container ingress throughput hitting partition IOPS limits resulting in HTTP 503 ClientOtherErrors.',
-    arm: `{\n  "type": "Microsoft.Storage/storageAccounts",\n  "apiVersion": "2022-09-01",\n  "name": "stprodanalyticsdata",\n  "sku": { "name": "Standard_ZRS" },\n  "kind": "StorageV2"\n}`,
-    severity: 'Sev-2',
-    resource: 'stprodanalyticsdata (Microsoft.Storage/storageAccounts)',
-    trigger: 'ClientOtherErrorCount > 100 in 5 minutes',
-    team: 'Data Platform Operations',
-  },
-]
+const DEFAULT_ARM_CONTEXT = `{\n  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",\n  "contentVersion": "1.0.0.0",\n  "resources": [\n    {\n      "type": "Microsoft.Network/virtualNetworkGateways",\n      "apiVersion": "2023-04-01",\n      "name": "vnet-gw-prod-east",\n      "location": "eastus",\n      "properties": {\n        "gatewayType": "Vpn",\n        "vpnType": "RouteBased",\n        "enableBgp": true,\n        "sku": { "name": "VpnGw2", "tier": "VpnGw2" }\n      }\n    }\n  ]\n}`
+
+/** Azure Monitor alert severities. The label is what is sent: the IRP writes the plain name (Critical, Error, ...). */
+export const IRP_SEVERITIES = [
+  'Sev0 (Critical)',
+  'Sev1 (Error)',
+  'Sev2 (Warning)',
+  'Sev3 (Informational)',
+  'Sev4 (Verbose)',
+] as const
 
 export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
   // Alert Details & ARM context
   const [alertName, setAlertName] = useState<string>('VPN Tunnel Disconnected')
-  const [cvrd, setCvrd] = useState<string>('CVRD-NET-8821')
   const [alertOutputColumns, setAlertOutputColumns] = useState<string>(
     'TimeGenerated, ResourceGroup, GatewayName, ConnectionState, PeerIP, DisconnectReason'
   )
@@ -79,12 +53,9 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
     'IPsec Phase 2 tunnel dropped between on-prem datacenter and Azure Virtual Network Gateway. High risk of database replication drop and internal API failure.'
   )
   const [armTemplateContext, setArmTemplateContext] = useState<string>(
-    DEFAULT_ALERT_PRESETS[0].arm
+    DEFAULT_ARM_CONTEXT
   )
-  const [targetResource, setTargetResource] = useState<string>(
-    'vnet-gw-prod-east (Microsoft.Network/virtualNetworkGateways)'
-  )
-  const [severity, setSeverity] = useState<string>('Sev-1')
+  const [severity, setSeverity] = useState<string>(IRP_SEVERITIES[0])
   const [triggerCondition, setTriggerCondition] = useState<string>(
     'Gateway Connection Status != Connected for > 2 minutes'
   )
@@ -110,19 +81,6 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
   const [irpNotice, setIrpNotice] = useState<string>('')
   const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview')
   const [copied, setCopied] = useState<boolean>(false)
-
-  // Handle Preset Selection
-  const applyPreset = (preset: typeof DEFAULT_ALERT_PRESETS[0]) => {
-    setAlertName(preset.name)
-    setCvrd(preset.cvrd)
-    setAlertOutputColumns(preset.columns)
-    setAlertDetails(preset.details)
-    setArmTemplateContext(preset.arm)
-    setSeverity(preset.severity)
-    setTargetResource(preset.resource)
-    setTriggerCondition(preset.trigger)
-    setOwningTeam(preset.team)
-  }
 
   // File Upload Handlers
   const handleTemplateFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -163,11 +121,9 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
     try {
       const res: IrpGenerateResponse = await api.generateIrp({
         alert_name: alertName,
-        cvrd: cvrd.trim() || undefined,
         alert_output_columns: alertOutputColumns.trim() || undefined,
         arm_template_context: armTemplateContext.trim() || undefined,
         alert_details: alertDetails.trim() || undefined,
-        target_resource: targetResource.trim() || undefined,
         severity,
         trigger_condition: triggerCondition.trim() || undefined,
         owning_team: owningTeam.trim() || undefined,
@@ -769,25 +725,6 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
         </div>
       </div>
 
-      {/* Preset Pills */}
-      <div className="irpPresetsBar">
-        <span className="irpPresetsLabel">
-          <Sparkles size={14} style={{ color: '#818cf8', marginRight: '6px' }} /> Quick Fill Alert Preset:
-        </span>
-        <div className="irpPresetPillList">
-          {DEFAULT_ALERT_PRESETS.map((preset) => (
-            <button
-              key={preset.name}
-              type="button"
-              className={`irpPresetPill ${alertName === preset.name ? 'active' : ''}`}
-              onClick={() => applyPreset(preset)}
-            >
-              {preset.name}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Main 2-Column Split: 3 Input Sections Left, 1 Output Section Right */}
       <div className="irpStudioGrid">
         {/* ================= LEFT COLUMN: 3 CONFIG SECTIONS ================= */}
@@ -799,7 +736,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
                 <FileCode2 size={18} className="irpSectionIcon" />
                 <span>1. Alert & ARM Template Details</span>
               </div>
-              <span className="irpBadgeSev">{severity}</span>
+              <span className="irpBadgeSev">{severity.split(' ')[0]}</span>
             </div>
 
             <div className="irpFormGrid">
@@ -817,14 +754,12 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
               </div>
 
               <div className="irpInputGroup">
-                <label className="irpLabel">CVRD / Alert Identifier</label>
-                <input
-                  type="text"
-                  className="irpInput"
-                  value={cvrd}
-                  onChange={(e) => setCvrd(e.target.value)}
-                  placeholder="e.g. CVRD-NET-8821"
-                />
+                <label className="irpLabel">Severity</label>
+                <select className="irpSelect" value={severity} onChange={(e) => setSeverity(e.target.value)} data-testid="irp-severity">
+                  {IRP_SEVERITIES.map((level) => (
+                    <option key={level} value={level}>{level}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="irpInputGroup fullWidth">
@@ -870,26 +805,6 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
                     placeholder="Paste your ARM Template JSON, Bicep snippet, or resource configuration..."
                   />
                 )}
-              </div>
-
-              <div className="irpInputGroup">
-                <label className="irpLabel">Target Resource / Service</label>
-                <input
-                  type="text"
-                  className="irpInput"
-                  value={targetResource}
-                  onChange={(e) => setTargetResource(e.target.value)}
-                  placeholder="e.g. vnet-gw-prod-east"
-                />
-              </div>
-
-              <div className="irpInputGroup">
-                <label className="irpLabel">Severity</label>
-                <select className="irpSelect" value={severity} onChange={(e) => setSeverity(e.target.value)}>
-                  <option value="Sev-1">Sev-1 (Critical Outage)</option>
-                  <option value="Sev-2">Sev-2 (High Degradation)</option>
-                  <option value="Sev-3">Sev-3 (Moderate Warning)</option>
-                </select>
               </div>
 
               <div className="irpInputGroup">
