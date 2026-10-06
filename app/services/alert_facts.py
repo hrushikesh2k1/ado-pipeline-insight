@@ -632,6 +632,28 @@ def read_alert(arm_text: str | None, kql_text: str | None = None, alert_name: st
     }
 
 
+def alerts_in(arm_text: str | None) -> tuple[list[dict[str, Any]], str | None]:
+    """The facts of every alert (log and metric) in an ARM template: (alerts, why the template could not be read, or None).
+
+    Used to describe an alert that a pull request changes. It never raises: a template that is not valid JSON is reported, and an
+    alert that cannot be read is left out.
+    """
+    try:
+        document = load_arm(arm_text or "")
+    except ValueError as exc:
+        return [], f"not valid JSON ({exc})"
+    alerts: list[dict[str, Any]] = []
+    try:
+        for resource, ctx in find_alerts(document):
+            props = _resolve(resource.get("properties") or {}, ctx)
+            resolved = {**{k: _resolve(v, ctx) for k, v in resource.items() if k not in ("properties", "resources")}, "properties": props}
+            build = _log_alert if str(resolved.get("type")).lower() == LOG_ALERT_TYPE else _metric_alert
+            alerts.append(build(resolved, props if isinstance(props, dict) else {}))
+    except Exception:  # an expression this reader does not understand must never stop a review
+        return alerts, None
+    return alerts, None
+
+
 def facts_for_prompt(facts: dict[str, Any]) -> str:
     """The facts as the writer reads them."""
     lines: list[str] = []

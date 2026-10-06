@@ -9,17 +9,21 @@ import difflib
 import re
 from dataclasses import dataclass, field
 
+from app.services.pr_arm import ARM_LANGUAGE
+
+# A .json file is only reviewed when its content is an ARM template (see pr_arm.is_arm_template): the review checks that
+# after fetching the file, because most JSON files are data.
 LANGUAGES = {
-    ".py": "Python", ".ps1": "PowerShell", ".psm1": "PowerShell", ".psd1": "PowerShell",
+    ".py": "Python", ".ps1": "PowerShell", ".psm1": "PowerShell", ".psd1": "PowerShell", ".json": ARM_LANGUAGE, ".kql": "KQL",
     ".sh": "Shell", ".sql": "SQL", ".yml": "YAML", ".yaml": "YAML", ".bicep": "Bicep", ".tf": "Terraform",
     ".ts": "TypeScript", ".tsx": "TypeScript (React)", ".js": "JavaScript", ".jsx": "JavaScript (React)",
     ".cs": "C#", ".go": "Go", ".java": "Java",
 }
-FIRST_LANGUAGES = ("Python", "PowerShell")  # reviewed first when a pull request has more files than can be reviewed
+FIRST_LANGUAGES = ("Python", "PowerShell", ARM_LANGUAGE)  # reviewed first when a pull request has more files than can be reviewed
 
 LOCK_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "pipfile.lock", "composer.lock", "gemfile.lock", "cargo.lock", "go.sum", "packages.lock.json"}
 DOCUMENT_EXTENSIONS = {".md", ".markdown", ".txt", ".rst"}
-DATA_EXTENSIONS = {".json", ".csv", ".tsv", ".xml", ".toml", ".ini", ".cfg", ".conf", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".xlsx", ".docx", ".pptx", ".dll", ".exe", ".pyc", ".whl"}
+DATA_EXTENSIONS = {".csv", ".tsv", ".xml", ".toml", ".ini", ".cfg", ".conf", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".xlsx", ".docx", ".pptx", ".dll", ".exe", ".pyc", ".whl"}
 GENERATED = re.compile(r"(\.min\.(js|css)$|\.map$|\.designer\.cs$|\.g\.cs$|_pb2\.py$|\.generated\.)", re.IGNORECASE)
 
 MAX_LINES_TO_COMPARE = 4000
@@ -87,6 +91,7 @@ class FileView:
     whole_file: bool = True
     omitted_hunks: int = 0
     shown: str = ""
+    extra: str = ""  # what else the reviewer is told about this file (for an alert template: the alerts, in words)
 
     @property
     def new_line_count(self) -> int:
@@ -97,18 +102,18 @@ class FileView:
         return bool(self.added or self.removed_count)
 
 
-def _clip(text: str) -> str:
-    return text if len(text) <= LINE_WIDTH else text[:LINE_WIDTH - 1] + "…"
+def _clip(text: str, width: int = LINE_WIDTH) -> str:
+    return text if len(text) <= width else text[:width - 1] + "…"
 
 
-def render_row(row: Row) -> str:
+def render_row(row: Row, width: int = LINE_WIDTH) -> str:
     if row.kind == "del":
-        return f"- {'':>5} | {_clip(row.text)}"
-    return f"{'+' if row.kind == 'add' else ' '} {row.new:>5} | {_clip(row.text)}"
+        return f"- {'':>5} | {_clip(row.text, width)}"
+    return f"{'+' if row.kind == 'add' else ' '} {row.new:>5} | {_clip(row.text, width)}"
 
 
 def build_view(path: str, language: str, change_type: str, old_text: str | None, new_text: str,
-               whole_file_lines: int = 350, context: int = 12, max_rows: int = 900) -> FileView:
+               whole_file_lines: int = 350, context: int = 12, max_rows: int = 900, width: int = LINE_WIDTH) -> FileView:
     """The diff of one file, with the text shown to the reviewer. Raises ValueError when a file is too long to compare."""
     old_lines = (old_text or "").splitlines()
     new_lines = new_text.splitlines()
@@ -132,15 +137,15 @@ def build_view(path: str, language: str, change_type: str, old_text: str | None,
 
     view = FileView(path=path, language=language, change_type=change_type, rows=rows, new_lines=new_lines,
                     added=added, removed_at=removed_at, added_count=len(added), removed_count=removed)
-    _render(view, whole_file_lines, context, max_rows)
+    _render(view, whole_file_lines, context, max_rows, width)
     return view
 
 
-def _render(view: FileView, whole_file_lines: int, context: int, max_rows: int) -> None:
+def _render(view: FileView, whole_file_lines: int, context: int, max_rows: int, width: int = LINE_WIDTH) -> None:
     rows = view.rows
     if view.new_line_count <= whole_file_lines and len(rows) <= max_rows:
         view.whole_file = True
-        view.shown = "\n".join(render_row(r) for r in rows)
+        view.shown = "\n".join(render_row(r, width) for r in rows)
         return
 
     view.whole_file = False
@@ -163,7 +168,7 @@ def _render(view: FileView, whole_file_lines: int, context: int, max_rows: int) 
             break
         if start > 0:
             lines.append("      ...")
-        lines.extend(render_row(r) for r in rows[start:end + 1])
+        lines.extend(render_row(r, width) for r in rows[start:end + 1])
         shown_rows += size
         last_end = end
     if view.omitted_hunks or last_end < len(rows) - 1:

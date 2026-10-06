@@ -37,6 +37,13 @@ class TestParse:
     def test_no_description(self):
         assert parse_checklist("") == [] and parse_checklist(None) == []
 
+    def test_a_link_in_an_item_is_shown_as_its_words(self):
+        text = "- [ ] [Alert Inventory wiki] (https://example.com/wiki/page) is updated with Alert details.\n- [x] See [the guide](https://example.com/g) and [other](https://example.com/o)\n"
+        assert [i["text"] for i in parse_checklist(text)] == ["Alert Inventory wiki is updated with Alert details.", "See the guide and other"]
+
+    def test_brackets_that_are_not_a_link_stay(self):
+        assert parse_checklist("- [x] Add tests [if applicable]\n")[0]["text"] == "Add tests [if applicable]"
+
     def test_linked_runs(self):
         text = "see https://x/_build/results?buildId=100200&view=results and ...?buildId=100350 and buildId=100200"
         assert linked_build_ids(text) == [100200, 100350]

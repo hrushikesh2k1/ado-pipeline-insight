@@ -15,8 +15,9 @@ from typing import Any, Callable
 
 from app.core.config import get_settings
 from app.services.llm_util import chat_json, with_retry
+from app.services.pr_arm import ARM_LANGUAGE, ARM_LINE_WIDTH, arm_context, is_arm_template
 from app.services.pr_checklist import evaluate_checklist, linked_build_ids, parse_checklist
-from app.services.pr_diff import FileView, build_view, classify, priority, suggestable
+from app.services.pr_diff import LINE_WIDTH, FileView, build_view, classify, priority, suggestable
 from core.openai_client import PipelineRecommendationClient
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ MAX_FINDINGS_PER_FILE = 8
 MAX_SPAN = 40
 WORKERS = 5
 MAX_FILE_BYTES = 200_000
+MAX_EXAMINED = 100  # files looked at in one review, whether or not they turn out to be reviewable
 REVIEW_BUDGET_SECONDS = 170  # Azure App Service ends a request after 230 s: a slow model gives a partial review, not a timeout
 CATEGORIES = ("correctness", "security", "performance", "maintainability", "test_coverage")
 SEVERITIES = ("critical", "warning", "suggestion")
@@ -56,7 +58,24 @@ POWERSHELL_GUIDE = (
     "Slow patterns: += on an array or a string inside a loop (use a List or -join), Where-Object over a large collection inside a loop (use a hashtable lookup), "
     "Export-Csv -Append inside ForEach-Object. New functions without comment-based help (ProvideCommentHelp)."
 )
-GUIDES = {"Python": PYTHON_GUIDE, "PowerShell": POWERSHELL_GUIDE}
+ARM_GUIDE = (
+    "Azure Monitor alerts in an ARM template: you are also given each alert in plain words and what changed in it. Look for these when the changed lines touch them, "
+    "and say what now fires or stops firing for a concrete case. A changed threshold, operator, windowSize, evaluationFrequency, failingPeriods or query that changes when the alert fires. "
+    "minFailingPeriodsToAlert larger than numberOfEvaluationPeriods (it must be smaller or equal). overrideQueryTimeRange, which replaces the default query time range "
+    "(windowSize times numberOfEvaluationPeriods), and a time filter inside the query that is shorter or longer than the window it is evaluated over. "
+    "A log alert meant to detect a lack of data: Microsoft says logs are more latent than metrics and recommends a metric alert for that. "
+    "A severity that does not match what the alert is for (0 is the most severe, 4 the least). enabled set to false, no action group (nobody is notified), "
+    "muteActionsDuration that hides repeats, autoMitigate set to false so the alert never resolves by itself, skipQueryValidation set to true. "
+    "A resource group scope with targetResourceTypes (one alert per resource of that type). A metric alert with several conditions fires only when all of them are true. "
+    "Query mistakes: a table or column the query does not have, a filter that can never match, a count compared with a threshold meant for a measure column. "
+    "Secrets: a parameter that holds a password or key must be securestring, and a secure value set on a property that does not expect one (a tag, for example) is stored as plain text; "
+    "secure values must not be outputs. Other ARM templates: the same secrets rule, and hard-coded subscription or resource ids that tie the template to one environment."
+)
+KQL_GUIDE = (
+    "KQL: look for a missing or misplaced time filter, a join that multiplies rows, a column or table the query does not have, a filter that can never match, "
+    "results that are not bounded, and a summarize or threshold that does not measure what its name says."
+)
+GUIDES = {"Python": PYTHON_GUIDE, "PowerShell": POWERSHELL_GUIDE, ARM_LANGUAGE: ARM_GUIDE, "KQL": KQL_GUIDE}
 
 FILE_SYSTEM = """You review one changed file of an Azure DevOps pull request. The file is shown as a diff: every line has its line number in the new version, a "+" marks a line this pull request added or changed, a "-" marks a line it removed, and unmarked lines are unchanged context.
 
@@ -231,7 +250,8 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]]) 
     for number, f in enumerate(findings, 1):
         where = f"line {f['line_number']}" + (f"-{f['end_line']}" if f["end_line"] else "")
         lines.append(f"{number}. {where}: {f['title']}. {f['comment']}" + (f"\n   Suggested replacement:\n{f['suggestion_code']}" if f["suggestion_code"] else ""))
-    user = f"File: {view.path} ({view.language})\n\nFindings to check:\n" + "\n".join(lines) + f"\n\nThe file:\n\n{view.shown}"
+    alerts = f"\n\nThe alert rules, read from the template:\n{view.extra}" if view.extra else ""
+    user = f"File: {view.path} ({view.language})\n\nFindings to check:\n" + "\n".join(lines) + alerts + f"\n\nThe file:\n\n{view.shown}"
     try:
         answer = with_retry(lambda: chat_json(model, VERIFY_SYSTEM, user, temperature=0))
     except Exception as exc:
@@ -260,9 +280,10 @@ def file_prompt(view: FileView, pr: dict[str, Any], existing: list[dict[str, Any
     else:
         shown = "only the changed parts, with the lines around them" + ("; some changed parts are left out because the file is large" if view.omitted_hunks else "")
     comments = "\n".join(f"- line {t['line']} [{STATUS_WORDS.get(t['status'], t['status'])}] {t['author']}: {t['text']}" for t in existing[:12]) or "(none)"
+    alerts = f"What the alert rules in this template are, and what changed in them:\n{view.extra}\n\n" if view.extra else ""
     return (f"File: {view.path}\nLanguage: {view.language}\nChange: {view.change_type} (+{view.added_count} -{view.removed_count})\n"
             f"Pull request title: {pr['title']}\nPull request description (start): {pr['description'][:1200] or '(none)'}\n\n"
-            f"Existing comments on this file (do not repeat them):\n{comments}\n\nThe file is shown as {shown}:\n\n{view.shown}")
+            f"Existing comments on this file (do not repeat them):\n{comments}\n\n{alerts}The file is shown as {shown}:\n\n{view.shown}")
 
 
 def review_file(model: Any, view: FileView, pr: dict[str, Any], threads: list[dict[str, Any]]) -> dict[str, Any]:
@@ -301,9 +322,11 @@ def summarize(files: list[dict[str, Any]], comments: list[dict[str, Any]], commi
     for f in reviewed:
         languages[f["language"]] = languages.get(f["language"], 0) + 1
     where = f"commit {commit[:8]}" if commit else "the latest push"
-    text = f"Reviewed {len(reviewed)} of {len(files)} changed files ({', '.join(f'{n} {k}' for k, n in sorted(languages.items())) or 'none'}) at {where}, push {iteration} of {iterations}."
+    names = ", ".join(f"{n} {k}" for k, n in sorted(languages.items()))
+    text = f"Reviewed {len(reviewed)} of {len(files)} changed files{f' ({names})' if names else ''} at {where}, push {iteration} of {iterations}."
     if not reviewed:
-        return text + " Nothing could be reviewed; see the file list."
+        why = "; ".join(f"{f['path']} ({f.get('reason') or 'not reviewed'})" for f in files[:3]) + (f"; and {len(files) - 3} more" if len(files) > 3 else "")
+        return text + f" Nothing could be reviewed: {why}."
     if comments:
         counts = {s: sum(1 for c in comments if c["severity"] == s) for s in SEVERITIES}
         parts = [f"{n} {name}" for name, n in (("critical", counts["critical"]), ("warning" if counts["warning"] == 1 else "warnings", counts["warning"]), ("suggestion" if counts["suggestion"] == 1 else "suggestions", counts["suggestion"])) if n]
@@ -334,7 +357,7 @@ class PullRequestReviewService:
             notes.append(f"{what} could not be read, so it was not used. The token may lack the matching read scope.")
             return None
 
-    def _texts(self, project: str, repo: str, entry: dict[str, Any], refs: dict[str, str]) -> tuple[str | None, str | None, str | None]:
+    def _texts(self, project: str, repo: str, entry: dict[str, Any], refs: dict[str, str], language: str = "") -> tuple[str | None, str | None, str | None]:
         """(old text, new text, reason it cannot be read) for one change."""
         item = entry.get("item") or {}
         path = item.get("path") or ""
@@ -346,6 +369,8 @@ class PullRequestReviewService:
             new, why = self.ado.get_item_text(project, repo, path, refs["source"], MAX_FILE_BYTES) if refs.get("source") else (None, "unreadable")
         if new is None:
             return None, None, why or "unreadable"
+        if language == ARM_LANGUAGE and not is_arm_template(new):
+            return None, None, "not_arm"
         if "add" in change and not old_id:
             return "", new, None
         if old_id:
@@ -453,22 +478,27 @@ class PullRequestReviewService:
                 candidates.append((row, entry, language))
         candidates.sort(key=lambda c: priority(c[2], c[0]["path"]))
         views: list[FileView] = []
-        for number, (row, entry, language) in enumerate(candidates):
-            if number >= MAX_FILES:
+        for examined, (row, entry, language) in enumerate(candidates):
+            if len(views) >= MAX_FILES:
                 row["reason"] = f"over the limit of {MAX_FILES} files reviewed in one go"
                 continue
-            old, new, why = self._texts(project, repo, entry, refs)
+            if examined >= MAX_EXAMINED:
+                row["reason"] = f"not examined: more than {MAX_EXAMINED} files in this pull request"
+                continue
+            old, new, why = self._texts(project, repo, entry, refs, language)
             if new is None:
-                row["reason"] = {"too_large": f"larger than {MAX_FILE_BYTES // 1000} KB", "binary": "not a text file"}.get(why or "", why or "could not be read")
+                row["reason"] = {"too_large": f"larger than {MAX_FILE_BYTES // 1000} KB", "binary": "not a text file", "not_arm": "JSON file that is not an ARM template"}.get(why or "", why or "could not be read")
                 continue
             try:
-                view = build_view(row["path"], language, row["change_type"], old, new)
+                view = build_view(row["path"], language, row["change_type"], old, new, width=ARM_LINE_WIDTH if language == ARM_LANGUAGE else LINE_WIDTH)
             except ValueError as exc:
                 row["reason"] = f"too long to compare ({exc})"
                 continue
             if not view.has_changes:
                 row["reason"] = "no change in the content"
                 continue
+            if language == ARM_LANGUAGE:
+                view.extra = arm_context(old, new)
             row["reason"] = None
             views.append(view)
         return files, views

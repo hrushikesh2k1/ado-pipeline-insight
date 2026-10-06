@@ -11,6 +11,7 @@ from app.services.pr_diff import build_view
 from app.services.pr_review import (
     AiUnavailable, PullRequestReviewService, ReviewFailed, clean_findings, get_model_client, judge, summarize, thread_summaries,
 )
+from irp_support import FIXTURES
 from pr_support import DESCRIPTION, PS_NEW, PY_NEW, PY_OLD, FakeAdo, FakePrModel, change, finding, thread
 
 # PY_NEW: the lines this pull request changed are 2, 5 and 14-17; line 12, for example, is old code
@@ -345,7 +346,8 @@ class TestVerdictAndScorecard:
 
 class TestSummary:
     def files(self, reviewed=2, skipped=1):
-        return [{"path": f"a{n}.py", "language": "Python", "status": "reviewed"} for n in range(reviewed)] + [{"path": f"b{n}.md", "language": None, "status": "skipped"} for n in range(skipped)]
+        return ([{"path": f"a{n}.py", "language": "Python", "status": "reviewed", "reason": None} for n in range(reviewed)]
+                + [{"path": f"b{n}.md", "language": None, "status": "skipped", "reason": "documentation"} for n in range(skipped)])
 
     def test_counts_and_where(self):
         text = summarize(self.files(), [{"severity": "critical"}, {"severity": "warning"}, {"severity": "warning"}], "f" * 40, 3, 5)
@@ -354,8 +356,12 @@ class TestSummary:
     def test_no_findings_says_it_is_about_the_files_reviewed(self):
         assert "No findings in the files reviewed." in summarize(self.files(1, 0), [], "", 1, 1) and "the latest push" in summarize(self.files(1, 0), [], "", 1, 1)
 
-    def test_nothing_reviewed(self):
-        assert "Nothing could be reviewed" in summarize(self.files(0, 2), [], "", 1, 1)
+    def test_nothing_reviewed_says_which_files_and_why(self):
+        assert summarize(self.files(0, 2), [], "", 1, 1) == "Reviewed 0 of 2 changed files at the latest push, push 1 of 1. Nothing could be reviewed: b0.md (documentation); b1.md (documentation)."
+
+    def test_when_more_than_three_files_were_skipped_the_rest_are_counted(self):
+        text = summarize(self.files(0, 5), [], "", 1, 1)
+        assert "b0.md (documentation); b1.md (documentation); b2.md (documentation); and 2 more." in text and "(none)" not in text
 
     def test_one_finding_is_singular(self):
         assert "1 finding: 1 suggestion." in summarize(self.files(1, 0), [{"severity": "suggestion"}], "", 1, 1)
@@ -506,6 +512,100 @@ class TestModelClient:
         monkeypatch.setattr(pr_review, "PipelineRecommendationClient", broken)
         with pytest.raises(AiUnavailable, match="could not be started"):
             get_model_client()
+
+
+ALERT_OLD = (FIXTURES / "vpn_log_alert.arm.json").read_text(encoding="utf-8")
+ALERT_NEW = ALERT_OLD.replace('"threshold": 0', '"threshold": 3').replace('"windowSize": "PT10M"', '"windowSize": "PT15M"')
+ALERT_PATH = "alerts/vpn.json"
+
+
+def alert_ado(new=ALERT_NEW, old=ALERT_OLD, **over):
+    blobs = {f"new-/{ALERT_PATH}": new, f"old-/{ALERT_PATH}": old}
+    return FakeAdo(changes=[change(f"/{ALERT_PATH}")], blobs=blobs, description="", **over)
+
+
+def line_of(text: str, part: str) -> int:
+    return next(n for n, line in enumerate(text.splitlines(), 1) if part in line)
+
+
+class TestAlertTemplates:
+    """The files this review exists for: alerts written as ARM templates."""
+
+    def test_an_alert_template_is_reviewed_not_skipped_as_data(self):
+        result, _, _ = run(alert_ado())
+        row = by_path(result)[ALERT_PATH]
+        assert (row["status"], row["language"], row["reason"]) == ("reviewed", "ARM template", None)
+        assert "Reviewed 1 of 1 changed files (1 ARM template)" in result["summary"]
+
+    def test_the_reviewer_is_told_what_the_alert_means_and_what_changed(self):
+        _, _, model = run(alert_ado())
+        prompt = model.calls_of("file")[0]
+        assert "What the alert rules in this template are, and what changed in them:" in prompt
+        assert "Fires when the number of rows returned by the alert query is greater than 3" in prompt
+        assert "window size: PT10M -> PT15M" in prompt and "Evaluated every 5 minutes over a window of 15 minutes." in prompt
+
+    def test_the_whole_query_is_in_the_diff_not_cut_at_the_usual_width(self):
+        _, _, model = run(alert_ado(new=ALERT_NEW.replace("Disconnects = count()", "Disconnects = count() " + "x" * 400)))
+        prompt = model.calls_of("file")[0]
+        assert "x" * 400 in prompt and "project TimeGenerated, Resource, Disconnects" in prompt
+
+    def test_alert_guidance_is_given_and_it_is_the_one_checked_against_microsofts_documentation(self):
+        _, _, model = run(alert_ado())
+        system = model.calls[0][0]
+        assert "Azure Monitor alerts in an ARM template" in system and "minFailingPeriodsToAlert larger than numberOfEvaluationPeriods" in system
+        assert "securestring" in system and "Python:" not in system and "PowerShell:" not in system
+
+    def test_a_finding_on_the_changed_threshold_is_kept_and_checked_with_the_alert_details(self):
+        threshold = line_of(ALERT_NEW, '"threshold": 3')
+        model = FakePrModel({ALERT_PATH: [finding(threshold, "Threshold of 3 hides single disconnects", comment="With a threshold of 3 a single tunnel disconnect no longer fires the alert. Keep 0 or lower the window.")]})
+        result, _, _ = run(alert_ado(), model)
+        assert [(c["file_path"], c["line_number"], c["verified"]) for c in result["comments"]] == [(ALERT_PATH, threshold, True)]
+        assert "The alert rules, read from the template:" in model.calls_of("verify")[0]
+
+    def test_a_finding_on_an_unchanged_line_of_the_template_is_still_removed(self):
+        model = FakePrModel({ALERT_PATH: [finding(line_of(ALERT_NEW, '"severity": 1'), "Unchanged severity")]})
+        result, _, _ = run(alert_ado(), model)
+        assert result["comments"] == []
+
+    def test_a_template_that_is_no_longer_valid_json_is_put_in_front_of_the_reviewer(self):
+        _, _, model = run(alert_ado(new=ALERT_NEW.replace('"resources": [', '"resources": [,')))
+        assert "cannot be deployed as it is" in model.calls_of("file")[0]
+
+    def test_json_that_is_not_an_arm_template_is_skipped_with_that_reason_and_costs_one_fetch(self):
+        ado = FakeAdo(changes=[change("/config/data.json")], blobs={"new-/config/data.json": '{"name": "pkg", "items": [1, 2]}', "old-/config/data.json": "{}"}, description="")
+        result, ado, model = run(ado)
+        assert by_path(result)["config/data.json"]["reason"] == "JSON file that is not an ARM template"
+        assert "old-/config/data.json" not in ado.blob_calls and model.calls == []
+        assert "Nothing could be reviewed: config/data.json (JSON file that is not an ARM template)." in result["summary"]
+
+    def test_json_files_that_are_not_templates_do_not_use_up_the_limit(self):
+        names = [f"/data/d{n:02d}.json" for n in range(25)] + ["/src/a.py", "/src/b.py"]
+        blobs = {f"new-{n}": '{"x": 1}' for n in names[:25]} | {"new-/src/a.py": "x = 1\n", "new-/src/b.py": "y = 2\n"}
+        result, _, _ = run(FakeAdo(changes=[change(n, "add") for n in names], blobs=blobs, description=""))
+        rows = by_path(result)
+        assert rows["src/a.py"]["status"] == "reviewed" and rows["src/b.py"]["status"] == "reviewed"
+        assert all(rows[f"data/d{n:02d}.json"]["reason"] == "JSON file that is not an ARM template" for n in range(25))
+
+    def test_a_very_large_pull_request_is_not_read_without_end(self, monkeypatch):
+        monkeypatch.setattr(pr_review, "MAX_EXAMINED", 3)
+        names = [f"/data/d{n}.json" for n in range(5)]
+        ado = FakeAdo(changes=[change(n, "add") for n in names], blobs={f"new-{n}": '{"x": 1}' for n in names}, description="")
+        result, ado, _ = run(ado)
+        reasons = [f["reason"] for f in result["files"]]
+        assert reasons.count("JSON file that is not an ARM template") == 3 and reasons.count("not examined: more than 3 files in this pull request") == 2
+        assert len(ado.blob_calls) == 3
+
+    def test_kql_files_are_read_with_kql_guidance(self):
+        ado = FakeAdo(changes=[change("/queries/restarts.kql", "add")], blobs={"new-/queries/restarts.kql": "KubePodInventory\n| take 100\n"}, description="")
+        result, _, model = run(ado)
+        assert by_path(result)["queries/restarts.kql"]["language"] == "KQL"
+        assert "KQL: look for a missing or misplaced time filter" in model.calls[0][0]
+
+    def test_alert_templates_are_reviewed_before_other_files_when_there_is_not_room_for_all(self):
+        yaml = [f"/ci/p{n:02d}.yml" for n in range(20)]
+        ado = FakeAdo(changes=[change(n, "add") for n in yaml] + [change(f"/{ALERT_PATH}")],
+                      blobs={**{f"new-{n}": "a: 1\n" for n in yaml}, f"new-/{ALERT_PATH}": ALERT_NEW, f"old-/{ALERT_PATH}": ALERT_OLD}, description="")
+        assert by_path(run(ado)[0])[ALERT_PATH]["status"] == "reviewed"
 
 
 class TestNothingIsMadeUp:

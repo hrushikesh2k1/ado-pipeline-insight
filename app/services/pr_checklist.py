@@ -12,6 +12,7 @@ from typing import Any
 from app.services.pr_diff import is_changelog_path, is_test_path
 
 _BOX = re.compile(r"^\s*[-*]\s*\[( |x|X)\]\s+(.*\S)\s*$")
+_LINK = re.compile(r"\[([^\]]+)\]\s*\([^)]*\)")
 _CHANGELOG = re.compile(r"change-?\s?log|release notes?", re.IGNORECASE)
 _TESTS_ADDED = re.compile(r"\btests?\b.*\b(created|added|written)\b|\badded tests?\b|\btests? that prove\b", re.IGNORECASE)
 _WORK_ITEM = re.compile(r"work\s?items?", re.IGNORECASE)
@@ -25,7 +26,9 @@ def parse_checklist(description: str) -> list[dict[str, Any]]:
     for line in (description or "").splitlines():
         match = _BOX.match(line)
         if match:
-            items.append({"text": match.group(2).strip(), "checked": match.group(1) in "xX"})
+            # a link is shown as its words: "[Alert Inventory wiki](https://...)" -> "Alert Inventory wiki"
+            text = " ".join(_LINK.sub(r"\1", match.group(2)).split())
+            items.append({"text": text, "checked": match.group(1) in "xX"})
     return items
 
 

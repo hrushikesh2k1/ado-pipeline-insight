@@ -10,17 +10,22 @@ class TestClassify:
     @pytest.mark.parametrize("path,language", [
         ("src/a.py", "Python"), ("tools/Deploy.ps1", "PowerShell"), ("Mod/Mod.psm1", "PowerShell"), ("Mod/Mod.psd1", "PowerShell"),
         ("run.sh", "Shell"), ("db/x.sql", "SQL"), ("p.yml", "YAML"), ("main.bicep", "Bicep"), ("app/x.TSX", "TypeScript (React)"),
+        ("alerts/vpn.json", "ARM template"), ("alerts/params.JSON", "ARM template"), ("queries/q.kql", "KQL"),
     ])
     def test_languages_that_are_read(self, path, language):
         assert classify(path, "edit") == (language, None)
 
     @pytest.mark.parametrize("path,reason", [
-        ("README.md", "documentation"), ("notes.txt", "documentation"), ("data/x.json", "data or binary file"), ("logo.png", "data or binary file"),
+        ("README.md", "documentation"), ("notes.txt", "documentation"), ("data/x.csv", "data or binary file"), ("logo.png", "data or binary file"),
         ("package-lock.json", "lock file, generated or minified"), ("poetry.lock", "lock file, generated or minified"),
         ("dist/app.min.js", "lock file, generated or minified"), ("api/x_pb2.py", "lock file, generated or minified"), ("Makefile", "not a language this review covers"),
     ])
     def test_files_that_are_not(self, path, reason):
         assert classify(path, "edit") == (None, reason)
+
+    def test_json_lock_files_are_still_skipped(self):
+        assert classify("package-lock.json", "edit") == (None, "lock file, generated or minified")
+        assert classify("packages.lock.json", "edit") == (None, "lock file, generated or minified")
 
     def test_deleted_files_are_not_read_whatever_their_type(self):
         assert classify("src/a.py", "delete") == (None, "deleted file")
@@ -44,8 +49,8 @@ class TestPaths:
         assert not is_changelog_path("tools/changelog_helper.py")
 
     def test_python_and_powershell_come_first_and_tests_after_the_code(self):
-        order = sorted([("YAML", "ci.yml"), ("Python", "tests/test_a.py"), ("PowerShell", "a.ps1"), ("Python", "app/b.py")], key=lambda p: priority(*p))
-        assert [p[1] for p in order] == ["a.ps1", "app/b.py", "tests/test_a.py", "ci.yml"]
+        order = sorted([("YAML", "ci.yml"), ("Python", "tests/test_a.py"), ("PowerShell", "a.ps1"), ("Python", "app/b.py"), ("ARM template", "alerts/z.json")], key=lambda p: priority(*p))
+        assert [p[1] for p in order] == ["a.ps1", "alerts/z.json", "app/b.py", "tests/test_a.py", "ci.yml"]
 
 
 OLD = "alpha\nbeta\ngamma\ndelta\n"
@@ -91,6 +96,13 @@ class TestBuildView:
     def test_a_long_line_is_cut(self):
         view = build_view("a.py", "Python", "add", "", "x" * 500 + "\n")
         assert view.shown.endswith("…") and len(view.shown) < 270
+
+    def test_unless_the_width_is_raised_as_it_is_for_an_alert_template(self):
+        view = build_view("a.json", "ARM template", "add", "", "x" * 500 + "\n", width=4000)
+        assert view.shown.endswith("x" * 500) and "…" not in view.shown
+
+    def test_a_view_has_no_extra_text_until_one_is_given(self):
+        assert build_view("a.py", "Python", "add", "", "x\n").extra == ""
 
     def test_a_large_file_shows_only_the_changes_with_context(self):
         old = "".join(f"line {n}\n" for n in range(1, 501))

@@ -17,6 +17,15 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   `Where-Object` filtering instead of a hashtable lookup, `Write-Host`); the Python guidance covers quadratic loops, statuses
   that should be an Enum, annotations narrower than what is returned, substring parsing, averages of averages, missing
   timeouts, HTML built from data and more. Other languages get a general review.
+- **Alerts written as ARM templates are reviewed as alerts.** A `.json` file is reviewed when its content is an ARM template
+  (other JSON, such as `package.json`, is skipped with that reason, and its earlier version is not even fetched), and `.kql`
+  files are read. For an alert template the reviewer is also given each alert in plain words (when it fires, how often, over
+  what window, who is notified, with its query laid out over several lines) and a list of exactly what changed: threshold,
+  window, frequency, severity, action groups, the query before and after, new and removed alerts. This uses the same reader as
+  IRP Studio. The long query line in the JSON is no longer cut. The guidance follows Microsoft's `scheduledQueryRules` reference
+  and alert documentation: changes to when an alert fires, `minFailingPeriodsToAlert` above `numberOfEvaluationPeriods`,
+  `overrideQueryTimeRange`, a log alert meant to detect a lack of data, a disabled alert, no action group, `autoMitigate` off,
+  `skipQueryValidation`, metric alerts whose conditions must all be true, query mistakes, and secrets that are not `securestring`.
 - **Short, concrete findings.** Each finding names the exact input or situation that goes wrong, what happens, and what to
   change, and may carry a replacement for the exact lines it points at. The AI may return no findings.
 - **Every finding is checked before it is shown.** In code: the file must be in the pull request, the line must be a line the
@@ -41,6 +50,11 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 - The review says plainly that it reads code changes only and cannot judge how a result looks or behaves when run.
 
 ### Fixed
+- **JSON files were skipped as data, so an alert written as an ARM template was never reviewed** ("Reviewed 0 of 1 changed
+  files"). See "Alerts written as ARM templates are reviewed as alerts" above.
+- **When nothing could be reviewed the summary said "(none)" and "see the file list".** It now names the files that were skipped
+  and the reason for each. The limit of 20 files counts only the files that are reviewed, not the ones skipped.
+- **A checklist item with a link showed the raw link** (`[Alert Inventory wiki] (https://...)`); it now shows the link's words.
 - **No more canned review.** When Azure OpenAI was not configured, or the call failed for any reason, a built-in fallback
   returned fixed advice about HTML report generation, rated performance "EXCELLENT" for every pull request and said it adhered
   to branch conventions, with nothing on screen to say the AI had not been used. Now the request fails with a clear message
@@ -59,6 +73,7 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 ### Notes
 - No new dependency, table or setting. The token needs Code (Read). If it lacks the read scope for the existing comments, the
   linked work items or the builds, the review still runs and says what it could not read.
+- A review looks at no more than 100 files; the rest are listed as not examined.
 - A review makes one AI call per file, a second call for each file that has findings, and one for the description, five at a
   time. It stops starting new files after 170 seconds (Azure App Service ends a request after 230) and lists the files it did not
   reach.
