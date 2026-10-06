@@ -1,0 +1,190 @@
+"""A pretend Azure DevOps and a pretend model for the pull request review. The code in these files is made up."""
+from __future__ import annotations
+
+import json
+import re
+import threading
+from types import SimpleNamespace
+from typing import Any, Callable
+
+PY_OLD = """import json
+
+
+def load(path):
+    with open(path) as handle:
+        return json.load(handle)
+
+
+def to_bytes(text):
+    if "GB" in text:
+        return int(text.strip("GB")) * 10**9
+    return int(text.strip("B"))
+"""
+
+PY_NEW = """import json
+from typing import Any
+
+
+def load(path) -> dict:
+    with open(path) as handle:
+        return json.load(handle)
+
+
+def to_bytes(text):
+    if "GB" in text:
+        return int(text.strip("GB")) * 10**9
+    return int(text.strip("B"))
+
+
+def average(values):
+    return sum(values) / len(values)
+"""
+
+PS_NEW = """function Get-Totals {
+    param($Items)
+    $result = @()
+    foreach ($item in $Items) {
+        $result += $item.Total
+    }
+    Write-Host "done"
+    return $result
+}
+"""
+
+DESCRIPTION = """Adds a report.
+
+Checklist:
+- [x] Changelog updated
+- [x] Unit tests have been created
+- [x] WorkItem is associated to the PR
+- [ ] Spell check performed
+- [x] Coding standards are followed
+
+Regression results: https://dev.azure.com/org/proj/_build/results?buildId=100&view=results
+"""
+
+
+def change(path: str, kind: str = "edit", new_id: str | None = None, old_id: str | None = None) -> dict[str, Any]:
+    item: dict[str, Any] = {"path": path, "objectId": new_id or f"new-{path}"}
+    if kind != "add":
+        item["originalObjectId"] = old_id or f"old-{path}"
+    return {"changeId": 1, "changeTrackingId": 1, "changeType": kind, "item": item}
+
+
+class FakeAdo:
+    """The few calls the review makes. `blobs` maps an object id to its text; `fail` names calls that raise."""
+
+    def __init__(self, changes=None, blobs=None, threads=None, work_items=None, builds=None, description=DESCRIPTION, fail=(), iterations=1):
+        self.description = description
+        self.changes = changes if changes is not None else [
+            change("/scripts/report.py"), change("/scripts/totals.ps1", "add"), change("/CHANGELOG.md"), change("/tests/test_report.py", "add"),
+        ]
+        self.blobs = blobs if blobs is not None else {
+            "new-/scripts/report.py": PY_NEW, "old-/scripts/report.py": PY_OLD, "new-/scripts/totals.ps1": PS_NEW,
+            "new-/CHANGELOG.md": "# Changelog\n", "old-/CHANGELOG.md": "", "new-/tests/test_report.py": "def test_x():\n    assert True\n",
+        }
+        self.threads = threads if threads is not None else []
+        self.work_items = work_items if work_items is not None else [{"id": "55"}]
+        self.builds = builds if builds is not None else [{"id": 120, "result": "failed", "definition": {"id": 7, "name": "Regression"}}, {"id": 100, "result": "succeeded", "definition": {"id": 7, "name": "Regression"}}]
+        self.fail = set(fail)
+        self.iterations = iterations
+        self.blob_calls: list[str] = []
+
+    def _maybe(self, name: str) -> None:
+        if name in self.fail:
+            raise RuntimeError(f"{name} failed")
+
+    def get_pull_request(self, project, repo, pr_id):
+        self._maybe("get_pull_request")
+        return {"title": "Add the report", "description": self.description, "sourceRefName": "refs/heads/feature", "targetRefName": "refs/heads/dev"}
+
+    def get_pull_request_iterations(self, project, repo, pr_id):
+        return [{"id": n, "sourceRefCommit": {"commitId": "a" * 40}, "commonRefCommit": {"commitId": "b" * 40}} for n in range(1, self.iterations + 1)]
+
+    def get_all_pull_request_iteration_changes(self, project, repo, pr_id, iteration_id):
+        return self.changes
+
+    def get_pull_request_threads(self, project, repo, pr_id):
+        self._maybe("threads")
+        return self.threads
+
+    def get_pull_request_work_items(self, project, repo, pr_id):
+        self._maybe("work_items")
+        return self.work_items
+
+    def get_build(self, project, build_id):
+        self._maybe("builds")
+        return {"id": build_id, "definition": {"id": 7, "name": "Regression"}}
+
+    def list_builds_for_branch(self, project, branch, top=10):
+        self._maybe("builds")
+        return self.builds
+
+    def get_blob_text(self, project, repo, object_id, max_bytes=200_000):
+        self.blob_calls.append(object_id)
+        if object_id not in self.blobs:
+            return None, "unreadable"
+        value = self.blobs[object_id]
+        return (None, value["reason"]) if isinstance(value, dict) else (value, None)  # {"reason": "too_large"} stands for a file that cannot be read
+
+    def get_item_text(self, project, repo, path, commit, max_bytes=200_000):
+        return None, "unreadable"
+
+
+def thread(path: str | None, line: int | None, text: str, status: str = "fixed", author: str = "Sam Reviewer", system: bool = False) -> dict[str, Any]:
+    context = {"filePath": "/" + path, "rightFileStart": {"line": line, "offset": 1}, "rightFileEnd": {"line": line, "offset": 5}} if path else None
+    return {"id": 1, "status": status, "isDeleted": False, "threadContext": context,
+            "comments": [{"id": 1, "content": text, "commentType": "system" if system else "text", "author": {"displayName": author}}]}
+
+
+def finding(line: int, title: str = "Problem", severity: str = "warning", **over: Any) -> dict[str, Any]:
+    body = {"line": line, "end_line": None, "category": "correctness", "severity": severity, "title": title,
+            "comment": f"{title}: it fails for the input '10GBps' and returns the wrong value. Anchor the check.", "suggestion_code": None}
+    body.update(over)
+    return body
+
+
+class FakePrModel:
+    """Answers the three kinds of prompt. `findings` maps a file path to what the first call says about it (a list, or an
+    Exception to raise); `holds` says which finding numbers survive the second check (default: all)."""
+
+    def __init__(self, findings: dict[str, Any] | None = None, holds: Callable[[str, list[int]], dict[int, Any]] | None = None, gaps: Any = None, purposes: dict[str, str] | None = None):
+        self.deployment = "fake"
+        self.findings = findings if findings is not None else {}
+        self.holds = holds
+        self.gaps = [] if gaps is None else gaps
+        self.purposes = purposes or {}
+        self.calls: list[tuple[str, str]] = []
+        self._lock = threading.Lock()
+        self.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=self._create)))
+
+    def calls_of(self, kind: str) -> list[str]:
+        marker = {"file": "You review one changed file", "verify": "You check findings", "description": "You compare the description"}[kind]
+        return [user for system, user in self.calls if system.startswith(marker)]
+
+    def _create(self, model, messages, temperature=0, response_format=None):
+        system, user = messages[0]["content"], messages[1]["content"]
+        with self._lock:
+            self.calls.append((system, user))
+        if system.startswith("You review one changed file"):
+            path = re.search(r"^File: (.+)$", user, re.M).group(1).strip()
+            said = self.findings.get(path, [])
+            if isinstance(said, Exception):
+                raise said
+            body: Any = {"purpose": self.purposes.get(path, f"changes {path}"), "findings": said}
+        elif system.startswith("You check findings"):
+            path = re.search(r"^File: (\S+)", user, re.M).group(1)
+            numbers = [int(n) for n in re.findall(r"^(\d+)\. line", user, re.M)]
+            decided = self.holds(path, numbers) if self.holds else {}
+            if isinstance(decided, Exception):
+                raise decided
+            def answer(n: int) -> tuple[bool, str]:
+                said = decided.get(n, True)  # True, False or (False, "why")
+                return (said[0], said[1]) if isinstance(said, tuple) else (bool(said), "ok")
+
+            body = {"findings": [{"number": n, "holds": answer(n)[0], "reason": answer(n)[1]} for n in numbers]}
+        else:
+            if isinstance(self.gaps, Exception):
+                raise self.gaps
+            body = {"missing_from_description": self.gaps}
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(body)))])

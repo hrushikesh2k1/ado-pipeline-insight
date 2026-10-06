@@ -65,29 +65,6 @@ class RecommendationResponse:
 
 
 @dataclass(frozen=True)
-class PullRequestReviewComment:
-    id: str
-    category: Literal["correctness", "security", "performance", "maintainability", "test_coverage"]
-    severity: Literal["critical", "warning", "suggestion", "praise"]
-    title: str
-    comment: str
-    file_path: str | None = None
-    line_number: int | None = None
-    suggestion_code: str | None = None
-
-
-@dataclass(frozen=True)
-class PullRequestReviewResponse:
-    pull_request_id: int
-    verdict: str  # "APPROVED", "APPROVED_WITH_SUGGESTIONS", "CHANGES_REQUESTED"
-    summary: str
-    scorecard: dict[str, str]
-    comments: list[PullRequestReviewComment]
-    clarifications: list[str] = field(default_factory=list)
-    posted_to_ado: bool = False
-
-
-@dataclass(frozen=True)
 class DoraMetric:
     metric_date: str
     pipeline_id: int

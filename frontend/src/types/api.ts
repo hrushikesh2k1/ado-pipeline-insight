@@ -51,6 +51,7 @@ export type AdoPullRequest = {
   project_name: string
   is_draft: boolean
   merge_status: string | null
+  last_source_commit?: string | null
   reviewers: AdoReviewer[]
   web_url: string | null
   comments_count: number | null
@@ -64,17 +65,46 @@ export type PullRequestReviewComment = {
   comment: string
   file_path: string | null
   line_number: number | null
+  end_line?: number | null
   suggestion_code: string | null
+  language?: string | null
+  existing_thread?: string | null
+  existing_status?: string | null
+  verified?: boolean | null
+}
+
+export type PullRequestReviewedFile = {
+  path: string
+  language: string | null
+  change_type: string
+  status: 'reviewed' | 'skipped'
+  reason: string | null
+  findings: number
+  purpose: string | null
+}
+
+export type PullRequestChecklistCheck = {
+  item: string
+  checked: boolean | null
+  status: 'ok' | 'mismatch' | 'open' | 'unverifiable'
+  evidence: string
 }
 
 export type PullRequestReviewResponse = {
   pull_request_id: number
-  verdict: 'APPROVED' | 'APPROVED_WITH_SUGGESTIONS' | 'CHANGES_REQUESTED'
+  verdict: 'APPROVED' | 'APPROVED_WITH_SUGGESTIONS' | 'CHANGES_REQUESTED' | 'NOT_REVIEWED'
   summary: string
   scorecard: Record<string, string>
   comments: PullRequestReviewComment[]
   clarifications?: string[]
   posted_to_ado: boolean
+  method?: string
+  source_commit?: string | null
+  iterations?: number
+  files?: PullRequestReviewedFile[]
+  checklist?: PullRequestChecklistCheck[]
+  notes?: string[]
+  scope_note?: string
 }
 
 export type AdoTeam = {

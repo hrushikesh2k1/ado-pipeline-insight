@@ -60,7 +60,7 @@ export const AVAILABLE_PLUGINS: PluginItem[] = [
     id: 'ai_pr_reviewer',
     name: 'AI Pull Request Reviewer',
     category: 'AI Insights',
-    description: 'Automates PR code reviews, analyzes diffs, and generates quality scorecards with line-by-line feedback.',
+    description: 'Reviews the real changes of a pull request file by file (Python, PowerShell and more), checks every finding before showing it, and compares the PR checklist with what the PR contains. Preview only: nothing is posted to Azure DevOps.',
     iconName: 'GitPullRequest',
     targetArea: 'Pull Requests',
     defaultEnabled: true,

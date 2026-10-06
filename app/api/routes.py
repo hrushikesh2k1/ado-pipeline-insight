@@ -28,7 +28,6 @@ from app.schemas.connection import (
     AdoReviewer,
     AdoPullRequest,
     PullRequestReviewRequest,
-    PullRequestReviewCommentSchema,
     PullRequestReviewResponseSchema,
     AdoTeam,
     AdoIteration,
@@ -56,6 +55,7 @@ from app.schemas.connection import (
 from app.repositories.release_repository import ReleaseRepository
 from app.services.release_service import ReleaseService
 from app.services.irp_service import IrpService
+from app.services import pr_review
 from app.schemas.insights import AlertInventoryUpload, InsightsRefreshRequest
 from app.services.work_item_insights import WorkItemInsightsService
 from app.repositories import work_item_insights_repository as insights_store
@@ -427,6 +427,7 @@ def ado_pull_requests(
                 project_name=proj_clean,
                 is_draft=bool(pr.get("isDraft", False)),
                 merge_status=pr.get("mergeStatus"),
+                last_source_commit=(pr.get("lastMergeSourceCommit") or {}).get("commitId"),
                 reviewers=reviewers,
                 web_url=web_url,
                 comments_count=pr.get("commentCount") or pr.get("commentsCount"),
@@ -451,182 +452,36 @@ def ado_pull_requests(
     operation_id="review_pull_request",
 )
 def review_pull_request(payload: PullRequestReviewRequest) -> PullRequestReviewResponseSchema:
-    """Review an Azure DevOps pull request with AI and return structured feedback.
+    """Review the changes of an Azure DevOps pull request with AI and return structured feedback.
 
-    IMPORTANT: Review comments are purely generated for preview on the application screen.
-    They are NOT posted to Azure DevOps.
+    The real changes are reviewed file by file and every finding is checked before it is returned. If the AI is not
+    available the request fails: no review is made up. IMPORTANT: the comments are only returned for display in the
+    application. They are NOT posted to Azure DevOps.
     """
-    token = (payload.pat.strip() if payload.pat else None) or get_ado_pat(payload.organization)
-    org_clean = payload.organization.strip()
-    proj_clean = payload.project.strip()
+    org_clean = validate_organization(payload.organization.strip())
+    proj_clean = validate_project(payload.project.strip())
     repo_clean = payload.repository_id.strip()
+    token = _resolve_pat(org_clean, payload.pat)
 
-    validate_organization(org_clean)
-    validate_project(proj_clean)
-
-    pr_data = {}
-    commits_data = []
-    iterations_data = []
-    changes_data = []
-
-    if token:
-        try:
-            ado = AzureDevOpsClient(organization=org_clean, pat=token)
-            pr_data = ado.get_pull_request(proj_clean, repo_clean, payload.pull_request_id)
-            try:
-                commits_data = ado.get_pull_request_commits(proj_clean, repo_clean, payload.pull_request_id)
-            except Exception as e:
-                logging.debug("Could not fetch commits for PR %s: %s", payload.pull_request_id, e)
-            try:
-                iterations_data = ado.get_pull_request_iterations(proj_clean, repo_clean, payload.pull_request_id)
-                if iterations_data:
-                    latest_iter_id = iterations_data[-1].get("id")
-                    if latest_iter_id is not None:
-                        try:
-                            changes_data = ado.get_pull_request_iteration_changes(proj_clean, repo_clean, payload.pull_request_id, latest_iter_id)
-                        except Exception as e:
-                            logging.debug("Could not fetch iteration changes for PR %s iter %s: %s", payload.pull_request_id, latest_iter_id, e)
-            except Exception as e:
-                logging.debug("Could not fetch iterations for PR %s: %s", payload.pull_request_id, e)
-        except requests.HTTPError as exc:
-            code = exc.response.status_code if exc.response is not None else 0
-            if code in {401, 403, 203}:
-                raise HTTPException(status_code=401, detail="Azure DevOps authentication failed. Check PAT permissions.") from exc
-            raise HTTPException(status_code=502, detail=f"Azure DevOps returned HTTP {code}.") from exc
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logging.error("Failed to fetch PR from ADO: %s", exc)
-
-    changed_files = []
-    source_exts = {".py", ".ts", ".tsx", ".js", ".jsx", ".cs", ".go", ".java", ".sh", ".html", ".sql", ".yaml", ".yml"}
-    snippets_fetched = 0
-
-    for entry in changes_data:
-        item = entry.get("item") or {}
-        raw_path = item.get("path") or entry.get("path") or ""
-        if raw_path:
-            clean_path = raw_path.lstrip("/")
-            change_obj = {
-                "path": clean_path,
-                "change_type": entry.get("changeType", "edit"),
-            }
-            # Attempt to fetch content snippet for up to 4 modified code files
-            ext = Path(clean_path).suffix.lower()
-            obj_id = item.get("objectId")
-            if token and snippets_fetched < 4 and ext in source_exts:
-                content = None
-                if obj_id:
-                    try:
-                        content = ado.get_blob_content(proj_clean, repo_clean, obj_id)
-                    except Exception:
-                        pass
-                if not content:
-                    try:
-                        content = ado.get_item_content(proj_clean, repo_clean, clean_path, pr_data.get("sourceRefName"))
-                    except Exception:
-                        pass
-                if content and len(content.strip()) > 0:
-                    lines = content.splitlines()[:200]
-                    numbered = "\n".join(f"{i+1}: {l}" for i, l in enumerate(lines))
-                    change_obj["content_snippet"] = numbered
-                    snippets_fetched += 1
-
-            changed_files.append(change_obj)
-
-    lang_map = {
-        ".py": "Python",
-        ".ts": "TypeScript",
-        ".tsx": "TypeScript (React)",
-        ".js": "JavaScript",
-        ".jsx": "JavaScript (React)",
-        ".cs": "C#",
-        ".java": "Java",
-        ".go": "Go",
-        ".rs": "Rust",
-        ".cpp": "C++",
-        ".c": "C",
-        ".sql": "SQL",
-        ".sh": "Shell",
-        ".bash": "Bash",
-        ".ps1": "PowerShell",
-        ".yaml": "YAML",
-        ".yml": "YAML",
-        ".json": "JSON",
-        ".html": "HTML",
-        ".css": "CSS",
-    }
-    detected_langs = set()
-    test_files = []
-    for f in changed_files:
-        fpath = f["path"]
-        ext = Path(fpath).suffix.lower()
-        if ext in lang_map:
-            detected_langs.add(lang_map[ext])
-        if any(kw in fpath.lower() for kw in ("test", "spec", "tests")):
-            test_files.append(fpath)
-
-    primary_languages = sorted(list(detected_langs)) if detected_langs else ["Python"]
-
-    desc = pr_data.get("description") or ""
-    lines = desc.splitlines()
-    checked_items = []
-    unchecked_items = []
-    for line in lines:
-        stripped = line.strip()
-        if re.match(r"^[-*]\s*\[[xX]\]\s+", stripped):
-            checked_items.append(re.sub(r"^[-*]\s*\[[xX]\]\s+", "", stripped))
-        elif re.match(r"^[-*]\s*\[\s*\]\s+", stripped):
-            unchecked_items.append(re.sub(r"^[-*]\s*\[\s*\]\s+", "", stripped))
-
-    desc_links = re.findall(r"https?://[^\s)\]]+", desc)
-    has_regression_link = any(kw in l.lower() for l in desc_links for kw in ("test", "regression", "result", "run", "build", "pipeline"))
-
-    pr_context = {
-        "pull_request_id": payload.pull_request_id,
-        "title": pr_data.get("title", f"Pull Request #{payload.pull_request_id}"),
-        "description": desc,
-        "source_branch": pr_data.get("sourceRefName", "").replace("refs/heads/", ""),
-        "target_branch": pr_data.get("targetRefName", "").replace("refs/heads/", ""),
-        "author": pr_data.get("createdBy", {}).get("displayName", "Author"),
-        "merge_status": pr_data.get("mergeStatus", "unknown"),
-        "commits": [{"id": c.get("commitId"), "comment": c.get("comment")} for c in commits_data[:10]],
-        "iterations_count": len(iterations_data),
-        "changed_files": changed_files[:50],
-        "primary_languages": primary_languages,
-        "test_files_detected": test_files,
-        "description_analysis": {
-            "checked_checklist_items": checked_items,
-            "unchecked_checklist_items": unchecked_items,
-            "links": desc_links,
-            "has_regression_link": has_regression_link,
-        },
-    }
-
-    ai_svc = AIService()
-    review_res = ai_svc.review_pull_request(pr_context)
-
-    return PullRequestReviewResponseSchema(
-        pull_request_id=review_res.pull_request_id,
-        verdict=review_res.verdict,
-        summary=review_res.summary,
-        scorecard=review_res.scorecard,
-        comments=[
-            PullRequestReviewCommentSchema(
-                id=c.id,
-                category=c.category,
-                severity=c.severity,
-                title=c.title,
-                comment=c.comment,
-                file_path=c.file_path,
-                line_number=c.line_number,
-                suggestion_code=c.suggestion_code,
-            )
-            for c in review_res.comments
-        ],
-        clarifications=review_res.clarifications,
-        posted_to_ado=False,
-    )
+    try:
+        model = pr_review.get_model_client()
+        service = pr_review.PullRequestReviewService(AzureDevOpsClient(organization=org_clean, pat=token), model)
+        result = service.review(proj_clean, repo_clean, payload.pull_request_id)
+    except pr_review.AiUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except pr_review.ReviewFailed as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except requests.HTTPError as exc:
+        code = exc.response.status_code if exc.response is not None else 0
+        if code in {401, 403, 203}:
+            raise HTTPException(status_code=401, detail="Azure DevOps authentication failed. Check that the PAT has Code (Read) permission.") from exc
+        if code == 404:
+            raise HTTPException(status_code=404, detail="That pull request was not found in this repository.") from exc
+        raise HTTPException(status_code=502, detail=f"Azure DevOps returned HTTP {code}.") from exc
+    except Exception as exc:
+        logging.error("Pull request review failed: %s", exc)
+        raise HTTPException(status_code=502, detail="The pull request review failed. Nothing was reviewed.") from exc
+    return PullRequestReviewResponseSchema(**result)
 
 
 @router.get(

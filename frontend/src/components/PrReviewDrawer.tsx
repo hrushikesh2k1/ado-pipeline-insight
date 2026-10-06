@@ -12,8 +12,11 @@ import {
   GitBranch,
   User,
   ThumbsUp,
+  RefreshCw,
 } from 'lucide-react'
 import type { AdoPullRequest, PullRequestReviewResponse, PullRequestReviewComment } from '../types/api'
+import { allCommentsAsMarkdown, commentAsMarkdown, lineLabel, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
+import { ChecklistCard, FilesCard, NotesCard } from './PrReviewPanels'
 
 interface PrReviewDrawerProps {
   reviewData: {
@@ -21,34 +24,25 @@ interface PrReviewDrawerProps {
     review: PullRequestReviewResponse
   }
   onClose: () => void
+  /** The branch has new commits since this review was made. */
+  isStale?: boolean
+  isReReviewing?: boolean
+  onReReview?: () => void
+  /** Why the last attempt to review again failed. */
+  error?: string | null
 }
 
 function getVerdictBadge(verdict: string) {
+  const label = verdictLabel(verdict)
   switch (verdict) {
     case 'APPROVED':
-      return {
-        label: 'Approved',
-        className: 'verdictApproved',
-        icon: <CheckCircle2 size={13} />,
-      }
+      return { label, className: 'verdictApproved', icon: <CheckCircle2 size={13} /> }
     case 'APPROVED_WITH_SUGGESTIONS':
-      return {
-        label: 'Approved with Suggestions',
-        className: 'verdictSuggestions',
-        icon: <Sparkles size={13} />,
-      }
+      return { label, className: 'verdictSuggestions', icon: <Sparkles size={13} /> }
     case 'CHANGES_REQUESTED':
-      return {
-        label: 'Changes Requested',
-        className: 'verdictChanges',
-        icon: <AlertTriangle size={13} />,
-      }
+      return { label, className: 'verdictChanges', icon: <AlertTriangle size={13} /> }
     default:
-      return {
-        label: verdict.replace(/_/g, ' '),
-        className: 'verdictNeutral',
-        icon: <Info size={13} />,
-      }
+      return { label, className: 'verdictNeutral', icon: <Info size={13} /> }
   }
 }
 
@@ -102,7 +96,7 @@ function getScoreBadgeClass(score: string) {
   }
 }
 
-export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onClose }) => {
+export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onClose, isStale = false, isReReviewing = false, onReReview, error = null }) => {
   const { pr, review } = reviewData
   const [severityFilter, setSeverityFilter] = useState<string>('all')
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -124,36 +118,14 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
   })
 
   const copyComment = (comment: PullRequestReviewComment) => {
-    let text = `### [${comment.severity.toUpperCase()}] ${comment.title}\n`
-    if (comment.file_path) {
-      text += `**File**: \`${comment.file_path}${comment.line_number ? `:${comment.line_number}` : ''}\`\n\n`
-    }
-    text += `${comment.comment}\n\n`
-    if (comment.suggestion_code) {
-      text += `\`\`\`suggestion\n${comment.suggestion_code}\n\`\`\`\n`
-    }
-    navigator.clipboard.writeText(text).then(() => {
+    navigator.clipboard.writeText(commentAsMarkdown(comment)).then(() => {
       setCopiedId(comment.id)
       setTimeout(() => setCopiedId(null), 2000)
     })
   }
 
   const copyAllComments = () => {
-    let fullText = `# AI PR Review for PR #${pr.id}: ${pr.title}\n`
-    fullText += `**Verdict**: ${review.verdict}\n`
-    fullText += `**Summary**: ${review.summary}\n\n`
-    fullText += `## Review Comments\n\n`
-    review.comments.forEach((c, idx) => {
-      fullText += `### ${idx + 1}. [${c.severity.toUpperCase()}] ${c.title}\n`
-      if (c.file_path) {
-        fullText += `**File**: \`${c.file_path}${c.line_number ? `:${c.line_number}` : ''}\`\n\n`
-      }
-      fullText += `${c.comment}\n\n`
-      if (c.suggestion_code) {
-        fullText += `\`\`\`suggestion\n${c.suggestion_code}\n\`\`\`\n\n`
-      }
-    })
-    navigator.clipboard.writeText(fullText).then(() => {
+    navigator.clipboard.writeText(allCommentsAsMarkdown(pr, review)).then(() => {
       setCopiedAll(true)
       setTimeout(() => setCopiedAll(false), 2000)
     })
@@ -164,7 +136,7 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
       <aside className="drawer prReviewDrawer" onClick={(e) => e.stopPropagation()}>
         {/* Drawer Header */}
         <div className="drawerHead prDrawerHead">
-          <div>
+          <div className="prDrawerTitleBlock">
             <div className="prDrawerTitleRow">
               <span className={`prVerdictBadge ${verdictBadge.className}`}>
                 {verdictBadge.icon}
@@ -182,12 +154,43 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                 <GitBranch size={12} />
                 <span>{pr.source_branch} → {pr.target_branch}</span>
               </span>
+              {review.source_commit && (
+                <>
+                  <span className="prDrawerSubDot">•</span>
+                  <span className="prDrawerSubItem prCommitItem" data-testid="pr-review-commit" title="The commit that was reviewed">
+                    reviewed <span className="prCommit">{shortCommit(review.source_commit)}</span>
+                    {review.iterations ? ` (push ${review.iterations})` : ''}
+                  </span>
+                </>
+              )}
             </div>
           </div>
-          <button className="close" onClick={onClose} aria-label="Close Review Drawer">
-            <X size={18} />
-          </button>
+          <div className="prDrawerActions">
+            {onReReview && (
+              <button type="button" className="prReReview" onClick={onReReview} disabled={isReReviewing} data-testid="pr-rereview">
+                <RefreshCw size={12} className={isReReviewing ? 'spin' : ''} />
+                <span>{isReReviewing ? 'Reviewing…' : 'Review again'}</span>
+              </button>
+            )}
+            <button className="close" onClick={onClose} aria-label="Close Review Drawer">
+              <X size={18} />
+            </button>
+          </div>
         </div>
+
+        {error && (
+          <div className="prStaleNote" data-testid="pr-review-error" role="alert">
+            <AlertTriangle size={14} />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {isStale && (
+          <div className="prStaleNote" data-testid="pr-review-stale">
+            <AlertTriangle size={14} />
+            <span>The branch has new commits since this review. Review again to include them.</span>
+          </div>
+        )}
 
         {/* Local Review Notice Banner (Crucial Requirement: Comments Not Posted to PR) */}
         <div className="prLocalNoticeBanner">
@@ -206,8 +209,11 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
             <Sparkles size={14} className="prSummaryIcon" />
             <h4>Executive Review Summary</h4>
           </div>
-          <p>{review.summary}</p>
+          <p data-testid="pr-review-summary">{review.summary}</p>
         </div>
+
+        {/* What the review could not judge, and what it left out or removed */}
+        <NotesCard notes={review.notes ?? []} scopeNote={review.scope_note} />
 
         {/* Review Inquiries & Process Notes (Cleanly separated from code findings) */}
         {review.clarifications && review.clarifications.length > 0 && (
@@ -226,6 +232,12 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
           </div>
         )}
 
+        {/* The checklist in the description, against what the pull request contains */}
+        <ChecklistCard checks={review.checklist ?? []} />
+
+        {/* Which files were read */}
+        <FilesCard files={review.files ?? []} />
+
         {/* Review Scorecard */}
         {review.scorecard && Object.keys(review.scorecard).length > 0 && (
           <div className="prScorecardSection">
@@ -235,7 +247,7 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                 <div key={dimension} className="prScoreCard">
                   <span className="prScoreLabel">{dimension.replace(/_/g, ' ')}</span>
                   <span className={`prScoreValue ${getScoreBadgeClass(score)}`}>
-                    {score.replace(/_/g, ' ')}
+                    {scoreLabel(score)}
                   </span>
                 </div>
               ))}
@@ -309,7 +321,9 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
               <CheckCircle2 size={32} />
               <p>
                 {counts.all === 0
-                  ? 'No code defects or regressions identified. All examined changes look clean and well-grounded.'
+                  ? review.verdict === 'NOT_REVIEWED'
+                    ? 'Nothing was reviewed. See "What was reviewed" for the reason.'
+                    : 'No findings in the files reviewed. This review reads the code changes only; run the result and look at it yourself.'
                   : `No comments found for filter "${severityFilter}".`}
               </p>
             </div>
@@ -334,9 +348,20 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                           <FileCode size={11} />
                           <span>
                             {comment.file_path}
-                            {comment.line_number ? `:${comment.line_number}` : ''}
+                            {lineLabel(comment) ? `:${lineLabel(comment)}` : ''}
                           </span>
                         </span>
+                      )}
+                      {comment.existing_thread && (
+                        <span className="prChip known" data-testid="pr-comment-known" title="People already raised this in the pull request comments">
+                          {comment.existing_thread}
+                        </span>
+                      )}
+                      {comment.verified === true && (
+                        <span className="prChip checked" data-testid="pr-comment-checked" title="A second check of the code confirmed this finding">double-checked</span>
+                      )}
+                      {comment.verified == null && (
+                        <span className="prChip" data-testid="pr-comment-unchecked" title="The second check did not run for this finding">not double-checked</span>
                       )}
                     </div>
 
@@ -380,6 +405,10 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                       <pre className="prSuggestionCode">
                         <code>{comment.suggestion_code}</code>
                       </pre>
+                      <p className="prSuggestionHint" data-testid="pr-suggestion-hint">
+                        In Azure DevOps, select line{comment.end_line && comment.line_number && comment.end_line > comment.line_number ? 's' : ''} {lineLabel(comment)} of <code>{comment.file_path}</code>,
+                        add a comment and paste the copied text: Apply Change then replaces exactly those lines.
+                      </p>
                     </div>
                   )}
                 </div>

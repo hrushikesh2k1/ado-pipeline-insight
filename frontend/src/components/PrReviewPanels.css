@@ -1,0 +1,84 @@
+/* The checklist, file list and notes of the pull request review drawer. Colours come from variables so both themes work. */
+
+.prp {
+  --p-card: rgba(255, 255, 255, 0.03);
+  --p-border: rgba(255, 255, 255, 0.1);
+  --p-text: #f4f4f5;
+  --p-muted: #9ca3af;
+  --p-accent: #818cf8;
+  --p-pass: #22c55e;
+  --p-warn: #f59e0b;
+  --p-fail: #ef4444;
+  color: var(--p-text);
+}
+[data-theme="light"] .prp {
+  --p-card: #f8fafc;
+  --p-border: #e2e8f0;
+  --p-text: #0f172a;
+  --p-muted: #64748b;
+  --p-accent: #4f46e5;
+  --p-pass: #15803d;
+  --p-warn: #b45309;
+  --p-fail: #b91c1c;
+}
+
+.prpCard { background: var(--p-card); border: 1px solid var(--p-border); border-radius: 10px; padding: 12px 14px; margin: 0 0 12px; min-width: 0; }
+.prpHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.prpTitle, .prpSummary { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; }
+.prpTitle svg, .prpSummary svg { color: var(--p-accent); flex: none; }
+.prpSummary { cursor: pointer; list-style: none; }
+.prpSummary::-webkit-details-marker { display: none; }
+.prpMuted { color: var(--p-muted); font-size: 11.5px; line-height: 1.5; }
+
+.prpChecks, .prpFiles, .prpNotes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.prpCheck { display: flex; gap: 8px; align-items: flex-start; }
+.prpCheckIcon { flex: none; margin-top: 1px; display: inline-flex; }
+.prpCheckTitle { font-size: 12.5px; font-weight: 600; overflow-wrap: anywhere; }
+.prpCheck.ok .prpCheckIcon { color: var(--p-pass); }
+.prpCheck.mismatch .prpCheckIcon { color: var(--p-fail); }
+.prpCheck.open .prpCheckIcon { color: var(--p-warn); }
+.prpCheck.unverifiable .prpCheckIcon { color: var(--p-muted); }
+.prpMore { margin-top: 8px; }
+.prpMore > summary { cursor: pointer; font-size: 11.5px; color: var(--p-muted); margin-bottom: 8px; }
+
+.prpFiles { margin-top: 10px; }
+.prpFile { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; font-size: 12px; }
+.prpFile.skipped { opacity: 0.8; }
+.prpPath { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; overflow-wrap: anywhere; min-width: 0; }
+.prpChip { font-size: 10.5px; padding: 1px 8px; border: 1px solid var(--p-border); border-radius: 20px; color: var(--p-muted); white-space: nowrap; }
+.prpPurpose { flex-basis: 100%; color: var(--p-muted); font-size: 11.5px; padding-left: 2px; }
+
+.prpScope { display: flex; gap: 7px; align-items: flex-start; margin: 0; font-size: 11.5px; color: var(--p-muted); line-height: 1.5; }
+.prpScope svg { flex: none; margin-top: 2px; color: var(--p-accent); }
+.prpNotes { margin-top: 8px; gap: 5px; font-size: 11.5px; color: var(--p-muted); padding-left: 0; }
+.prpNotes li { line-height: 1.5; overflow-wrap: anywhere; }
+
+/* comment cards: where a comment goes, whether people already raised it, whether it was double-checked */
+.prChip { font-size: 10.5px; padding: 1px 8px; border-radius: 20px; border: 1px solid var(--p-border, rgba(255,255,255,0.15)); color: var(--p-muted, #9ca3af); white-space: nowrap; }
+.prChip.known { color: #f59e0b; border-color: rgba(245, 158, 11, 0.45); }
+.prChip.checked { color: #22c55e; border-color: rgba(34, 197, 94, 0.45); }
+[data-theme="light"] .prChip.known { color: #b45309; }
+[data-theme="light"] .prChip.checked { color: #15803d; }
+.prSuggestionHint { margin: 6px 0 0; font-size: 11px; color: var(--p-muted, #9ca3af); line-height: 1.5; }
+.prReReview { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: inherit; border: 1px solid rgba(255,255,255,0.18); border-radius: 20px; padding: 5px 12px; font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer; }
+[data-theme="light"] .prReReview { border-color: #cbd5e1; }
+.prReReview:disabled { opacity: 0.6; cursor: default; }
+.prStaleNote { display: flex; gap: 7px; align-items: center; margin: 0 0 12px; padding: 8px 12px; border-radius: 8px; font-size: 12px; color: #f59e0b; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.35); }
+[data-theme="light"] .prStaleNote { color: #92400e; }
+.prCommit { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.prCommitItem { white-space: nowrap; }
+
+/* header: the title takes the room, the buttons keep their size; on a phone the buttons move to their own row above the title */
+.prDrawerTitleBlock { flex: 1; min-width: 0; }
+.prDrawerSub { flex-wrap: wrap; row-gap: 4px; }
+.prDrawerActions { display: flex; align-items: center; gap: 8px; flex: none; margin-left: 10px; }
+.prReReview span { white-space: nowrap; }
+@media (max-width: 520px) {
+  .prDrawerHead { flex-wrap: wrap; row-gap: 10px; }
+  .prDrawerActions { order: -1; width: 100%; justify-content: flex-end; margin-left: 0; }
+}
+/* the scorecard has five tiles; on a narrow screen they wrap instead of running off the side */
+@media (max-width: 640px) {
+  .prReviewDrawer .prScorecardGrid { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+  .prReviewDrawer .prScoreValue { width: auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+}

@@ -164,6 +164,103 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response).get("changeEntries", [])
 
+    def get_all_pull_request_iteration_changes(
+        self, project: str, repository_id: str, pull_request_id: int, iteration_id: int, page: int = 1000, max_pages: int = 5
+    ) -> list[dict[str, Any]]:
+        """Every change of an iteration: the API returns a page at a time (2000 at most) and says where the next one starts."""
+        url = self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/pullrequests/{pull_request_id}/iterations/{iteration_id}/changes")
+        entries: list[dict[str, Any]] = []
+        skip = 0
+        for _ in range(max_pages):
+            response = self.session.get(url, params={"$top": page, "$skip": skip, "api-version": self.api_version}, timeout=30)
+            response.raise_for_status()
+            data = self._json_response(response)
+            entries.extend(data.get("changeEntries", []))
+            skip = data.get("nextSkip") or 0
+            if not skip:
+                break
+        return entries
+
+    def get_pull_request_threads(self, project: str, repository_id: str, pull_request_id: int) -> list[dict[str, Any]]:
+        """The comment threads of a pull request, including the system ones (votes, merge attempts)."""
+        response = self.session.get(
+            self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/pullrequests/{pull_request_id}/threads"),
+            params={"api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def get_pull_request_work_items(self, project: str, repository_id: str, pull_request_id: int) -> list[dict[str, Any]]:
+        """References to the work items linked to a pull request."""
+        response = self.session.get(
+            self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/pullrequests/{pull_request_id}/workitems"),
+            params={"api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def list_builds_for_branch(self, project: str, branch_ref: str, top: int = 10) -> list[dict[str, Any]]:
+        """The newest builds that ran on a branch (for example refs/heads/feature), newest first."""
+        response = self.session.get(
+            self._url(project, "_apis/build/builds"),
+            params={"branchName": branch_ref, "$top": top, "queryOrder": "queueTimeDescending", "api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    @staticmethod
+    def _read_text(response: requests.Response, max_bytes: int) -> tuple[str | None, str | None]:
+        """The text of a streamed file response: (text, None), or (None, 'too_large' | 'binary' | 'unreadable')."""
+        try:
+            if response.status_code != 200:
+                return None, "unreadable"
+            if int(response.headers.get("Content-Length") or 0) > max_bytes:
+                return None, "too_large"
+            data = b""
+            for chunk in response.iter_content(65536):
+                data += chunk
+                if len(data) > max_bytes:
+                    return None, "too_large"
+        except Exception as exc:
+            logging.debug("Could not read a file response: %s", exc)
+            return None, "unreadable"
+        finally:
+            response.close()
+        if b"\x00" in data[:8000]:
+            return None, "binary"
+        return data.decode("utf-8-sig", errors="replace"), None
+
+    def get_blob_text(self, project: str, repository_id: str, object_id: str, max_bytes: int = 200_000) -> tuple[str | None, str | None]:
+        """A Git blob as text: (text, None), or (None, why not)."""
+        try:
+            response = self.session.get(
+                self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/blobs/{object_id}"),
+                params={"$format": "text", "api-version": self.api_version},
+                stream=True,
+                timeout=30,
+            )
+        except Exception as exc:
+            logging.debug("Could not fetch blob %s: %s", object_id, exc)
+            return None, "unreadable"
+        return self._read_text(response, max_bytes)
+
+    def get_item_text(self, project: str, repository_id: str, path: str, commit_id: str, max_bytes: int = 200_000) -> tuple[str | None, str | None]:
+        """A file at a given commit as text: (text, None), or (None, why not)."""
+        try:
+            response = self.session.get(
+                self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/items"),
+                params={"path": path, "versionDescriptor.version": commit_id, "versionDescriptor.versionType": "commit", "$format": "text", "api-version": self.api_version},
+                stream=True,
+                timeout=30,
+            )
+        except Exception as exc:
+            logging.debug("Could not fetch %s at %s: %s", path, commit_id, exc)
+            return None, "unreadable"
+        return self._read_text(response, max_bytes)
+
     def get_blob_content(self, project: str, repository_id: str, object_id: str) -> str | None:
         """Fetch the text content of a Git blob by its object ID."""
         try:

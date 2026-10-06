@@ -18,6 +18,7 @@ import {
 import { api } from '../services/api'
 import type { AdoRepository, AdoPullRequest, AdoReviewer, PullRequestReviewResponse } from '../types/api'
 import { PrReviewDrawer } from './PrReviewDrawer'
+import { reviewIsStale } from '../utils/prReview'
 import { usePlugins } from '../context/PluginContext'
 
 interface PullRequestsPageProps {
@@ -122,10 +123,11 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
   const [reviewsCache, setReviewsCache] = useState<Record<number, PullRequestReviewResponse>>({})
   const [reviewError, setReviewError] = useState<{ prId: number; message: string } | null>(null)
 
-  const handleReviewPR = (targetPr: AdoPullRequest) => {
-    // If already in cache, open immediately
-    if (reviewsCache[targetPr.id]) {
-      setActiveReview({ pr: targetPr, review: reviewsCache[targetPr.id] })
+  const handleReviewPR = (targetPr: AdoPullRequest, force = false) => {
+    // A review made at the commit that is still at the tip of the branch is shown as it is; after new commits, or when asked, it is made again
+    const cached = reviewsCache[targetPr.id]
+    if (cached && !force && !reviewIsStale(cached, targetPr)) {
+      setActiveReview({ pr: targetPr, review: cached })
       return
     }
 
@@ -621,15 +623,15 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
                             className={`prAddReviewCommentsBtn ${reviewsCache[pr.id] ? 'reviewed' : ''}`}
                             onClick={() => handleReviewPR(pr)}
                             disabled={reviewingPrId === pr.id}
-                            title="Review this pull request with AI and view comments on screen (comments are NOT posted to Azure DevOps)"
+                            title="Review the changes of this pull request with AI and view the findings on screen (nothing is posted to Azure DevOps)"
                           >
                             <Sparkles size={13} className={reviewingPrId === pr.id ? 'spin' : ''} />
                             <span>
                               {reviewingPrId === pr.id
                                 ? 'Reviewing...'
                                 : reviewsCache[pr.id]
-                                ? 'View review comments'
-                                : 'Add review comments'}
+                                ? reviewIsStale(reviewsCache[pr.id], pr) ? 'Review again (new commits)' : 'View AI review'
+                                : 'Review with AI'}
                             </span>
                           </button>
                         )}
@@ -666,6 +668,10 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
         <PrReviewDrawer
           reviewData={activeReview}
           onClose={() => setActiveReview(null)}
+          isStale={reviewIsStale(activeReview.review, pullRequests.find(p => p.id === activeReview.pr.id) ?? activeReview.pr)}
+          isReReviewing={reviewingPrId === activeReview.pr.id}
+          onReReview={() => handleReviewPR(activeReview.pr, true)}
+          error={reviewError && reviewError.prId === activeReview.pr.id ? reviewError.message : null}
         />
       )}
     </div>

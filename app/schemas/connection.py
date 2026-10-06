@@ -77,6 +77,7 @@ class AdoPullRequest(BaseModel):
     project_name: str
     is_draft: bool = False
     merge_status: str | None = None
+    last_source_commit: str | None = None  # the commit at the tip of the source branch, so a review can tell it is out of date
     reviewers: list[AdoReviewer] = Field(default_factory=list)
     web_url: str | None = None
     comments_count: int | None = None
@@ -98,7 +99,29 @@ class PullRequestReviewCommentSchema(BaseModel):
     comment: str
     file_path: str | None = None
     line_number: int | None = None
+    end_line: int | None = None  # the last line when the comment covers a range; a suggestion replaces lines line_number..end_line
     suggestion_code: str | None = None
+    language: str | None = None
+    existing_thread: str | None = None  # set when people already raised this in the pull request comments
+    existing_status: str | None = None
+    verified: bool | None = None  # True = confirmed by a second check; None = the second check did not run
+
+
+class PullRequestReviewedFile(BaseModel):
+    path: str
+    language: str | None = None
+    change_type: str = "edit"
+    status: str  # reviewed | skipped
+    reason: str | None = None  # why a file was skipped
+    findings: int = 0
+    purpose: str | None = None
+
+
+class PullRequestChecklistCheck(BaseModel):
+    item: str
+    checked: bool | None = None
+    status: str  # ok | mismatch | open | unverifiable
+    evidence: str = ""
 
 
 class PullRequestReviewResponseSchema(BaseModel):
@@ -109,6 +132,13 @@ class PullRequestReviewResponseSchema(BaseModel):
     comments: list[PullRequestReviewCommentSchema] = Field(default_factory=list)
     clarifications: list[str] = Field(default_factory=list)
     posted_to_ado: bool = False
+    method: str = "diff-per-file"
+    source_commit: str | None = None
+    iterations: int = 0
+    files: list[PullRequestReviewedFile] = Field(default_factory=list)
+    checklist: list[PullRequestChecklistCheck] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    scope_note: str = ""
 
 
 class AdoTeam(BaseModel):

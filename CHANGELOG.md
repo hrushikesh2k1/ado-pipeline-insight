@@ -4,6 +4,69 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.9.0] - 2026-10-06
+
+### Changed
+- **The AI PR review reads the real changes, file by file.** Each changed file is compared with its earlier version and the
+  reviewer is shown the diff with line numbers (`+` added or changed, `-` removed), so it can tell new code from old. Up to 20
+  files are reviewed per pull request, Python and PowerShell first; a large file shows its changed parts with the lines around
+  them. Every file that is not reviewed is listed with the reason (documentation, deleted, lock or generated file, too large,
+  over the limit). Before, the review read the first 4 source files, 200 lines each, as whole files with no diff.
+- **Python and PowerShell guidance.** PowerShell files (`.ps1`, `.psm1`, `.psd1`) are now read at all. The PowerShell guidance
+  names PSScriptAnalyzer rules and the slow patterns Microsoft documents (`+=` on arrays and strings in loops, repeated
+  `Where-Object` filtering instead of a hashtable lookup, `Write-Host`); the Python guidance covers quadratic loops, statuses
+  that should be an Enum, annotations narrower than what is returned, substring parsing, averages of averages, missing
+  timeouts, HTML built from data and more. Other languages get a general review.
+- **Short, concrete findings.** Each finding names the exact input or situation that goes wrong, what happens, and what to
+  change, and may carry a replacement for the exact lines it points at. The AI may return no findings.
+- **Every finding is checked before it is shown.** In code: the file must be in the pull request, the line must be a line the
+  pull request changed, and a suggested replacement is kept only when every line it replaces was changed. Then a second AI call
+  reads each finding against the code and removes the ones it cannot confirm. What was removed, and why, is listed in the
+  review. A finding the second check could not run for is marked "not double-checked".
+- **The verdict, the scorecard and the summary are worked out from the findings,** not written by the AI. The verdict reads
+  "No issues found", "Suggestions" or "Changes suggested" (a review of code changes does not approve a pull request), and a
+  scorecard row with no finding says "No findings" instead of "Excellent".
+- **Existing pull request comments are read.** The AI is told what people already said on each file and does not repeat it.
+  A finding that matches an existing thread is marked "Already raised by <name> (resolved)", and findings people already
+  resolved do not count toward the verdict.
+- **The PR checklist is checked against the pull request.** Ticked boxes about the changelog, tests created and a linked work
+  item are compared with the changed files and the linked work items; the run linked in the description is compared with the
+  newest run of the same pipeline on the source branch. Everything else on the checklist is listed as something that cannot be
+  verified here. The AI also names substantial changes the description does not mention.
+- **A review knows which commit it was made at.** After new commits the page offers "Review again (new commits)", and the
+  review has a **Review again** button. The review shows the commit and the push it covers.
+- **Copy** gives text ready for an Azure DevOps comment, with a suggestion block when there is a replacement, and the review says
+  which lines to place it on so that **Apply Change** replaces exactly those lines. Comments are still shown on screen only and
+  are not posted to Azure DevOps.
+- The review says plainly that it reads code changes only and cannot judge how a result looks or behaves when run.
+
+### Fixed
+- **No more canned review.** When Azure OpenAI was not configured, or the call failed for any reason, a built-in fallback
+  returned fixed advice about HTML report generation, rated performance "EXCELLENT" for every pull request and said it adhered
+  to branch conventions, with nothing on screen to say the AI had not been used. Now the request fails with a clear message
+  (HTTP 503 when the AI is not configured) and nothing is made up. If the AI fails for some files only, those files are listed
+  as not reviewed; if it fails for all of them, there is no review (HTTP 502).
+- **A review was made even when the pull request could not be read.** After an Azure DevOps failure that was not an HTTP error
+  (a network failure, for example) the error was only logged and the AI was asked to review an empty pull request. The pull
+  request must now be readable; a missing pull request is a 404, one with no pushes or no file changes a 422.
+- **The review used the server's own Azure DevOps token for any organization** when the caller sent none. It now follows the same
+  rule as the other pull request routes: the server's token only for allow-listed organizations.
+- **Only the first 100 changed files were read, and the earlier version of a file was never fetched** (the file fetch the old
+  review fell back to did not send the file path). All changes are read, page by page.
+- Test files were recognised by the word "test" anywhere in the path (`latest.py`, `contest.md`); they are now recognised by
+  file and folder name.
+
+### Notes
+- No new dependency, table or setting. The token needs Code (Read). If it lacks the read scope for the existing comments, the
+  linked work items or the builds, the review still runs and says what it could not read.
+- A review makes one AI call per file, a second call for each file that has findings, and one for the description, five at a
+  time. It stops starting new files after 170 seconds (Azure App Service ends a request after 230) and lists the files it did not
+  reach.
+- `POST /api/v1/ado/pullrequests/review` returns `method`, `source_commit`, `iterations`, `files`, `checklist`, `notes` and
+  `scope_note`; each comment gains `end_line`, `language`, `existing_thread`, `existing_status` and `verified`; the verdict can
+  be `NOT_REVIEWED`. `GET /api/v1/ado/pullrequests` returns `last_source_commit`.
+- The unused `PullRequestReviewComment` and `PullRequestReviewResponse` classes were removed from `core/models.py`.
+
 ## [1.8.1] - 2026-10-06
 
 Accuracy fixes for the IRP writer, found by testing 1.8.0 on a real AKS memory alert in Azure Government.

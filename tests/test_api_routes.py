@@ -304,53 +304,6 @@ def test_ado_pull_requests(api, monkeypatch):
     assert prs[0]["reviewers"][0]["vote"] == 10
 
 
-def test_ado_pull_request_review(api, monkeypatch):
-    client, _ = api
-    class MockClient:
-        def __init__(self, organization, pat):
-            pass
-        def get_pull_request(self, project, repository_id, pull_request_id):
-            return {
-                "pullRequestId": pull_request_id,
-                "title": "Fix memory leak in subscriber",
-                "description": "Patches unclosed client connection",
-                "sourceRefName": "refs/heads/fix/leak",
-                "targetRefName": "refs/heads/main",
-                "createdBy": {"displayName": "Dev User"},
-                "mergeStatus": "succeeded",
-            }
-        def get_pull_request_commits(self, project, repository_id, pull_request_id):
-            return [{"commitId": "abc1234", "comment": "Close socket on termination"}]
-        def get_pull_request_iterations(self, project, repository_id, pull_request_id):
-            return [{"id": 1}]
-        def get_pull_request_iteration_changes(self, project, repository_id, pull_request_id, iteration_id):
-            return [
-                {"item": {"path": "/app/subscriber.py"}, "changeType": "edit"},
-                {"item": {"path": "/tests/test_subscriber.py"}, "changeType": "add"},
-            ]
-
-    monkeypatch.setattr(routes, "AzureDevOpsClient", MockClient)
-    monkeypatch.setattr(routes, "get_ado_pat", lambda org: "test-pat")
-
-    payload = {
-        "organization": "myorg",
-        "project": "myproj",
-        "repository_id": "repo-1",
-        "pull_request_id": 101,
-        "pat": "fake-pat",
-    }
-    r = client.post("/api/v1/ado/pullrequests/review", json=payload)
-    assert r.status_code == 200
-    data = r.json()
-    assert data["pull_request_id"] == 101
-    assert data["posted_to_ado"] is False
-    assert "verdict" in data
-    assert "summary" in data
-    assert "scorecard" in data
-    assert "clarifications" in data
-    assert isinstance(data["comments"], list)
-
-
 def test_ado_teams(api):
     client, _ = api
     r = client.get("/api/v1/ado/teams?organization=myorg&project=myproj")
