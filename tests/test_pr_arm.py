@@ -78,7 +78,7 @@ class TestDescribeAnAlert:
     def test_a_very_long_query_is_cut(self):
         long_query = "T | where " + " and ".join(f"Col{n} == {n}" for n in range(1000))
         text = arm_context(None, edited(VPN, ("AzureDiagnostics\\n| where ResourceType", long_query.replace('"', "'") + "\\n| where ResourceType")))
-        assert "(the rest of the query is cut)" in text and len(text) < MAX_CONTEXT_CHARS + 200 and MAX_QUERY_CHARS < 5000
+        assert "(the rest of the query is cut)" in text and len(text) < MAX_QUERY_CHARS + 1000
 
 
 class TestWhatChanged:

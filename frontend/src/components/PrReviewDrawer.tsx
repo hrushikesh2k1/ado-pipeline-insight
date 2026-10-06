@@ -15,7 +15,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import type { AdoPullRequest, PullRequestReviewResponse, PullRequestReviewComment } from '../types/api'
-import { allCommentsAsMarkdown, commentAsMarkdown, lineLabel, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
+import { QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, allCommentsAsMarkdown, commentAsMarkdown, isAboutQueries, lineLabel, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
 import { ChecklistCard, FilesCard, NotesCard } from './PrReviewPanels'
 
 interface PrReviewDrawerProps {
@@ -358,10 +358,13 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                         </span>
                       )}
                       {comment.verified === true && (
-                        <span className="prChip checked" data-testid="pr-comment-checked" title="A second check of the code confirmed this finding">double-checked</span>
+                        <span className="prChip checked" data-testid="pr-comment-checked" title={SECOND_CHECK_TIP}>{SECOND_CHECK_AGREED}</span>
                       )}
                       {comment.verified == null && (
-                        <span className="prChip" data-testid="pr-comment-unchecked" title="The second check did not run for this finding">not double-checked</span>
+                        <span className="prChip" data-testid="pr-comment-unchecked" title="The second check did not run for this finding">{SECOND_CHECK_NOT_RUN}</span>
+                      )}
+                      {isAboutQueries(comment.language) && (
+                        <span className="prChip" data-testid="pr-comment-query-note" title="Nobody has run this query or deployed this template, and the second check only reads the code">{QUERY_NOT_RUN}</span>
                       )}
                     </div>
 
@@ -378,6 +381,12 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
 
                   <h4 className="prCommentTitle">{comment.title}</h4>
                   <div className="prCommentBody">{comment.comment}</div>
+                  {comment.failing_case && (
+                    <div className="prCaseLine" data-testid="pr-comment-case"><b>Concrete case:</b> {comment.failing_case}</div>
+                  )}
+                  {comment.evidence && (
+                    <div className="prCaseLine"><b>Code it relies on:</b> <code className="prEvidence">{comment.evidence}</code></div>
+                  )}
 
                   {comment.suggestion_code && (
                     <div className="prSuggestionBox">

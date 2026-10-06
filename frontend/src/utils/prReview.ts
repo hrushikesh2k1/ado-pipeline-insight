@@ -36,6 +36,17 @@ export const CHECK_LABEL: Record<PullRequestChecklistCheck['status'], string> = 
   unverifiable: "Can't be verified here",
 }
 
+/** What the second check was: another AI reading the code. It did not run the code or the query, and the labels say so. */
+export const SECOND_CHECK_AGREED = 'second check agreed'
+export const SECOND_CHECK_NOT_RUN = 'second check did not run'
+export const SECOND_CHECK_TIP = 'A second AI read of the code agreed with this finding. It has not run the code or the query.'
+export const QUERY_NOT_RUN = 'not verified by running the query'
+
+/** Findings in alert templates and KQL are about queries nobody has run: say so next to them. */
+export function isAboutQueries(language?: string | null): boolean {
+  return language === 'ARM template' || language === 'KQL'
+}
+
 /** '24' or '24-26'; empty when the comment has no line. */
 export function lineLabel(comment: Pick<PullRequestReviewComment, 'line_number' | 'end_line'>): string {
   if (!comment.line_number) return ''

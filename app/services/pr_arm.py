@@ -13,9 +13,9 @@ from typing import Any
 from app.services.alert_facts import SEVERITY_NAMES, alerts_in, human_duration
 
 ARM_LANGUAGE = "ARM template"
-ARM_LINE_WIDTH = 4000  # an alert's query is one long line in the JSON; the reviewer must see all of it
-MAX_QUERY_CHARS = 3000
-MAX_CONTEXT_CHARS = 14000
+ARM_LINE_WIDTH = 20000  # an alert's query is one long line in the JSON (a shared query variable can pass 4,000 characters); the reviewer must see all of it
+MAX_QUERY_CHARS = 12000
+MAX_CONTEXT_CHARS = 40000
 
 _SCHEMA = re.compile(r"schema\.management\.azure\.com/schemas/[^\"]*/(deploymentTemplate|deploymentParameters|subscriptionDeploymentTemplate|managementGroupDeploymentTemplate|tenantDeploymentTemplate)\.json", re.IGNORECASE)
 _AZURE_TYPE = re.compile(r"\"type\"\s*:\s*\"Microsoft\.[A-Za-z]+/", re.IGNORECASE)

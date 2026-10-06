@@ -27,8 +27,12 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   and alert documentation: changes to when an alert fires, `minFailingPeriodsToAlert` above `numberOfEvaluationPeriods`,
   `overrideQueryTimeRange`, a log alert meant to detect a lack of data, a disabled alert, no action group, `autoMitigate` off,
   `skipQueryValidation`, metric alerts whose conditions must all be true, query mistakes, and secrets that are not `securestring`.
-- **Short, concrete findings.** Each finding names the exact input or situation that goes wrong, what happens, and what to
-  change, and may carry a replacement for the exact lines it points at. The AI may return no findings.
+- **Short, concrete findings, enforced in code.** Each finding must come with a concrete case (the input or situation and the
+  wrong result) and the exact code it relies on, copied from the file, and may carry a replacement for the exact lines it points
+  at. A finding is removed before it is shown when it has no case, when its case is a guess ("may", "might", "could",
+  "possibly", ...), when it asks the author to verify or confirm something instead of showing a defect, or when the code it
+  quotes is not in the file. What was removed is listed in the review notes ("Removed as a guess: ..."). The case and the
+  quoted code are shown with each finding. The AI may return no findings.
 - **The author's explanation is read.** The reviewer and the second check are given the pull request description (the
   checklist lines, images and HTML comments are taken out, since the code reads the checklist itself; up to 8,000 characters
   are kept) and are told not to report something the description, a comment in the code or the alert's own description says
@@ -39,7 +43,9 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   reads each finding against the code, the description and the existing comments, and removes the ones it cannot confirm,
   the ones that only say something "could" or "may" go wrong without a concrete case, and the ones that repeat an earlier
   finding (the repeat is merged into the first: "The same applies at line N."). What was removed, and why, is listed in the
-  review. A finding the second check could not run for is marked "not double-checked".
+  review. The tag on a finding says "second check agreed" (another AI read the code; nothing was run) or "second check did
+  not run", and a finding in an alert template or a KQL file also says "not verified by running the query". Before, the tag said
+  "double-checked", which claimed more than the second check does.
 - **The verdict, the scorecard and the summary are worked out from the findings,** not written by the AI. The verdict reads
   "No issues found", "Suggestions" or "Changes suggested" (a review of code changes does not approve a pull request), and a
   scorecard row with no finding says "No findings" instead of "Excellent".
@@ -59,6 +65,12 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 - The review says plainly that it reads code changes only and cannot judge how a result looks or behaves when run.
 
 ### Fixed
+- **Guesses were shown as warnings.** A real review of an alert change gave four warnings that said "may", "could" or "confirm
+  that", and every one was wrong, while the second check agreed with all of them. Asking the AI in the prompt not to guess did
+  not work, so it is now enforced in code (see above).
+- **An alert's query was cut before the AI saw all of it.** The query laid out in plain words was cut at 3,000 characters and a
+  line of the diff at 4,000, so a shared query variable (about 4,400 characters, about 7,000 with an alert's own part) never
+  reached the AI whole. The limits are now 12,000 and 20,000 characters.
 - **JSON files were skipped as data, so an alert written as an ARM template was never reviewed** ("Reviewed 0 of 1 changed
   files"). See "Alerts written as ARM templates are reviewed as alerts" above.
 - **A log alert in the older `2018-04-16` format was read as having no window, no query, no severity and no action group,**

@@ -31,6 +31,8 @@ MAX_EXAMINED = 100  # files looked at in one review, whether or not they turn ou
 MAX_DESCRIPTION_CHARS = 8000  # of the pull request description, after the checklist lines are taken out
 MAX_FILE_COMMENTS = 12  # existing comments on a file that the reviewer is told about
 MAX_GENERAL_COMMENTS = 10  # existing comments on the pull request as a whole
+MIN_CASE_CHARS = 20  # a concrete case is at least a short sentence
+MIN_EVIDENCE_CHARS = 6  # of quoted code, ignoring spaces, for a piece of evidence to count
 REVIEW_BUDGET_SECONDS = 170  # Azure App Service ends a request after 230 s: a slow model gives a partial review, not a timeout
 CATEGORIES = ("correctness", "security", "performance", "maintainability", "test_coverage")
 SEVERITIES = ("critical", "warning", "suggestion")
@@ -91,20 +93,24 @@ Rules:
 - "severity": "critical" = a defect, security hole or data loss that will happen; "warning" = a likely bug or a real risk with a concrete failing case; "suggestion" = an improvement worth making. Never write praise.
 - "category": correctness | security | performance | maintainability | test_coverage.
 - "suggestion_code": only when you can give the exact replacement for lines "line" to "end_line": the code that should replace them, complete and valid for the file's language, without diff markers or line numbers. Otherwise null.
-- Every finding must show a concrete case: the input or situation, and what goes wrong. Do not write "could", "may" or "might" in place of a case; if you cannot show one, leave the finding out.
+- "failing_case" (required): one sentence with the concrete input or situation and the wrong result it produces. A guess is not a case: do not use "may", "might", "could", "possibly" or "if these differ". If you cannot state a case, leave the finding out.
+- "evidence" (required): the exact code your finding relies on, copied character for character from the file shown, without the line numbers and the + or - marks. Use ... between separate pieces. If you cannot quote it, leave the finding out.
+- Do not ask the author to verify or confirm something. State a defect you can show, or leave the finding out.
 - If the pull request description, a comment in the code, a name in the code or the alert's own description says a behaviour is intended, do not report it unless you can show a concrete case where it gives a wrong result.
 - Report each problem once. If the same problem appears on several lines, write one finding (use end_line, or name the other lines in the text), not one per line.
 - Returning no findings is fine, and often right. Do not invent findings to fill space.
 
 {guide}
 
-Answer with JSON only: {{"purpose": "one sentence: what this change does in this file", "findings": [{{"line": 12, "end_line": null, "category": "correctness", "severity": "warning", "title": "short title", "comment": "the finding", "suggestion_code": null}}]}}"""
+Answer with JSON only: {{"purpose": "one sentence: what this change does in this file", "findings": [{{"line": 12, "end_line": null, "category": "correctness", "severity": "warning", "title": "short title", "comment": "the finding", "failing_case": "the concrete input or situation and the wrong result", "evidence": "the exact code it relies on", "suggestion_code": null}}]}}"""
 
 VERIFY_SYSTEM = """You check findings that another reviewer made about a changed file. The file is shown as a diff with line numbers ("+" = added or changed, "-" = removed). For each numbered finding decide whether it is really true of the code shown.
 
 You are also given the author's description of the change and the comments people already made. Use them.
 
-Set holds to false when: the code does not do what the finding says; the finding depends on code that is not shown; it is a preference rather than a defect with a concrete failing case; the suggested replacement would not do what the finding says or would break the code; the finding only says that something could, may or might go wrong, without showing a concrete input or situation in the code; or the description, a comment in the code or the alert's own description says the behaviour is intended and the finding does not show a case where it gives a wrong result. Be strict: a finding that cannot be shown from the code in front of you does not hold.
+Each finding comes with the concrete case it claims and the code it quotes. Trace the case through the code yourself before you agree: follow the values it depends on (for example which columns each step of a query outputs, which rows a filter keeps, or how often the rule runs compared with the window it reads) and see whether the case really happens.
+
+Set holds to false when: the code does not do what the finding says; the case it gives does not happen when you trace it through the code; the finding depends on code that is not shown; it is a preference rather than a defect with a concrete failing case; the suggested replacement would not do what the finding says or would break the code; the finding only says that something could, may or might go wrong, without showing a concrete input or situation in the code; or the description, a comment in the code or the alert's own description says the behaviour is intended and the finding does not show a case where it gives a wrong result. Be strict: a finding that cannot be shown from the code in front of you does not hold.
 
 Also set duplicate_of to the number of an EARLIER finding that describes the same problem (even on a different line), otherwise null. Set already_raised_by to the E-number (for example "E2") of an existing comment that already makes the same point, whatever line it is on, otherwise null.
 
@@ -248,11 +254,51 @@ def _mark_existing(finding: dict[str, Any], thread: dict[str, Any]) -> None:
 
 # ---------------------------------------------------------------- checking the findings
 
+_HEDGE = re.compile(r"\b(may|might|could|potentially|possibly|perhaps|probably)\b", re.IGNORECASE)
+_ASK = re.compile(r"\b(?:verify|confirm|double[- ]check)\s+(?:that|whether|if|the|this|these|it)\b|\b(?:make|be) sure (?:that|this|it)\b|\bis (?:this|that|it) (?:intended|expected|deliberate)\b|\bplease (?:confirm|verify|check)\b", re.IGNORECASE)
+_LINE_MARKS = re.compile(r"^[ \t]*(?:[+\-]?[ \t]*\d+|-)[ \t]*\|[ \t]?", re.MULTILINE)  # "+  17 | code", "   17 | code" or, for a removed line, "-      | code"
+
+
+def _compact(text: str) -> str:
+    return re.sub(r"\s+", "", text)
+
+
+def _quoted(value: Any) -> str:
+    """The evidence as text, without the line numbers and marks of the diff view if the model copied them."""
+    raw = " ... ".join(str(v) for v in value) if isinstance(value, list) else str(value or "")
+    return _text(_LINE_MARKS.sub("", raw), 900)
+
+
+def _grounded(evidence: str, haystack: str) -> bool | None:
+    """True when every piece of the quoted code (pieces are separated by ...) is in the file, ignoring spaces; None when there is nothing to check."""
+    pieces = [p for p in (_compact(p) for p in re.split(r"\.\.\.|…", evidence)) if len(p) >= MIN_EVIDENCE_CHARS]
+    return all(p in haystack for p in pieces) if pieces else None
+
+
+def unfounded(title: str, body: str, case: str, evidence: str, haystack: str) -> str | None:
+    """Why a finding is only a guess, or None. A finding must show a concrete case, quote the code it relies on, and state a defect rather than
+    ask the author to confirm something. This is enforced here because asking the model to do it in a prompt was not enough."""
+    if len(case) < MIN_CASE_CHARS:
+        return "it showed no concrete case"
+    guess = _HEDGE.search(case)
+    if guess:
+        return f"its case was a guess ('{guess.group(1).lower()}')"
+    if _ASK.search(title) or _ASK.search(body):
+        return "it asked the author to confirm something instead of showing a defect"
+    found = _grounded(evidence, haystack)
+    if found is None:
+        return "it did not quote the code it relies on"
+    if not found:
+        return "the code it quoted is not in the file"
+    return None
+
+
 def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
-    """Keep the findings that point at lines this pull request changed. Returns (kept, [(title, why a finding was removed)])."""
+    """Keep the findings that point at lines this pull request changed and are not guesses. Returns (kept, [(title, why a finding was removed)])."""
     kept: list[dict[str, Any]] = []
     removed: list[tuple[str, str]] = []
     allowed = view.added | view.removed_at
+    haystack = _compact("\n".join(r.text for r in view.rows) + "\n" + view.extra)
     seen: set[tuple[int, str]] = set()
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
@@ -274,6 +320,11 @@ def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list
         if not any(n in allowed for n in range(line, end + 1)):
             removed.append((title, "it pointed at lines this pull request did not change"))
             continue
+        case, evidence = _text(item.get("failing_case"), 400), _quoted(item.get("evidence"))
+        guess = unfounded(title, body, case, evidence, haystack)
+        if guess:
+            removed.append((title, guess))
+            continue
         key = (line, title.lower())
         if key in seen:
             continue
@@ -287,10 +338,27 @@ def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list
             "severity": severity if severity in SEVERITIES else "suggestion",
             "title": title, "comment": body, "file_path": view.path, "language": view.language,
             "line_number": line, "end_line": end if end > line else None, "suggestion_code": suggestion,
+            "failing_case": case, "evidence": evidence,
             "existing_thread": None, "existing_status": None, "verified": None,
         })
     kept.sort(key=lambda f: SEVERITIES.index(f["severity"]))
     return kept, removed
+
+
+REMOVAL_GROUPS = (
+    ("did not change", "pointed at lines this pull request did not change"),
+    ("second check", "did not hold on a second check"),
+    ("repeats", "repeated another finding"),
+    ("no concrete case", "showed no concrete case"),
+    ("was a guess", "only guessed at a case"),
+    ("asked the author", "asked the author to confirm something instead of showing a defect"),
+    ("quote", "relied on code that is not in the file"),
+)
+GUESS_GROUPS = {"showed no concrete case", "only guessed at a case", "asked the author to confirm something instead of showing a defect", "relied on code that is not in the file"}
+
+
+def removal_group(reason: str) -> str:
+    return next((group for needle, group in REMOVAL_GROUPS if needle in reason), "were malformed")
 
 
 def _number(value: Any) -> int | None:
@@ -312,7 +380,8 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
     lines = []
     for number, f in enumerate(findings, 1):
         where = f"line {f['line_number']}" + (f"-{f['end_line']}" if f["end_line"] else "")
-        lines.append(f"{number}. {where}: {f['title']}. {f['comment']}" + (f"\n   Suggested replacement:\n{f['suggestion_code']}" if f["suggestion_code"] else ""))
+        lines.append(f"{number}. {where}: {f['title']}. {f['comment']}\n   Its case: {f['failing_case']}\n   The code it relies on: {f['evidence']}"
+                     + (f"\n   Suggested replacement:\n{f['suggestion_code']}" if f["suggestion_code"] else ""))
     alerts = f"\n\nThe alert rules, read from the template:\n{view.extra}" if view.extra else ""
     why = f"Why the author made this change (the pull request title and description):\n{pr.get('title', '')}\n{pr.get('description') or '(no description)'}\n\n"
     user = (f"File: {view.path} ({view.language})\n\n{why}Comments people already made:\n{comments_block(existing)}\n\n"
@@ -489,6 +558,7 @@ class PullRequestReviewService:
         comments: list[dict[str, Any]] = []
         removed_total: dict[str, int] = {}
         rejected: list[str] = []
+        guessed: list[str] = []
         for view in views:
             result = results.get(view.path)
             if not result:
@@ -496,10 +566,11 @@ class PullRequestReviewService:
             row = next(f for f in files if f["path"] == view.path)
             row.update(status="reviewed", findings=len(result["findings"]), purpose=result["purpose"] or None)
             comments.extend(result["findings"])
-            for _, reason in result["removed"] + result["rejected"]:
-                key = ("pointed at lines this pull request did not change" if "did not change" in reason else "did not hold on a second check" if "second check" in reason
-                       else "repeated another finding" if "repeats" in reason else "were malformed")
+            for title, reason in result["removed"] + result["rejected"]:
+                key = removal_group(reason)
                 removed_total[key] = removed_total.get(key, 0) + 1
+                if key in GUESS_GROUPS:
+                    guessed.append(f"{view.path}: {title} ({reason.removeprefix('it ')})")
             for title, reason in result["rejected"]:
                 detail = reason.split(": ", 1)[1] if ": " in reason else ""
                 rejected.append(f"{view.path}: {title}" + (f" ({detail})" if detail else ""))
@@ -511,6 +582,9 @@ class PullRequestReviewService:
             comment["id"] = f"pr-{pull_request_id}-{number}"
         if removed_total:
             notes.append("Removed before showing: " + "; ".join(f"{n} finding(s) {why}" for why, n in removed_total.items()) + ".")
+        notes.extend(f"Removed as a guess: {line}" for line in guessed[:6])
+        if len(guessed) > 6:
+            notes.append(f"{len(guessed) - 6} more findings were removed as guesses.")
         notes.extend(f"Removed on a second check: {line}" for line in rejected[:5])
         if sum(1 for c in comments if c["verified"] is None):
             notes.append("The second check could not run for some findings; they are marked as not double-checked.")

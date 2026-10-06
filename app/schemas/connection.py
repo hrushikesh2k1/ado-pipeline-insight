@@ -102,6 +102,8 @@ class PullRequestReviewCommentSchema(BaseModel):
     end_line: int | None = None  # the last line when the comment covers a range; a suggestion replaces lines line_number..end_line
     suggestion_code: str | None = None
     language: str | None = None
+    failing_case: str | None = None  # the concrete input or situation, and the wrong result: a finding without one is not shown
+    evidence: str | None = None  # the code the finding relies on, quoted from the file
     existing_thread: str | None = None  # set when people already raised this in the pull request comments
     existing_status: str | None = None
     verified: bool | None = None  # True = confirmed by a second check; None = the second check did not run

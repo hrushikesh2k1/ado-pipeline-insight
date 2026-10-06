@@ -12,7 +12,7 @@ from app.services.pr_review import (
     AiUnavailable, PullRequestReviewService, ReviewFailed, clean_description, clean_findings, get_model_client, judge, summarize, thread_summaries,
 )
 from irp_support import FIXTURES
-from pr_support import DESCRIPTION, PS_NEW, PY_NEW, PY_OLD, FakeAdo, FakePrModel, change, finding, thread
+from pr_support import DESCRIPTION, PS_NEW, PY_NEW, PY_OLD, FakeAdo, FakePrModel, change, evidence_at, finding, thread
 
 # PY_NEW: the lines this pull request changed are 2, 5 and 14-17; line 12, for example, is old code
 REPORT = "scripts/report.py"
@@ -31,6 +31,12 @@ def run(ado=None, model=None):
 
 def view():
     return build_view(REPORT, "Python", "edit", PY_OLD, PY_NEW)
+
+
+def grounded(line, *args, **over):
+    """A finding that quotes the code on its line, as a well-behaved model does (for tests that call clean_findings directly)."""
+    over.setdefault("evidence", evidence_at(PY_NEW, int(line) if str(line).isdigit() else 0))
+    return finding(line, *args, **over)
 
 
 def by_path(result):
@@ -136,54 +142,54 @@ class TestWhichFilesAreRead:
 
 class TestCleaningFindings:
     def test_a_finding_on_changed_lines_is_kept_with_its_place(self):
-        kept, removed = clean_findings([finding(17, "Division by zero")], view())
+        kept, removed = clean_findings([grounded(17, "Division by zero")], view())
         assert removed == [] and len(kept) == 1
         assert (kept[0]["file_path"], kept[0]["line_number"], kept[0]["end_line"], kept[0]["language"]) == (REPORT, 17, None, "Python")
         assert kept[0]["existing_thread"] is None and kept[0]["verified"] is None
 
     def test_a_finding_on_old_code_is_removed(self):
-        kept, removed = clean_findings([finding(12, "Old code")], view())
+        kept, removed = clean_findings([grounded(12, "Old code")], view())
         assert kept == [] and removed == [("Old code", "it pointed at lines this pull request did not change")]
 
     def test_a_range_that_touches_a_changed_line_is_kept(self):
-        kept, _ = clean_findings([finding(13, "Range", end_line=15)], view())
+        kept, _ = clean_findings([grounded(13, "Range", end_line=15)], view())
         assert kept and (kept[0]["line_number"], kept[0]["end_line"]) == (13, 15)
 
     def test_a_line_that_does_not_exist_or_is_missing(self):
-        kept, removed = clean_findings([finding(99, "Beyond"), finding(0, "Zero"), {**finding(5, "No line"), "line": None}, {**finding(5, "Words"), "line": "five"}], view())
+        kept, removed = clean_findings([grounded(99, "Beyond"), grounded(0, "Zero"), {**grounded(5, "No line"), "line": None}, {**grounded(5, "Words"), "line": "five"}], view())
         assert kept == [] and {why for _, why in removed} == {"it did not point at a line of the file"}
 
     def test_a_line_given_as_text_is_understood(self):
-        kept, _ = clean_findings([finding("17", "As text")], view())
+        kept, _ = clean_findings([grounded("17", "As text")], view())
         assert kept and kept[0]["line_number"] == 17
 
     def test_a_finding_without_an_explanation_is_removed(self):
-        kept, removed = clean_findings([finding(17, "Empty", comment="  ")], view())
+        kept, removed = clean_findings([grounded(17, "Empty", comment="  ")], view())
         assert kept == [] and removed == [("Empty", "it had no explanation")]
 
     def test_praise_is_dropped_quietly(self):
-        kept, removed = clean_findings([finding(17, "Nice", severity="praise")], view())
+        kept, removed = clean_findings([grounded(17, "Nice", severity="praise")], view())
         assert kept == [] and removed == []
 
     def test_an_end_line_before_the_line_or_past_the_file_is_corrected(self):
-        kept, _ = clean_findings([finding(16, "Backwards", end_line=3), finding(16, "Past the end", end_line=500)], view())
+        kept, _ = clean_findings([grounded(16, "Backwards", end_line=3), grounded(16, "Past the end", end_line=500)], view())
         assert (kept[0]["end_line"], kept[1]["end_line"]) == (None, 17)
 
     def test_a_very_long_range_is_cut(self):
-        long_view = build_view("a.py", "Python", "add", "", "x = 1\n" * 100)
-        kept, _ = clean_findings([finding(1, "Whole file", end_line=100)], long_view)
+        long_view = build_view("a.py", "Python", "add", "", "value = compute(1)\n" * 100)
+        kept, _ = clean_findings([grounded(1, "Whole file", end_line=100, evidence="value = compute(1)")], long_view)
         assert kept[0]["end_line"] == 40
 
     def test_the_same_finding_twice_is_kept_once(self):
-        kept, _ = clean_findings([finding(17, "Same"), finding(17, "same")], view())
+        kept, _ = clean_findings([grounded(17, "Same"), grounded(17, "same")], view())
         assert len(kept) == 1
 
     def test_unknown_category_and_severity_get_safe_values(self):
-        kept, _ = clean_findings([finding(17, "Odd", category="style", severity="blocker")], view())
+        kept, _ = clean_findings([grounded(17, "Odd", category="style", severity="blocker")], view())
         assert (kept[0]["category"], kept[0]["severity"]) == ("maintainability", "suggestion")
 
     def test_the_worst_findings_come_first(self):
-        kept, _ = clean_findings([finding(14, "a", severity="suggestion"), finding(15, "b", severity="critical"), finding(16, "c", severity="warning")], view())
+        kept, _ = clean_findings([grounded(14, "a", severity="suggestion"), grounded(15, "b", severity="critical"), grounded(16, "c", severity="warning")], view())
         assert [f["severity"] for f in kept] == ["critical", "warning", "suggestion"]
 
     def test_malformed_entries_are_ignored(self):
@@ -191,20 +197,20 @@ class TestCleaningFindings:
         assert clean_findings("not a list", view()) == ([], [])
 
     def test_a_suggested_replacement_is_kept_for_changed_lines_and_cleaned(self):
-        kept, _ = clean_findings([finding(5, "Type", suggestion_code="```python\ndef load(path) -> Any:\n```")], view())
+        kept, _ = clean_findings([grounded(5, "Type", suggestion_code="```python\ndef load(path) -> Any:\n```")], view())
         assert kept[0]["suggestion_code"] == "def load(path) -> Any:"
 
     def test_a_suggestion_for_lines_that_were_not_all_changed_is_dropped_but_the_finding_stays(self):
-        kept, _ = clean_findings([finding(4, "Spans old code", end_line=5, suggestion_code="x = 1")], view())
+        kept, _ = clean_findings([grounded(4, "Spans old code", end_line=5, suggestion_code="x = 1")], view())
         assert len(kept) == 1 and kept[0]["suggestion_code"] is None
 
     def test_a_suggestion_that_repeats_the_code_is_dropped(self):
-        kept, _ = clean_findings([finding(17, "Same code", suggestion_code="    return sum(values) / len(values)")], view())
+        kept, _ = clean_findings([grounded(17, "Same code", suggestion_code="    return sum(values) / len(values)")], view())
         assert kept[0]["suggestion_code"] is None
 
     def test_code_that_was_only_removed_can_be_commented_on_at_the_next_line(self):
-        gone = build_view("a.py", "Python", "edit", "alpha\nbeta\ngamma\n", "alpha\ngamma\n")
-        kept, _ = clean_findings([finding(2, "Removed the check")], gone)
+        gone = build_view("a.py", "Python", "edit", "first line\nsecond line\nthird line\n", "first line\nthird line\n")
+        kept, _ = clean_findings([grounded(2, "Removed the check", evidence="third line")], gone)
         assert len(kept) == 1
 
 
@@ -679,8 +685,10 @@ class TestTheAuthorsExplanation:
 
 class TestWhatTheAiIsTold:
     def test_the_reviewer_must_show_a_case_not_say_could_and_respect_what_is_intended(self):
-        for part in ('Do not write "could", "may" or "might" in place of a case', "says a behaviour is intended", "Report each problem once"):
+        for part in ('"failing_case" (required)', 'do not use "may", "might", "could"', '"evidence" (required)', "copied character for character", "Do not ask the author to verify or confirm",
+                     "says a behaviour is intended", "Report each problem once"):
             assert part in pr_review.FILE_SYSTEM
+        assert '"failing_case": "the concrete input or situation and the wrong result"' in pr_review.FILE_SYSTEM and '"evidence": "the exact code it relies on"' in pr_review.FILE_SYSTEM
 
     def test_the_second_check_throws_out_vague_findings_and_intended_behaviour(self):
         for part in ("could, may or might go wrong, without showing a concrete input", "says the behaviour is intended", "duplicate_of", "already_raised_by"):
@@ -740,6 +748,149 @@ class TestDuplicatesAndAlreadyRaised:
         model = FakePrModel({REPORT: [finding(17, "Division by zero")]}, holds=lambda path, numbers: RuntimeError("down"))
         result, _, _ = run(FakeAdo(threads=[thread(REPORT, 16, "Guard against empty lists")]), model)
         assert result["comments"][0]["existing_thread"] == "Already raised by Sam Reviewer (resolved)" and result["comments"][0]["verified"] is None
+
+
+class TestGuessesAreEnforcedInCode:
+    """Asking the model in a prompt not to guess was not enough (a real review gave four hedged findings, all wrong, and the second check agreed
+    with them). A finding is now only kept when it shows a concrete case, quotes the code it relies on and states a defect."""
+
+    def removed(self, **over):
+        kept, removed = clean_findings([grounded(17, "Division by zero", **over)], view())
+        return kept, [reason for _, reason in removed]
+
+    def test_a_finding_that_shows_a_case_and_quotes_the_code_is_kept_with_both(self):
+        kept, removed = self.removed(failing_case="average([]) divides by zero and raises ZeroDivisionError.")
+        assert removed == [] and kept[0]["failing_case"] == "average([]) divides by zero and raises ZeroDivisionError."
+        assert kept[0]["evidence"] == "return sum(values) / len(values)"
+
+    @pytest.mark.parametrize("case", [None, "", "wrong", "It breaks."])
+    def test_no_concrete_case(self, case):
+        over = {} if case is None else {"failing_case": case}
+        kept, reasons = clean_findings([{k: v for k, v in grounded(17, "Division by zero", **over).items() if case is not None or k != "failing_case"}], view())
+        assert kept == [] and reasons == [("Division by zero", "it showed no concrete case")]
+
+    @pytest.mark.parametrize("word", ["may", "might", "could", "potentially", "possibly", "perhaps", "probably", "MAY"])
+    def test_a_case_that_is_a_guess_is_removed_and_the_word_is_named(self, word):
+        kept, reasons = self.removed(failing_case=f"If these two differ in format the join {word} miss some rows.")
+        assert kept == [] and reasons == [f"its case was a guess ('{word.lower()}')"]
+
+    def test_hedging_in_the_explanation_alone_does_not_remove_a_finding_that_shows_a_case(self):
+        kept, reasons = self.removed(comment="Division by zero: average([]) raises ZeroDivisionError, which may surprise callers. Return 0.0 for an empty list.",
+                                     failing_case="average([]) raises ZeroDivisionError instead of returning a value.")
+        assert reasons == [] and len(kept) == 1
+
+    @pytest.mark.parametrize("ask", ["Verify that the values are normalized consistently.", "Please confirm whether this is needed.", "Confirm that this change aligns with the plan.",
+                                     "Double-check the window.", "Make sure that this is right.", "Is this intended?", "Please verify the result."])
+    def test_a_finding_that_asks_the_author_to_confirm_something_is_removed(self, ask):
+        kept, reasons = self.removed(comment=f"average([]) raises ZeroDivisionError. {ask}")
+        assert kept == [] and reasons == ["it asked the author to confirm something instead of showing a defect"]
+
+    def test_the_title_counts_too(self):
+        kept, removed = clean_findings([grounded(17, "Verify that the window is right")], view())
+        assert kept == [] and removed[0][1].startswith("it asked the author")
+
+    def test_a_plain_recommendation_is_not_a_request_to_confirm(self):
+        kept, reasons = self.removed(comment="average([]) raises ZeroDivisionError. Ensure len(values) > 0 before dividing, or return 0.0.")
+        assert reasons == [] and len(kept) == 1
+
+    def test_no_evidence_or_too_little_of_it(self):
+        for evidence in ("", "   ", "x = 1", None):
+            kept, removed = clean_findings([{**grounded(17, "Division by zero"), "evidence": evidence}], view())
+            assert kept == [] and removed == [("Division by zero", "it did not quote the code it relies on")], evidence
+
+    def test_code_that_is_not_in_the_file_is_removed(self):
+        kept, reasons = self.removed(evidence="return statistics.mean(values)")
+        assert kept == [] and reasons == ["the code it quoted is not in the file"]
+
+    @pytest.mark.parametrize("evidence", [
+        "+    17 |     return sum(values) / len(values)",          # copied with the line number and mark of the diff view
+        "return   sum(values)  /  len(values)",                    # spacing differs
+        "def average(values): ... return sum(values) / len(values)",  # pieces
+        ["def average(values):", "return sum(values) / len(values)"],  # a list of pieces
+        "-       | def load(path):",                               # code the change removed is in the view too
+    ])
+    def test_quotes_that_are_in_the_file_are_accepted(self, evidence):
+        kept, reasons = self.removed(evidence=evidence)
+        assert reasons == [] and len(kept) == 1
+
+    def test_one_piece_that_is_missing_removes_the_finding(self):
+        kept, reasons = self.removed(evidence="def average(values): ... return statistics.mean(values)")
+        assert kept == [] and reasons == ["the code it quoted is not in the file"]
+
+    def test_a_quote_from_the_alert_details_counts_as_being_in_the_file(self):
+        alert_view = build_view("a.json", "ARM template", "add", "", '{"query": "T | where X == 1"}\n')
+        alert_view.extra = "Query:\n   T\n   | where Status == \"failed\"\n   | summarize Count = count()"
+        kept, _ = clean_findings([{**grounded(1, "Wrong filter"), "evidence": '| where Status == "failed"\n| summarize Count = count()'}], alert_view)
+        assert len(kept) == 1
+
+    def test_the_order_of_the_checks_reports_lines_that_were_not_changed_first(self):
+        kept, removed = clean_findings([{**grounded(12, "Old code"), "failing_case": ""}], view())
+        assert removed == [("Old code", "it pointed at lines this pull request did not change")]
+
+    @pytest.mark.parametrize("reason,group", [
+        ("it pointed at lines this pull request did not change", "pointed at lines this pull request did not change"),
+        ("it did not hold on a second check: no case", "did not hold on a second check"),
+        ("it repeats another finding", "repeated another finding"),
+        ("it showed no concrete case", "showed no concrete case"),
+        ("its case was a guess ('may')", "only guessed at a case"),
+        ("it asked the author to confirm something instead of showing a defect", "asked the author to confirm something instead of showing a defect"),
+        ("it did not quote the code it relies on", "relied on code that is not in the file"),
+        ("the code it quoted is not in the file", "relied on code that is not in the file"),
+        ("it had no explanation", "were malformed"),
+    ])
+    def test_every_reason_belongs_to_a_group_in_the_notes(self, reason, group):
+        assert pr_review.removal_group(reason) == group
+
+
+class TestWhatTheReviewerSeesOfTheGuesses:
+    # the shape of the four findings a real review gave: hedged, asking for confirmation, or a definite claim the code contradicts
+    HEDGED = [
+        finding(14, "Potential mismatch in the join keys", comment="If these differ in format, the join may miss matches. Verify that both sides are normalized the same way.",
+                failing_case="If these differ in casing or format, the join may miss matches."),
+        finding(15, "Time window mismatch", comment="This may cause rows to be missed. Confirm that the window aligns with the schedule.",
+                failing_case="Rows outside this range may be missed."),
+        finding(16, "Larger window may delay alerting", comment="This may delay alerting by up to the window.", failing_case="The alert could fire up to 30 minutes late."),
+    ]
+    GOOD = finding(17, "average() fails on an empty list", comment="average([]) divides by zero and raises ZeroDivisionError. Return 0.0 or raise a clear error.",
+                   failing_case="average([]) divides by zero and raises ZeroDivisionError.")
+
+    def review(self, findings):
+        return run(model=FakePrModel({REPORT: findings}))
+
+    def test_the_guesses_are_not_shown_and_the_grounded_finding_stays(self):
+        result, _, _ = self.review([*self.HEDGED, self.GOOD])
+        assert [c["title"] for c in result["comments"]] == ["average() fails on an empty list"]
+        assert "1 finding: 1 warning." in result["summary"]
+
+    def test_the_notes_say_what_was_dropped_and_why_so_it_can_be_checked(self):
+        result, _, _ = self.review([*self.HEDGED, self.GOOD])
+        notes = " | ".join(result["notes"])
+        assert "3 finding(s) only guessed at a case" in notes or ("only guessed at a case" in notes and "asked the author" in notes)
+        assert "Removed as a guess: scripts/report.py: Potential mismatch in the join keys (its case was a guess ('may'))" in result["notes"]
+        assert "Removed as a guess: scripts/report.py: Larger window may delay alerting (its case was a guess ('could'))" in result["notes"]
+
+    def test_a_file_where_every_finding_was_a_guess_is_not_sent_to_the_second_check(self):
+        result, _, model = self.review(self.HEDGED)
+        assert result["comments"] == [] and model.calls_of("verify") == []
+        assert result["verdict"] == "APPROVED" and "No findings in the files reviewed." in result["summary"]
+
+    def test_at_most_six_are_listed_and_the_rest_are_counted(self):
+        many = [finding(14 + n % 4, f"Guess {n}", failing_case="The join may miss rows in some cases.") for n in range(9)]
+        result, _, _ = self.review(many)
+        assert sum(1 for n in result["notes"] if n.startswith("Removed as a guess:")) == 6
+        assert "3 more findings were removed as guesses." in result["notes"]
+
+    def test_a_kept_finding_carries_its_case_and_its_quote(self):
+        result, _, _ = self.review([self.GOOD])
+        comment = result["comments"][0]
+        assert comment["failing_case"] == "average([]) divides by zero and raises ZeroDivisionError." and comment["evidence"] == "return sum(values) / len(values)"
+
+    def test_the_second_check_is_given_the_case_and_the_quote_to_trace(self):
+        _, _, model = self.review([self.GOOD])
+        verify = model.calls_of("verify")[0]
+        assert "Its case: average([]) divides by zero and raises ZeroDivisionError." in verify
+        assert "The code it relies on: return sum(values) / len(values)" in verify
+        assert "Trace the case through the code yourself" in pr_review.VERIFY_SYSTEM
 
 
 class TestNothingIsMadeUp:

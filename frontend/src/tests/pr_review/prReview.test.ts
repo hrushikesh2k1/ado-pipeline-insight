@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { PullRequestChecklistCheck, PullRequestReviewComment, PullRequestReviewResponse } from '../../types/api'
-import { allCommentsAsMarkdown, checklistCounts, commentAsMarkdown, filesCounts, lineLabel, reviewIsStale, scoreLabel, shortCommit, verdictLabel } from '../../utils/prReview'
+import {
+  QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, allCommentsAsMarkdown, checklistCounts, commentAsMarkdown, filesCounts, isAboutQueries, lineLabel,
+  reviewIsStale, scoreLabel, shortCommit, verdictLabel,
+} from '../../utils/prReview'
 
 const comment = (over: Partial<PullRequestReviewComment> = {}): PullRequestReviewComment => ({
   id: 'c1', category: 'correctness', severity: 'warning', title: 'Division by zero', comment: 'average() fails on an empty list.',
@@ -23,6 +26,23 @@ describe('labels', () => {
     expect(scoreLabel('NO_FINDINGS')).toBe('No findings')
     expect(scoreLabel('NEEDS_IMPROVEMENT')).toBe('Needs improvement')
     expect(scoreLabel('VERY_ODD')).toBe('Very odd')
+  })
+})
+
+describe('what the second check was', () => {
+  it('is another AI reading the code, and the labels do not claim more', () => {
+    expect(SECOND_CHECK_AGREED).toBe('second check agreed')
+    expect(SECOND_CHECK_NOT_RUN).toBe('second check did not run')
+    expect(SECOND_CHECK_TIP).toContain('has not run the code or the query')
+    expect(`${SECOND_CHECK_AGREED} ${SECOND_CHECK_NOT_RUN} ${QUERY_NOT_RUN}`).not.toMatch(/double-checked|verified by qa|tested/i)
+  })
+  it('says a finding about a query or an alert template has not been run', () => {
+    expect(isAboutQueries('ARM template')).toBe(true)
+    expect(isAboutQueries('KQL')).toBe(true)
+    expect(isAboutQueries('Python')).toBe(false)
+    expect(isAboutQueries('PowerShell')).toBe(false)
+    expect(isAboutQueries(null)).toBe(false)
+    expect(isAboutQueries(undefined)).toBe(false)
   })
 })
 

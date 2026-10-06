@@ -59,6 +59,10 @@
 .prChip.checked { color: #22c55e; border-color: rgba(34, 197, 94, 0.45); }
 [data-theme="light"] .prChip.known { color: #b45309; }
 [data-theme="light"] .prChip.checked { color: #15803d; }
+.prCaseLine { margin: 6px 0 0; font-size: 12px; line-height: 1.5; color: var(--p-muted, #9ca3af); overflow-wrap: anywhere; }
+.prCaseLine b { color: inherit; font-weight: 700; }
+.prEvidence { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; background: rgba(255, 255, 255, 0.06); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; white-space: pre-wrap; }
+[data-theme="light"] .prEvidence { background: #f1f5f9; }
 .prSuggestionHint { margin: 6px 0 0; font-size: 11px; color: var(--p-muted, #9ca3af); line-height: 1.5; }
 .prReReview { display: inline-flex; align-items: center; gap: 6px; background: transparent; color: inherit; border: 1px solid rgba(255,255,255,0.18); border-radius: 20px; padding: 5px 12px; font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer; }
 [data-theme="light"] .prReReview { border-color: #cbd5e1; }

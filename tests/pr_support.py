@@ -143,10 +143,24 @@ def thread(path: str | None, line: int | None, text: str, status: str = "fixed",
 
 
 def finding(line: int, title: str = "Problem", severity: str = "warning", **over: Any) -> dict[str, Any]:
+    """What a well-behaved model returns for a finding. `evidence` is left out on purpose: FakePrModel quotes the code on the line, as a good model does;
+    pass evidence= to say something else (or "" for none)."""
     body = {"line": line, "end_line": None, "category": "correctness", "severity": severity, "title": title,
-            "comment": f"{title}: it fails for the input '10GBps' and returns the wrong value. Anchor the check.", "suggestion_code": None}
+            "comment": f"{title}: it fails for the input '10GBps' and returns the wrong value. Anchor the check.",
+            "failing_case": "For the input '10GBps' the function returns the wrong size.", "suggestion_code": None}
     body.update(over)
     return body
+
+
+def evidence_at(text: str, line: int) -> str:
+    """The code on a line of a file (the next non-blank line if it is blank): what a model quotes as the code it relies on."""
+    for candidate in text.splitlines()[max(line, 1) - 1:max(line, 1) + 9]:
+        if candidate.strip():
+            return candidate.strip()
+    return ""
+
+
+_ROW = re.compile(r"^[+ ] +(\d+) \| (.*)$", re.MULTILINE)
 
 
 class FakePrModel:
@@ -176,7 +190,16 @@ class FakePrModel:
             said = self.findings.get(path, [])
             if isinstance(said, Exception):
                 raise said
-            body: Any = {"purpose": self.purposes.get(path, f"changes {path}"), "findings": said}
+            rows = {int(n): text for n, text in _ROW.findall(user)}
+            ordered = sorted(rows)
+            filled = []
+            for item in said:
+                item = dict(item) if isinstance(item, dict) else item
+                if isinstance(item, dict) and "evidence" not in item:  # quote the code on the line, or the next line that has any
+                    start = int(item.get("line") or 0)
+                    item["evidence"] = next((rows[n].strip() for n in ordered if n >= start and rows[n].strip()), "")
+                filled.append(item)
+            body: Any = {"purpose": self.purposes.get(path, f"changes {path}"), "findings": filled}
         elif system.startswith("You check findings"):
             path = re.search(r"^File: (\S+)", user, re.M).group(1)
             numbers = [int(n) for n in re.findall(r"^(\d+)\. line", user, re.M)]

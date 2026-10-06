@@ -68,6 +68,8 @@ export type PullRequestReviewComment = {
   end_line?: number | null
   suggestion_code: string | null
   language?: string | null
+  failing_case?: string | null
+  evidence?: string | null
   existing_thread?: string | null
   existing_status?: string | null
   verified?: boolean | null
