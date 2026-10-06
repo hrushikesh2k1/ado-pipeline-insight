@@ -21,6 +21,8 @@ import type {
   ReleaseScorecardHistoryItem,
   AdoWiki,
   AdoWikiPage,
+  IrpAnalyzeRequest,
+  IrpAnalyzeResponse,
   IrpGenerateRequest,
   IrpGenerateResponse,
   IrpPublishRequest,
@@ -212,6 +214,13 @@ export const api = {
   },
   generateIrp: (payload: IrpGenerateRequest) => {
     return request<IrpGenerateResponse>('/api/v1/irp/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+  },
+  analyzeIrp: (payload: IrpAnalyzeRequest) => {
+    return request<IrpAnalyzeResponse>('/api/v1/irp/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

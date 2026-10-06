@@ -46,6 +46,8 @@ from app.schemas.connection import (
     ReleaseScorecardHistoryItem,
     AdoWiki,
     AdoWikiPage,
+    IrpAnalyzeRequest,
+    IrpAnalyzeResponse,
     IrpGenerateRequest,
     IrpGenerateResponse,
     IrpPublishRequest,
@@ -1832,10 +1834,33 @@ def generate_irp(payload: IrpGenerateRequest) -> IrpGenerateResponse:
             irp_template=payload.irp_template,
             irp_example=payload.irp_example,
             additional_notes=payload.additional_notes,
+            alert_kql=payload.alert_kql,
+            cases=[c.model_dump() for c in payload.cases] if payload.cases else None,
         )
         return IrpGenerateResponse(**result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"IRP generation failed: {e}")
+
+
+@router.post("/irp/analyze", response_model=IrpAnalyzeResponse)
+def analyze_irp_alert(payload: IrpAnalyzeRequest) -> IrpAnalyzeResponse:
+    """Read the alert's ARM template and KQL query and propose its root causes, before the IRP is written."""
+    try:
+        result = IrpService().analyze_alert(
+            alert_name=payload.alert_name,
+            arm_template_context=payload.arm_template_context,
+            alert_kql=payload.alert_kql,
+            alert_output_columns=payload.alert_output_columns,
+            alert_details=payload.alert_details,
+            severity=payload.severity,
+            owning_team=payload.owning_team,
+            environment=payload.environment,
+            irp_template=payload.irp_template,
+            additional_notes=payload.additional_notes,
+        )
+        return IrpAnalyzeResponse(**result)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"IRP analysis failed: {e}")
 
 
 @router.post("/irp/publish", response_model=IrpPublishResponse)

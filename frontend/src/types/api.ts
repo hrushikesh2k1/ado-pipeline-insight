@@ -286,11 +286,16 @@ export type AdoWikiPage = {
   content?: string
 }
 
+export type IrpCase = { name: string; signal?: string | null }
+
 export type IrpGenerateRequest = {
   alert_name: string
   cvrd?: string | null
   alert_output_columns?: string | null
+  /** The alert's ARM template (JSON): its query, threshold, severity and scope are read from it. */
   arm_template_context?: string | null
+  /** The alert's KQL query. It wins over the query in the ARM template. */
+  alert_kql?: string | null
   alert_details?: string | null
   target_resource?: string | null
   severity?: string
@@ -300,6 +305,58 @@ export type IrpGenerateRequest = {
   irp_template?: string | null
   irp_example?: string | null
   additional_notes?: string | null
+  /** The root causes to write rows for (edited by the owner); proposed from the alert when absent. */
+  cases?: IrpCase[] | null
+}
+
+export type IrpFacts = {
+  has_definition: boolean
+  arm: { given: boolean; parsed: boolean; alerts_found: string[]; unresolved: string[] }
+  alert: null | {
+    name: string
+    type: 'log' | 'metric'
+    source: string
+    kind?: string | null
+    api_version?: string | null
+    description?: string | null
+    severity: number | null
+    enabled?: boolean | null
+    evaluation_frequency?: string | null
+    window_size?: string | null
+    scopes: string[]
+    target_resource_types: string[]
+    product?: string | null
+    condition_sentence: string
+    action_groups: string[]
+  }
+  kql: {
+    query: string
+    source: 'arm' | 'input' | null
+    tables: string[]
+    filters: { column: string; operator: string; values: string[] }[]
+    aggregations: string[]
+    group_by: string[]
+    output_columns: string[]
+    time_windows: string[]
+    warnings: string[]
+  }
+  severity_name: string | null
+  description_sentence: string | null
+  warnings: string[]
+}
+
+export type IrpScoreCheck = { id: string; title: string; status: 'pass' | 'warn' | 'fail' | 'info'; detail: string; items: string[] }
+export type IrpScorecard = { status: 'pass' | 'warn' | 'fail'; passed: number; total: number; checks: IrpScoreCheck[] }
+export type IrpCommand = {
+  id: string
+  row: string
+  kind: string
+  where: string
+  language: 'kql' | 'cli' | 'powershell'
+  text: string
+  /** Only QA can make a command verified; every generated command starts as unverified. */
+  status: 'unverified' | 'verified'
+  issues: { id: string; severity: 'fail' | 'warn'; message: string; doc: string }[]
 }
 
 export type IrpGenerateResponse = {
@@ -309,8 +366,28 @@ export type IrpGenerateResponse = {
   markdown_content: string
   suggested_wiki_path: string
   generated_by?: 'ai' | 'built-in'
+  method?: 'case-by-case' | 'single-pass' | 'built-in'
   notice?: string | null
+  facts?: IrpFacts | null
+  cases?: IrpCase[] | null
+  scorecard?: IrpScorecard | null
+  commands?: IrpCommand[] | null
 }
+
+export type IrpAnalyzeRequest = {
+  alert_name: string
+  alert_output_columns?: string | null
+  arm_template_context?: string | null
+  alert_kql?: string | null
+  alert_details?: string | null
+  severity?: string
+  owning_team?: string | null
+  environment?: string | null
+  irp_template?: string | null
+  additional_notes?: string | null
+}
+
+export type IrpAnalyzeResponse = { facts: IrpFacts; cases: IrpCase[]; severity?: string | null; notice?: string | null }
 
 export type IrpPublishRequest = {
   organization: string

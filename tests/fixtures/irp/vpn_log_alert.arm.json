@@ -1,0 +1,54 @@
+{
+  // Synthetic example for tests: a log alert written from Microsoft's documented scheduledQueryRules schema (API 2021-08-01).
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": { "type": "string", "defaultValue": "law-network-prod" },
+    "environment": { "type": "string", "defaultValue": "Production" },
+    "location": { "type": "string", "defaultValue": "eastus" },
+    "actionGroupName": { "type": "string" }
+  },
+  "variables": {
+    "alertName": "[concat('VPN - Tunnel disconnected - ', parameters('environment'))]",
+    "workspaceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2021-08-01",
+      "name": "[variables('alertName')]",
+      "location": "[parameters('location')]",
+      "kind": "LogAlert",
+      "properties": {
+        "displayName": "[variables('alertName')]",
+        "description": "Fires when a VPN gateway tunnel reports a disconnect.", /* shown to on-call in the alert email */
+        "severity": 1,
+        "enabled": true,
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT10M",
+        "scopes": [ "[variables('workspaceId')]" ],
+        "targetResourceTypes": [ "Microsoft.Network/virtualNetworkGateways" ],
+        "criteria": {
+          "allOf": [
+            {
+              "query": "AzureDiagnostics\n| where ResourceType == \"VIRTUALNETWORKGATEWAYS\" and Category == \"TunnelDiagnosticLog\"\n| where TimeGenerated > ago(10m)\n| where Message has \"disconnected\" // tunnel state change\n| summarize Disconnects = count() by Resource, bin(TimeGenerated, 5m)\n| project TimeGenerated, Resource, Disconnects",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": { "numberOfEvaluationPeriods": 1, "minFailingPeriodsToAlert": 1 },
+              "dimensions": [
+                { "name": "Resource", "operator": "Include", "values": [ "*" ] }
+              ]
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[resourceId('Microsoft.Insights/actionGroups', parameters('actionGroupName'))]"
+          ]
+        },
+        "autoMitigate": true
+      }
+    }
+  ]
+}

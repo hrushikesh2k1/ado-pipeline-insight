@@ -45,7 +45,11 @@ def create_app() -> FastAPI:
     app.add_middleware(
         RequestSizeLimit,
         max_bytes=settings.max_request_bytes,
-        path_limits={"/api/v1/insights/work-items/inventory": settings.max_upload_request_bytes},
+        path_limits={
+            "/api/v1/insights/work-items/inventory": settings.max_upload_request_bytes,
+            "/api/v1/irp/generate": settings.max_irp_request_bytes,
+            "/api/v1/irp/analyze": settings.max_irp_request_bytes,
+        },
     )
     app.add_middleware(SecurityHeaders, csp=not docs)
     app.include_router(router)

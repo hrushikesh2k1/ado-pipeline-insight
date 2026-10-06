@@ -1,0 +1,102 @@
+/* The analysis, quality checklist and QA command panels of IRP Studio. Colours come from variables so both themes work. */
+
+.irpg {
+  --g-card: #1f1f26;
+  --g-card-2: #18181f;
+  --g-border: #2e2f38;
+  --g-text: #f4f4f5;
+  --g-muted: #9ca3af;
+  --g-field: #141419;
+  --g-accent: #818cf8;
+  --g-pass: #22c55e;
+  --g-warn: #f59e0b;
+  --g-fail: #ef4444;
+  color: var(--g-text);
+}
+[data-theme="light"] .irpg {
+  --g-card: #ffffff;
+  --g-card-2: #f8fafc;
+  --g-border: #e2e8f0;
+  --g-text: #0f172a;
+  --g-muted: #64748b;
+  --g-field: #f8fafc;
+  --g-accent: #4f46e5;
+  --g-pass: #15803d;
+  --g-warn: #b45309;
+  --g-fail: #b91c1c;
+}
+
+.irpgCard { background: var(--g-card); border: 1px solid var(--g-border); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.irpgHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.irpgTitle { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 700; }
+.irpgTitle svg { color: var(--g-accent); }
+.irpgHint { margin: 0; font-size: 11.5px; color: var(--g-muted); line-height: 1.5; }
+.irpgMuted { color: var(--g-muted); font-size: 11.5px; }
+.irpgSubHead { font-size: 12px; font-weight: 700; margin-bottom: 6px; }
+
+.irpgBtn {
+  display: inline-flex; align-items: center; gap: 6px; background: transparent; color: var(--g-text); border: 1px solid var(--g-border);
+  border-radius: 20px; padding: 6px 14px; font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer;
+}
+.irpgBtn:hover:not(:disabled) { border-color: var(--g-accent); color: var(--g-accent); }
+.irpgBtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.irpgLink { background: none; border: 0; color: var(--g-accent); font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer; padding: 0 0 0 8px; display: inline-flex; align-items: center; gap: 4px; }
+.irpgLink:disabled { opacity: 0.4; cursor: default; }
+.irpgIconBtn { background: transparent; border: 1px solid var(--g-border); color: var(--g-text); border-radius: 8px; padding: 5px; cursor: pointer; display: grid; place-items: center; }
+.irpgSpin { width: 12px; height: 12px; border: 2px solid var(--g-border); border-top-color: var(--g-accent); border-radius: 50%; animation: irpgSpin 0.8s linear infinite; display: inline-block; }
+@keyframes irpgSpin { to { transform: rotate(360deg); } }
+
+.irpgNote { display: flex; gap: 8px; align-items: flex-start; font-size: 11.5px; line-height: 1.45; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--g-border); }
+.irpgNote svg { flex-shrink: 0; margin-top: 2px; }
+.irpgNote a { color: inherit; font-weight: 600; }
+.irpgNote.info { background: rgba(99, 102, 241, 0.12); border-color: rgba(99, 102, 241, 0.35); color: var(--g-accent); }
+.irpgNote.warn { background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.4); color: var(--g-warn); }
+.irpgNote.fail { background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.4); color: var(--g-fail); }
+
+.irpgFacts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 12px; }
+.irpgFacts dt { color: var(--g-muted); font-weight: 600; }
+.irpgFacts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.irpgFacts code { background: var(--g-field); border: 1px solid var(--g-border); border-radius: 4px; padding: 0 5px; font-size: 11.5px; }
+.irpgWarnings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.irpgWarnings li { display: flex; gap: 6px; align-items: flex-start; font-size: 11.5px; color: var(--g-warn); }
+.irpgWarnings svg { flex-shrink: 0; margin-top: 2px; }
+
+.irpgChip { display: inline-block; font-size: 10.5px; font-weight: 700; border-radius: 12px; padding: 2px 9px; margin-left: 6px; border: 1px solid var(--g-border); background: var(--g-card-2); }
+.irpgChip.lang { margin-left: 0; color: var(--g-accent); border-color: rgba(99, 102, 241, 0.4); }
+.irpgChip.unverified { color: var(--g-warn); border-color: rgba(245, 158, 11, 0.45); }
+.irpgChip.verified { color: var(--g-pass); border-color: rgba(34, 197, 94, 0.45); }
+.irpgChip.status { margin-left: 0; }
+.irpgChip.status.pass { color: var(--g-pass); border-color: rgba(34, 197, 94, 0.45); }
+.irpgChip.status.warn { color: var(--g-warn); border-color: rgba(245, 158, 11, 0.45); }
+.irpgChip.status.fail { color: var(--g-fail); border-color: rgba(239, 68, 68, 0.45); }
+
+.irpgCases { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--g-border); padding-top: 10px; }
+.irpgCaseRow { display: grid; grid-template-columns: 22px minmax(0, 1.2fr) minmax(0, 1fr) 30px; gap: 6px; align-items: center; }
+.irpgCaseNo { color: var(--g-muted); font-size: 12px; font-weight: 700; text-align: center; }
+.irpgInput { background: var(--g-field); border: 1px solid var(--g-border); border-radius: 6px; padding: 6px 9px; color: var(--g-text); font-size: 12px; font-family: inherit; min-width: 0; outline: none; }
+.irpgInput:focus { border-color: var(--g-accent); }
+
+.irpgChecks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.irpgCheck { display: flex; gap: 10px; align-items: flex-start; font-size: 12px; }
+.irpgCheckIcon { flex-shrink: 0; margin-top: 1px; display: grid; }
+.irpgCheck.pass .irpgCheckIcon { color: var(--g-pass); }
+.irpgCheck.warn .irpgCheckIcon { color: var(--g-warn); }
+.irpgCheck.fail .irpgCheckIcon { color: var(--g-fail); }
+.irpgCheck.info .irpgCheckIcon { color: var(--g-accent); }
+.irpgCheckTitle { font-weight: 600; }
+.irpgCheckItems { margin: 4px 0 0; padding-left: 18px; font-size: 11.5px; color: var(--g-muted); overflow-wrap: anywhere; }
+
+.irpgCommands { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.irpgCommand { border: 1px solid var(--g-border); border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; background: var(--g-card-2); }
+.irpgCommandHead { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.irpgCommandRow { flex: 1; min-width: 0; font-size: 11.5px; color: var(--g-muted); margin-left: 4px; }
+.irpgCode { margin: 0; background: var(--g-field); border: 1px solid var(--g-border); border-radius: 6px; padding: 8px 10px; font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+@media (max-width: 700px) {
+  .irpgCaseRow { grid-template-columns: 22px minmax(0, 1fr) 30px; }
+  .irpgCaseRow .irpgInput:nth-of-type(2) { grid-column: 2 / 3; }
+  .irpgFacts { grid-template-columns: minmax(0, 1fr); }
+}
+
+.irpRightCol > .irpg { margin-top: 14px; }
+.irpMethodNote { margin-top: 14px; }

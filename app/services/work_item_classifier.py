@@ -15,6 +15,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
+from app.services.llm_util import parse_json_object
+
 logger = logging.getLogger(__name__)
 
 OTHER = "Other"
@@ -78,21 +80,6 @@ def area_from_path(area_path: str) -> str:
     """Without AI: the last part of the Azure DevOps area path."""
     parts = [p for p in str(area_path or "").replace("/", "\\").split("\\") if p]
     return parts[-1] if len(parts) > 1 else ROOT_AREA
-
-
-def parse_json_object(text: str | None) -> dict[str, Any]:
-    body = (text or "").strip()
-    body = re.sub(r"^```(?:json)?\s*|\s*```$", "", body)
-    try:
-        value = json.loads(body)
-    except ValueError:
-        start, end = body.find("{"), body.rfind("}")
-        if start < 0 or end <= start:
-            raise ValueError("The AI did not return JSON.")
-        value = json.loads(body[start:end + 1])
-    if not isinstance(value, dict):
-        raise ValueError("The AI did not return a JSON object.")
-    return value
 
 
 def clean_areas(raw: Any) -> list[dict[str, str]]:

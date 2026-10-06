@@ -7,9 +7,12 @@ from typing import Any
 from core.ado_client import AzureDevOpsClient
 from core.openai_client import PipelineRecommendationClient
 from app.core.config import get_settings
+from app.services.alert_facts import arm_severity, facts_for_prompt, public_facts, read_alert
+from app.services.irp_pipeline import propose_cases, write_irp
 from app.services.irp_format import (
     DEFAULT_SEVERITY,
     DEFAULT_TARGET_RESOURCE,
+    DEFAULT_TRIGGER_CONDITION,
     IRP_SYSTEM_PROMPT,
     MAX_EXAMPLE_CHARS,
     build_user_prompt,
@@ -61,29 +64,29 @@ class IrpService:
         irp_template: str | None = None,
         irp_example: str | None = None,
         additional_notes: str | None = None,
+        alert_kql: str | None = None,
+        cases: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """Generate an Incident Response Plan (IRP) adhering to uploaded templates, examples, and official Azure documentation."""
+        """Generate an Incident Response Plan (IRP) adhering to uploaded templates, examples, and official Azure documentation.
+
+        When the alert's ARM template or KQL query is given, the IRP is written case by case from what they say (see irp_pipeline).
+        Otherwise, or if that fails, the model writes it in one pass; without a model the built-in plan is used.
+        """
         client = self._get_client()
         sanitized_alert = alert_name.strip()
         effective_resource = (target_resource or "").strip() or DEFAULT_TARGET_RESOURCE
         slug = re.sub(r"[^a-zA-Z0-9\-_]", "-", sanitized_alert.replace(" ", "-")).strip("-")
         suggested_path = f"/Incident-Response-Plans/{slug}"
 
-        user_prompt_data = {
-            "alert_name": sanitized_alert,
-            "cvrd": (cvrd or "").strip(),
-            "alert_output_columns": (alert_output_columns or "").strip(),
-            "arm_template_context": (arm_template_context or "").strip(),
-            "alert_details": (alert_details or "").strip(),
-            "target_resource": effective_resource,
-            "severity": severity or DEFAULT_SEVERITY,
-            "trigger_condition": trigger_condition or "Metric threshold breached for > 5 minutes",
-            "owning_team": owning_team or "Cloud Operations & SRE",
-            "environment": environment or "Production",
-            "irp_template": (irp_template or "").strip(),
-            "irp_example": (irp_example or "").strip(),
-            "additional_notes": (additional_notes or "").strip(),
-        }
+        user_prompt_data = self._prompt_data(
+            sanitized_alert, effective_resource, severity, trigger_condition, owning_team, environment, cvrd, alert_output_columns,
+            arm_template_context, alert_details, irp_template, irp_example, additional_notes,
+        )
+        facts = read_alert(arm_template_context, alert_kql, sanitized_alert)
+        from_arm = arm_severity(facts)
+        if from_arm:  # the template is the source of truth for severity
+            severity = user_prompt_data["severity"] = from_arm
+        shown_facts = public_facts(facts) if (facts["has_definition"] or facts["warnings"]) else None
 
         uploaded = bool(user_prompt_data["irp_example"] or user_prompt_data["irp_template"])
         not_read = " Your uploaded example and template were not read." if uploaded else ""
@@ -93,6 +96,19 @@ class IrpService:
         if client:
             try:
                 example_skeleton, example_cut = extract_skeleton(user_prompt_data["irp_example"], MAX_EXAMPLE_CHARS)
+                if example_cut:
+                    notes.append(f"Your IRP example is longer than {MAX_EXAMPLE_CHARS:,} characters, so only the first {MAX_EXAMPLE_CHARS:,} were used.")
+                if facts["has_definition"]:
+                    try:
+                        written = write_irp(client, user_prompt_data, facts, example_skeleton, user_prompt_data["irp_template"], cases)
+                        return self._result(
+                            sanitized_alert, severity, effective_resource, written["markdown"], suggested_path, "ai", notes + written["notes"],
+                            method="case-by-case", facts=shown_facts, cases=written["cases"], scorecard=written["scorecard"], commands=written["commands"],
+                        )
+                    except Exception as e:
+                        logger.warning("Case-by-case IRP writer failed, using the single-pass writer: %s", e)
+                        notes.append(f"The case-by-case writer failed ({type(e).__name__}: {e}), so the single-pass writer was used.")
+                        user_prompt_data["arm_template_context"] = facts_for_prompt(facts)  # the single pass reads the facts too
                 response = client.client.chat.completions.create(
                     model=client.deployment,
                     messages=[
@@ -103,9 +119,7 @@ class IrpService:
                 )
                 markdown, problems = normalize_irp_markdown(response.choices[0].message.content, sanitized_alert)
                 if markdown:
-                    if example_cut:
-                        notes.append(f"Your IRP example is longer than {MAX_EXAMPLE_CHARS:,} characters, so only the first {MAX_EXAMPLE_CHARS:,} were used.")
-                    return self._result(sanitized_alert, severity, effective_resource, markdown, suggested_path, "ai", notes + problems)
+                    return self._result(sanitized_alert, severity, effective_resource, markdown, suggested_path, "ai", notes + problems, method="single-pass", facts=shown_facts)
                 reason = "The AI returned no text"
             except Exception as e:
                 logger.warning("Azure OpenAI IRP generation error, using the built-in IRP: %s", e)
@@ -116,10 +130,64 @@ class IrpService:
                          f"so the built-in IRP for this alert type was used.{not_read}{built_in}")
 
         fallback, _problems = normalize_irp_markdown(self._build_deterministic_irp(user_prompt_data), sanitized_alert)
-        return self._result(sanitized_alert, severity, effective_resource, fallback, suggested_path, "built-in", notes)
+        return self._result(sanitized_alert, severity, effective_resource, fallback, suggested_path, "built-in", notes, method="built-in", facts=shown_facts)
 
     @staticmethod
-    def _result(alert_name: str, severity: str, resource: str, markdown: str, path: str, generated_by: str, notes: list[str]) -> dict[str, Any]:
+    def _prompt_data(alert_name: str, resource: str, severity: str | None, trigger_condition: str | None, owning_team: str | None, environment: str | None,
+                     cvrd: str | None, alert_output_columns: str | None, arm_template_context: str | None, alert_details: str | None,
+                     irp_template: str | None, irp_example: str | None, additional_notes: str | None) -> dict[str, Any]:
+        return {
+            "alert_name": alert_name,
+            "cvrd": (cvrd or "").strip(),
+            "alert_output_columns": (alert_output_columns or "").strip(),
+            "arm_template_context": (arm_template_context or "").strip(),
+            "alert_details": (alert_details or "").strip(),
+            "target_resource": resource,
+            "severity": severity or DEFAULT_SEVERITY,
+            "trigger_condition": trigger_condition or DEFAULT_TRIGGER_CONDITION,
+            "owning_team": owning_team or "Cloud Operations & SRE",
+            "environment": environment or "Production",
+            "irp_template": (irp_template or "").strip(),
+            "irp_example": (irp_example or "").strip(),
+            "additional_notes": (additional_notes or "").strip(),
+        }
+
+    def analyze_alert(
+        self,
+        alert_name: str,
+        arm_template_context: str | None = None,
+        alert_kql: str | None = None,
+        alert_output_columns: str | None = None,
+        alert_details: str | None = None,
+        severity: str = DEFAULT_SEVERITY,
+        owning_team: str | None = None,
+        environment: str | None = "Production",
+        irp_template: str | None = None,
+        additional_notes: str | None = None,
+    ) -> dict[str, Any]:
+        """What can be read from the alert's ARM template and query, and the root causes the AI proposes for it (the owner can edit them)."""
+        name = alert_name.strip()
+        data = self._prompt_data(name, DEFAULT_TARGET_RESOURCE, severity, None, owning_team, environment, None, alert_output_columns,
+                                 arm_template_context, alert_details, irp_template, None, additional_notes)
+        facts = read_alert(arm_template_context, alert_kql, name)
+        cases: list[dict[str, str]] = []
+        notice: str | None = None
+        if not facts["has_definition"]:
+            notice = "Add the alert's ARM template (JSON) or its KQL query so that the root causes can be read from what the alert measures."
+        elif (client := self._get_client()) is None:
+            notice = "Azure OpenAI is not configured on this server, so root causes are not proposed. You can still write them yourself below."
+        else:
+            try:
+                cases = propose_cases(client, data, facts, data["irp_template"])
+            except Exception as e:
+                logger.warning("Proposing root causes failed: %s", e)
+                notice = f"The AI could not propose root causes ({type(e).__name__}). You can write them yourself below, or generate the IRP and the AI will propose them."
+        return {"facts": public_facts(facts), "cases": cases, "severity": arm_severity(facts), "notice": notice}
+
+    @staticmethod
+    def _result(alert_name: str, severity: str, resource: str, markdown: str, path: str, generated_by: str, notes: list[str], *, method: str = "single-pass",
+                facts: dict[str, Any] | None = None, cases: list[dict[str, str]] | None = None, scorecard: dict[str, Any] | None = None,
+                commands: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         return {
             "alert_name": alert_name,
             "severity": severity,
@@ -127,7 +195,12 @@ class IrpService:
             "markdown_content": markdown,
             "suggested_wiki_path": path,
             "generated_by": generated_by,
+            "method": method,
             "notice": " ".join(notes) or None,
+            "facts": facts,
+            "cases": cases,
+            "scorecard": scorecard,
+            "commands": commands,
         }
 
     def _build_deterministic_irp(self, data: dict[str, Any]) -> str:

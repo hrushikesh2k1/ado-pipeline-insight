@@ -4,6 +4,55 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.8.0] - 2026-10-06
+
+### Added
+- **IRP Studio reads the alert's own ARM template and KQL query.** Paste or upload the alert's ARM template (JSON; log alerts
+  `Microsoft.Insights/scheduledQueryRules` and metric alerts `Microsoft.Insights/metricAlerts`) and, optionally, its KQL
+  query. The alert's name, type, condition, window, frequency, severity, scope and action groups are read from the template,
+  ARM expressions (`parameters()`, `variables()`, `concat()`, `format()`, `resourceId()`, nested deployments) are resolved
+  where the template gives the values, and a value it does not give is shown as a `<placeholder>`, never invented. The query
+  is read for the tables, filters, aggregates and output columns it uses.
+- **Analyze the alert.** A new card shows what was read from the alert, in words ("the number of rows returned by the alert
+  query is greater than 0, measured over 10 minutes and evaluated every 5 minutes"), lists anything that could not be read, and
+  proposes the root causes of the alert from its query or metric. The causes can be edited, removed and added before the IRP is
+  written. The step is optional: Generate does it itself.
+- **The IRP is written case by case.** One call proposes the causes, one writes the Alert Details values, the Prerequisites
+  and the opening and closing rows, and one focused call writes the row of each cause, which must say how to confirm it, fix it,
+  verify the fix and what to do if the fix fails. The table is then built in code: the approval step is put before every change,
+  every command goes in a code span with where to run it, the Root Cause cell is made from the same causes as the rows, and the
+  Severity row comes from the ARM template. A row that is missing a fix or a verification is asked for once more.
+- **Quality checklist.** Every IRP written this way is checked against the IRP authoring checklist: every cause has a check, a
+  fix, a verification and a fallback; every command says where to run it; every row says what to expect; approval comes before
+  every change; every `<value>` is listed in Prerequisites (any the writer left out are added); a step reads the table the alert
+  query reads; the IRP is about 10 rows long; queries are well formed. The result is shown beside the IRP, not inside it.
+- **Known-wrong commands.** A list of commands and queries that are known to be wrong (it starts with the VPN Gateway log
+  category `VpnGatewayDiagnosticLog`, which Microsoft does not document, and reading a shared key from `vpn-connection show`),
+  each with its documentation. It is checked in every IRP and can be extended whenever QA finds a command that does not work.
+- **Commands for QA to test.** Every command in the IRP is listed under it, with its language, where it runs and an
+  "Unverified" mark (shown in the app only, not in the IRP document). Commands with a known problem come first, and every
+  command can be copied one by one or all together.
+- **API.** `POST /api/v1/irp/analyze`. `/api/v1/irp/generate` accepts `alert_kql` and `cases`, and returns `method`
+  (`case-by-case`, `single-pass` or `built-in`), `facts`, `cases`, `scorecard` and `commands`.
+
+### Changed
+- Without an ARM template or a query the IRP is written in one pass, as before. If the case-by-case writer fails, the one-pass
+  writer takes over and the page says so.
+- The Alert Name, Alert Output Columns, Description and Trigger Condition boxes start empty (they were filled with a VPN
+  example, which was sent to the AI as context for every alert), and so does the ARM box (it held a gateway, not an alert).
+  Analyzing a template fills the alert name in when nothing is typed. A blank trigger condition is no longer sent to the AI as
+  if it were a fact about the alert.
+- Writing an IRP this way makes several model calls (one for the causes, one for the frame, one per cause), so it takes longer
+  than the one-pass writer.
+
+### Fixed
+- **IRP requests larger than 64 KB were refused** ("Request body too large"). The approved example, the template and the ARM
+  template together can pass that, so the IRP routes now accept up to 600 KB (every other route keeps 64 KB). This also makes
+  the 1.6.0 note about example and template sizes true.
+
+### Notes
+- Nothing new is stored and there is no new dependency. Commands are shown as unverified until QA has tested them.
+
 ## [1.7.0] - 2026-10-05
 
 ### Added

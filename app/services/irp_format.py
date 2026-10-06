@@ -18,6 +18,7 @@ REMEDIATION_HEADER = "| " + " | ".join(f"**{name}**" for name in REMEDIATION_COL
 REMEDIATION_DIVIDER = "| " + " | ".join("---" for _ in REMEDIATION_COLUMNS) + " |"
 
 DEFAULT_SEVERITY = "Sev0 (Critical)"  # Azure Monitor: Sev0 Critical, Sev1 Error, Sev2 Warning, Sev3 Informational, Sev4 Verbose
+DEFAULT_TRIGGER_CONDITION = "Metric threshold breached for > 5 minutes"  # what the single-pass writer is told when nothing was given; not a fact about the alert
 DEFAULT_TARGET_RESOURCE = "<ResourceName>"  # what the built-in plans write when no resource is given; never sent to the model
 
 
@@ -181,6 +182,33 @@ def extract_skeleton(example: str | None, limit: int = MAX_EXAMPLE_CHARS) -> tup
         end = next((i for i, _level, _title in heads if i > start), len(lines))
         text = "\n".join(lines[:end]).strip()
     return text[:limit], len(text) > limit
+
+
+def _section_body(example: str | None, wanted: str) -> list[str]:
+    lines = (example or "").splitlines()
+    heads = _headings(lines)
+    start = next((i for i, _level, title in heads if section_key(title) == wanted), None)
+    if start is None:
+        return []
+    end = next((i for i, _level, _title in heads if i > start), len(lines))
+    return lines[start + 1:end]
+
+
+def alert_detail_labels(example: str | None) -> list[str]:
+    """The row labels of the Alert Details table of an IRP example, in order ('Alert', 'Description', ...); empty when there is none."""
+    table = _first_table(_section_body(example, SECTION_ALERT))
+    labels = []
+    for line in table or []:
+        cells = split_table_row(line)
+        label = re.sub(r"[*_`]", "", cells[0]).strip() if cells else ""
+        if label and not _DIVIDER_CELL.match(label):
+            labels.append(label)
+    return labels
+
+
+def remediation_excerpt(example: str | None, limit: int) -> str:
+    """The Remediation Steps section of an IRP example: the style the rows of a new IRP should have."""
+    return "\n".join(_section_body(example, SECTION_REMEDIATION)).strip()[:limit]
 
 
 def build_user_prompt(data: dict[str, Any], example_skeleton: str, template: str) -> str:

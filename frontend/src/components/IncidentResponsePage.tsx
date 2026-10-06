@@ -19,7 +19,9 @@ import {
   ChevronUp,
 } from 'lucide-react'
 import { api } from '../services/api'
-import type { IrpGenerateResponse } from '../types/api'
+import type { IrpAnalyzeResponse, IrpCase, IrpCommand, IrpGenerateResponse, IrpScorecard } from '../types/api'
+import { IrpAnalysisCard, IrpCommandsCard, IrpScorecardCard } from './IrpGroundedPanels'
+import { casesForRequest, inputsKey } from '../utils/irpGrounded'
 
 interface IncidentResponsePageProps {
   organization?: string
@@ -32,7 +34,6 @@ interface IncidentResponsePageProps {
   theme?: 'dark' | 'light'
 }
 
-const DEFAULT_ARM_CONTEXT = `{\n  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",\n  "contentVersion": "1.0.0.0",\n  "resources": [\n    {\n      "type": "Microsoft.Network/virtualNetworkGateways",\n      "apiVersion": "2023-04-01",\n      "name": "vnet-gw-prod-east",\n      "location": "eastus",\n      "properties": {\n        "gatewayType": "Vpn",\n        "vpnType": "RouteBased",\n        "enableBgp": true,\n        "sku": { "name": "VpnGw2", "tier": "VpnGw2" }\n      }\n    }\n  ]\n}`
 
 /** Azure Monitor alert severities. The label is what is sent: the IRP writes the plain name (Critical, Error, ...). */
 export const IRP_SEVERITIES = [
@@ -45,20 +46,14 @@ export const IRP_SEVERITIES = [
 
 export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
   // Alert Details & ARM context
-  const [alertName, setAlertName] = useState<string>('VPN Tunnel Disconnected')
-  const [alertOutputColumns, setAlertOutputColumns] = useState<string>(
-    'TimeGenerated, ResourceGroup, GatewayName, ConnectionState, PeerIP, DisconnectReason'
-  )
-  const [alertDetails, setAlertDetails] = useState<string>(
-    'IPsec Phase 2 tunnel dropped between on-prem datacenter and Azure Virtual Network Gateway. High risk of database replication drop and internal API failure.'
-  )
-  const [armTemplateContext, setArmTemplateContext] = useState<string>(
-    DEFAULT_ARM_CONTEXT
-  )
+  const [alertName, setAlertName] = useState<string>('')
+  const [alertOutputColumns, setAlertOutputColumns] = useState<string>('')
+  const [alertDetails, setAlertDetails] = useState<string>('')
+  const [armTemplateContext, setArmTemplateContext] = useState<string>('')
+  const [armFileName, setArmFileName] = useState<string>('')
+  const [alertKql, setAlertKql] = useState<string>('')
   const [severity, setSeverity] = useState<string>(IRP_SEVERITIES[0])
-  const [triggerCondition, setTriggerCondition] = useState<string>(
-    'Gateway Connection Status != Connected for > 2 minutes'
-  )
+  const [triggerCondition, setTriggerCondition] = useState<string>('')
   const [owningTeam, setOwningTeam] = useState<string>('Cloud Network Operations')
   const [environment, setEnvironment] = useState<string>('Production')
   const [additionalNotes, setAdditionalNotes] = useState<string>('')
@@ -79,6 +74,14 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
   const [generatedIrp, setGeneratedIrp] = useState<string>('')
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [irpNotice, setIrpNotice] = useState<string>('')
+  const [analysis, setAnalysis] = useState<IrpAnalyzeResponse | null>(null)
+  const [analysisKey, setAnalysisKey] = useState<string>('')
+  const [cases, setCases] = useState<IrpCase[]>([])
+  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false)
+  const [analysisError, setAnalysisError] = useState<string>('')
+  const [scorecard, setScorecard] = useState<IrpScorecard | null>(null)
+  const [commands, setCommands] = useState<IrpCommand[] | null>(null)
+  const [method, setMethod] = useState<string>('')
   const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview')
   const [copied, setCopied] = useState<boolean>(false)
 
@@ -93,6 +96,51 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
       setIrpTemplate(content || '')
     }
     reader.readAsText(file)
+  }
+
+  const handleArmFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setArmFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = (event) => setArmTemplateContext((event.target?.result as string) || '')
+    reader.readAsText(file)
+  }
+
+  // What an analysis is made from: when any of it changes, the analysis on screen is out of date.
+  const keyFor = (name: string) => inputsKey([name, armTemplateContext, alertKql, alertDetails, alertOutputColumns, environment, owningTeam, additionalNotes, irpTemplate.length])
+  const currentKey = keyFor(alertName)
+  const analysisStale = !!analysis && analysisKey !== currentKey
+  const hasDefinition = !!(armTemplateContext.trim() || alertKql.trim())
+
+  const handleAnalyze = async () => {
+    setIsAnalyzing(true)
+    setAnalysisError('')
+    try {
+      const res = await api.analyzeIrp({
+        alert_name: alertName.trim() || 'Alert',
+        alert_output_columns: alertOutputColumns.trim() || undefined,
+        arm_template_context: armTemplateContext.trim() || undefined,
+        alert_kql: alertKql.trim() || undefined,
+        alert_details: alertDetails.trim() || undefined,
+        severity,
+        owning_team: owningTeam.trim() || undefined,
+        environment,
+        irp_template: irpTemplate.trim() || undefined,
+        additional_notes: additionalNotes.trim() || undefined,
+      })
+      setAnalysis(res)
+      const nameForKey = alertName.trim() || res.facts.alert?.name || ''
+      if (!alertName.trim() && nameForKey) setAlertName(nameForKey)  // nothing typed yet: take the name from the template
+      setAnalysisKey(keyFor(nameForKey))
+      setCases(res.cases)
+      if (res.severity && (IRP_SEVERITIES as readonly string[]).includes(res.severity)) setSeverity(res.severity)
+    } catch (err: any) {
+      setAnalysisError(err?.message?.replace(/^\d+:\s*/, '') || 'The alert could not be analyzed.')
+    } finally {
+      setIsAnalyzing(false)
+    }
   }
 
   const handleExampleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -123,6 +171,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
         alert_name: alertName,
         alert_output_columns: alertOutputColumns.trim() || undefined,
         arm_template_context: armTemplateContext.trim() || undefined,
+        alert_kql: alertKql.trim() || undefined,
         alert_details: alertDetails.trim() || undefined,
         severity,
         trigger_condition: triggerCondition.trim() || undefined,
@@ -131,10 +180,17 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
         irp_template: irpTemplate.trim() || undefined,
         irp_example: irpExample.trim() || undefined,
         additional_notes: additionalNotes.trim() || undefined,
+        cases: casesForRequest(cases).length ? casesForRequest(cases) : undefined,
       })
 
       setGeneratedIrp(res.markdown_content)
       setIrpNotice(res.notice || '')
+      setScorecard(res.scorecard ?? null)
+      setCommands(res.commands ?? null)
+      setMethod(res.method || '')
+      // The cases the rows were written for (proposed by the AI when the owner gave none) and the severity the ARM template gave.
+      if (res.cases && res.cases.length) setCases(res.cases)
+      if ((IRP_SEVERITIES as readonly string[]).includes(res.severity)) setSeverity(res.severity)
     } catch (err: any) {
       setErrorMessage(err?.response?.data?.detail || err?.message || 'Failed to generate Incident Response Plan.')
     } finally {
@@ -749,7 +805,7 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
                   className="irpInput"
                   value={alertName}
                   onChange={(e) => setAlertName(e.target.value)}
-                  placeholder="e.g. VPN Tunnel Disconnected"
+                  placeholder="e.g. VPN Tunnel Disconnected (or analyze the ARM template to fill it in)"
                 />
               </div>
 
@@ -792,19 +848,50 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
                 >
                   <label className="irpLabel" style={{ marginBottom: 0, cursor: 'pointer' }}>
                     <Code2 size={14} style={{ display: 'inline', marginRight: '6px' }} />
-                    ARM Template / Bicep / Resource Context
+                    Alert ARM Template (JSON)
                   </label>
                   {showArmBox ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </div>
                 {showArmBox && (
-                  <textarea
-                    className="irpTextarea codeFont"
-                    rows={4}
-                    value={armTemplateContext}
-                    onChange={(e) => setArmTemplateContext(e.target.value)}
-                    placeholder="Paste your ARM Template JSON, Bicep snippet, or resource configuration..."
-                  />
+                  <>
+                    <div className="irpUploadRow">
+                      <label className="irpUploadBtn">
+                        <Upload size={14} style={{ marginRight: '6px' }} />
+                        {armFileName ? `Uploaded: ${armFileName}` : 'Upload ARM template (.json)'}
+                        <input type="file" accept=".json,.txt" style={{ display: 'none' }} onChange={handleArmFileUpload} data-testid="irp-arm-file" />
+                      </label>
+                      {armTemplateContext && (
+                        <button type="button" className="irpClearBtn" onClick={() => { setArmTemplateContext(''); setArmFileName('') }} title="Clear the ARM template" aria-label="Clear the ARM template">
+                          <Trash2 size={14} /> Clear
+                        </button>
+                      )}
+                    </div>
+                    <textarea
+                      className="irpTextarea codeFont"
+                      rows={5}
+                      value={armTemplateContext}
+                      onChange={(e) => setArmTemplateContext(e.target.value)}
+                      data-testid="irp-arm"
+                      placeholder="Paste the alert's ARM template (JSON). Its query, threshold, window, severity and scope are read from it, so the steps match what the alert measures."
+                      style={{ marginTop: '8px' }}
+                    />
+                  </>
                 )}
+              </div>
+
+              <div className="irpInputGroup fullWidth">
+                <label className="irpLabel">
+                  <Terminal size={14} style={{ display: 'inline', marginRight: '6px' }} />
+                  Alert Query (KQL)
+                </label>
+                <textarea
+                  className="irpTextarea codeFont"
+                  rows={4}
+                  value={alertKql}
+                  onChange={(e) => setAlertKql(e.target.value)}
+                  data-testid="irp-alert-kql"
+                  placeholder="Paste the alert's KQL query. Optional when the ARM template contains it; the query here is used when both are given."
+                />
               </div>
 
               <div className="irpInputGroup">
@@ -830,6 +917,24 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
               </div>
             </div>
           </div>
+
+          {/* ANALYSIS: what was read from the ARM template and the query, and the root causes */}
+          <IrpAnalysisCard
+            analysis={analysis}
+            stale={analysisStale}
+            isAnalyzing={isAnalyzing}
+            error={analysisError}
+            canAnalyze={hasDefinition}
+            onAnalyze={handleAnalyze}
+            cases={cases}
+            onCasesChange={setCases}
+            alertName={alertName}
+            onUseName={(name) => {
+              // Taking the name from the template is part of the analysis, not a change that makes it out of date.
+              if (!analysisStale) setAnalysisKey(keyFor(name))
+              setAlertName(name)
+            }}
+          />
 
           {/* SECTION 2: IRP TEMPLATE UPLOAD */}
           <div className="irpCardSection">
@@ -967,6 +1072,10 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
             </button>
           </div>
 
+          {!alertName.trim() && (
+            <p className="irpSectionHint" data-testid="irp-name-hint">Enter the alert name to generate. Analyzing an ARM template fills it in from the template.</p>
+          )}
+
           {errorMessage && (
             <div className="irpErrorNotice">
               <AlertTriangle size={16} style={{ marginRight: '8px', flexShrink: 0 }} />
@@ -1087,6 +1196,15 @@ export const IncidentResponsePage: React.FC<IncidentResponsePageProps> = () => {
               </div>
             )}
           </div>
+
+          {generatedIrp && method === 'single-pass' && (
+            <div className="irpg irpgNote info irpMethodNote" data-testid="irp-method">
+              <Info size={14} />
+              <span>This IRP was written in one pass. Add the alert's ARM template or KQL query and the IRP is written case by case from what the alert measures, with a quality checklist.</span>
+            </div>
+          )}
+          {scorecard && <IrpScorecardCard scorecard={scorecard} />}
+          {commands && commands.length > 0 && <IrpCommandsCard commands={commands} />}
         </div>
       </div>
     </div>

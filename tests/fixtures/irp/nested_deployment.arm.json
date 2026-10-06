@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "variables": { "gateway": "vnet-gw-prod-east" },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2022-09-01",
+      "name": "alerts",
+      "properties": {
+        "mode": "Incremental",
+        "parameters": { "gatewayName": { "value": "[variables('gateway')]" } },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": { "gatewayName": { "type": "string" } },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/metricAlerts",
+              "apiVersion": "2018-03-01",
+              "name": "[concat('Tunnel bandwidth low - ', parameters('gatewayName'))]",
+              "location": "global",
+              "properties": {
+                "severity": 3,
+                "enabled": true,
+                "scopes": [ "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]" ],
+                "evaluationFrequency": "PT5M",
+                "windowSize": "PT15M",
+                "criteria": {
+                  "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                  "allOf": [
+                    { "criterionType": "StaticThresholdCriterion", "name": "m", "metricName": "TunnelAverageBandwidth", "operator": "LessThan", "threshold": 1, "timeAggregation": "Average" }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -334,11 +334,19 @@ class AdoWikiPage(BaseModel):
     sub_pages: list[Any] = Field(default_factory=list)
 
 
+class IrpCaseInput(BaseModel):
+    """A root cause of the alert, as proposed by the analysis and possibly edited by its owner."""
+
+    name: str = Field(min_length=1, max_length=200)
+    signal: str | None = Field(default=None, max_length=600)
+
+
 class IrpGenerateRequest(BaseModel):
     alert_name: str = Field(min_length=1, max_length=256)
     cvrd: str | None = Field(default=None, max_length=256)
     alert_output_columns: str | None = None
-    arm_template_context: str | None = None
+    arm_template_context: str | None = None  # the alert's ARM template (JSON); read for its query, threshold, severity and scope
+    alert_kql: str | None = Field(default=None, max_length=100_000)  # the alert's KQL query; wins over the one in the ARM template
     alert_details: str | None = None
     target_resource: str | None = Field(default=None, max_length=256)
     severity: str = Field(default="Sev0 (Critical)")
@@ -348,6 +356,27 @@ class IrpGenerateRequest(BaseModel):
     irp_template: str | None = None
     irp_example: str | None = None
     additional_notes: str | None = None
+    cases: list[IrpCaseInput] | None = Field(default=None, max_length=8)  # the root causes to write rows for; proposed from the alert when absent
+
+
+class IrpAnalyzeRequest(BaseModel):
+    alert_name: str = Field(min_length=1, max_length=256)
+    alert_output_columns: str | None = None
+    arm_template_context: str | None = None
+    alert_kql: str | None = Field(default=None, max_length=100_000)
+    alert_details: str | None = None
+    severity: str = Field(default="Sev0 (Critical)")
+    owning_team: str | None = None
+    environment: str | None = "Production"
+    irp_template: str | None = None
+    additional_notes: str | None = None
+
+
+class IrpAnalyzeResponse(BaseModel):
+    facts: dict[str, Any]
+    cases: list[dict[str, str]] = Field(default_factory=list)
+    severity: str | None = None  # the severity the ARM template gives, as 'Sev1 (Error)'
+    notice: str | None = None
 
 
 class IrpGenerateResponse(BaseModel):
@@ -357,7 +386,12 @@ class IrpGenerateResponse(BaseModel):
     markdown_content: str
     suggested_wiki_path: str
     generated_by: str = "ai"  # "ai" when the model wrote it, "built-in" when the canned plan was used
+    method: str = "single-pass"  # "case-by-case" (grounded in the alert's ARM/KQL), "single-pass", or "built-in"
     notice: str | None = None  # why the built-in plan was used, or what could not be repaired
+    facts: dict[str, Any] | None = None  # what was read from the ARM template and the query
+    cases: list[dict[str, str]] | None = None  # the root causes the rows were written for
+    scorecard: dict[str, Any] | None = None  # the authoring checklist, checked
+    commands: list[dict[str, Any]] | None = None  # every command in the IRP, for QA to test
 
 
 class IrpPublishRequest(_Validated):
