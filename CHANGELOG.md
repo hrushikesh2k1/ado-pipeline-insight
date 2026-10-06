@@ -22,22 +22,31 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   files are read. For an alert template the reviewer is also given each alert in plain words (when it fires, how often, over
   what window, who is notified, with its query laid out over several lines) and a list of exactly what changed: threshold,
   window, frequency, severity, action groups, the query before and after, new and removed alerts. This uses the same reader as
-  IRP Studio. The long query line in the JSON is no longer cut. The guidance follows Microsoft's `scheduledQueryRules` reference
+  IRP Studio, which now also reads log alerts in the older `2018-04-16` format (query in `source`, timing in `schedule`, severity
+  and action group in `action`) next to the newer one, as Microsoft documents it. The long query line in the JSON is no longer cut. The guidance follows Microsoft's `scheduledQueryRules` reference
   and alert documentation: changes to when an alert fires, `minFailingPeriodsToAlert` above `numberOfEvaluationPeriods`,
   `overrideQueryTimeRange`, a log alert meant to detect a lack of data, a disabled alert, no action group, `autoMitigate` off,
   `skipQueryValidation`, metric alerts whose conditions must all be true, query mistakes, and secrets that are not `securestring`.
 - **Short, concrete findings.** Each finding names the exact input or situation that goes wrong, what happens, and what to
   change, and may carry a replacement for the exact lines it points at. The AI may return no findings.
+- **The author's explanation is read.** The reviewer and the second check are given the pull request description (the
+  checklist lines, images and HTML comments are taken out, since the code reads the checklist itself; up to 8,000 characters
+  are kept) and are told not to report something the description, a comment in the code or the alert's own description says
+  is intended unless they can show a case where it gives a wrong result. Before, only the first 1,200 characters were sent, so
+  an explanation further down never reached the AI.
 - **Every finding is checked before it is shown.** In code: the file must be in the pull request, the line must be a line the
   pull request changed, and a suggested replacement is kept only when every line it replaces was changed. Then a second AI call
-  reads each finding against the code and removes the ones it cannot confirm. What was removed, and why, is listed in the
+  reads each finding against the code, the description and the existing comments, and removes the ones it cannot confirm,
+  the ones that only say something "could" or "may" go wrong without a concrete case, and the ones that repeat an earlier
+  finding (the repeat is merged into the first: "The same applies at line N."). What was removed, and why, is listed in the
   review. A finding the second check could not run for is marked "not double-checked".
 - **The verdict, the scorecard and the summary are worked out from the findings,** not written by the AI. The verdict reads
   "No issues found", "Suggestions" or "Changes suggested" (a review of code changes does not approve a pull request), and a
   scorecard row with no finding says "No findings" instead of "Excellent".
-- **Existing pull request comments are read.** The AI is told what people already said on each file and does not repeat it.
-  A finding that matches an existing thread is marked "Already raised by <name> (resolved)", and findings people already
-  resolved do not count toward the verdict.
+- **Existing pull request comments are read.** The AI is told what people already said on each file and on the pull request
+  as a whole, with the last reply of each thread (so a point the author deferred is not raised again), and does not repeat it.
+  A finding that matches an existing comment, on the same lines or, judged by the second check, anywhere, is marked "Already
+  raised by <name> (resolved)", and findings people already resolved do not count toward the verdict.
 - **The PR checklist is checked against the pull request.** Ticked boxes about the changelog, tests created and a linked work
   item are compared with the changed files and the linked work items; the run linked in the description is compared with the
   newest run of the same pipeline on the source branch. Everything else on the checklist is listed as something that cannot be
@@ -52,6 +61,12 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 ### Fixed
 - **JSON files were skipped as data, so an alert written as an ARM template was never reviewed** ("Reviewed 0 of 1 changed
   files"). See "Alerts written as ARM templates are reviewed as alerts" above.
+- **A log alert in the older `2018-04-16` format was read as having no window, no query, no severity and no action group,**
+  so the reviewer was told "nobody is notified" and "no alert rule changed" for an alert that had an action group and a changed
+  query. IRP Studio's Analyze had the same gap for such templates. A flag written as the text `"true"` or `"false"` (which that
+  format requires) was not read as a flag either.
+- **The AI never saw the author's explanation** when it was past the first 1,200 characters of the description, so it reported
+  deliberate choices (a two-minute delay for logs to arrive, a window raised to fit the query's look-back) as mistakes.
 - **When nothing could be reviewed the summary said "(none)" and "see the file list".** It now names the files that were skipped
   and the reason for each. The limit of 20 files counts only the files that are reviewed, not the ones skipped.
 - **A checklist item with a link showed the raw link** (`[Alert Inventory wiki] (https://...)`); it now shows the link's words.

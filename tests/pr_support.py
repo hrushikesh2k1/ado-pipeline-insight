@@ -131,10 +131,15 @@ class FakeAdo:
         return None, "unreadable"
 
 
-def thread(path: str | None, line: int | None, text: str, status: str = "fixed", author: str = "Sam Reviewer", system: bool = False) -> dict[str, Any]:
-    context = {"filePath": "/" + path, "rightFileStart": {"line": line, "offset": 1}, "rightFileEnd": {"line": line, "offset": 5}} if path else None
-    return {"id": 1, "status": status, "isDeleted": False, "threadContext": context,
-            "comments": [{"id": 1, "content": text, "commentType": "system" if system else "text", "author": {"displayName": author}}]}
+def thread(path: str | None, line: int | None, text: str, status: str = "fixed", author: str = "Sam Reviewer", system: bool = False, replies=()) -> dict[str, Any]:
+    """A comment thread. `replies` is a list of (author, text). A path with no line is a comment on the whole file; no path, on the whole pull request."""
+    if path and line is not None:
+        context = {"filePath": "/" + path, "rightFileStart": {"line": line, "offset": 1}, "rightFileEnd": {"line": line, "offset": 5}}
+    else:
+        context = {"filePath": "/" + path} if path else None
+    comments = [{"id": 1, "content": text, "commentType": "system" if system else "text", "author": {"displayName": author}}]
+    comments += [{"id": n, "parentCommentId": 1, "content": said, "commentType": "text", "author": {"displayName": who}} for n, (who, said) in enumerate(replies, 2)]
+    return {"id": 1, "status": status, "isDeleted": False, "threadContext": context, "comments": comments}
 
 
 def finding(line: int, title: str = "Problem", severity: str = "warning", **over: Any) -> dict[str, Any]:
@@ -178,11 +183,14 @@ class FakePrModel:
             decided = self.holds(path, numbers) if self.holds else {}
             if isinstance(decided, Exception):
                 raise decided
-            def answer(n: int) -> tuple[bool, str]:
-                said = decided.get(n, True)  # True, False or (False, "why")
-                return (said[0], said[1]) if isinstance(said, tuple) else (bool(said), "ok")
+            def answer(n: int) -> dict[str, Any]:
+                said = decided.get(n, True)  # True, False, (False, "why"), or {"holds": ..., "reason": ..., "duplicate_of": 1, "already_raised_by": "E2"}
+                if isinstance(said, dict):
+                    return {"holds": said.get("holds", True), "reason": said.get("reason", "ok"), "duplicate_of": said.get("duplicate_of"), "already_raised_by": said.get("already_raised_by")}
+                holds, reason = (said[0], said[1]) if isinstance(said, tuple) else (bool(said), "ok")
+                return {"holds": holds, "reason": reason, "duplicate_of": None, "already_raised_by": None}
 
-            body = {"findings": [{"number": n, "holds": answer(n)[0], "reason": answer(n)[1]} for n in numbers]}
+            body = {"findings": [{"number": n, **answer(n)} for n in numbers]}
         else:
             if isinstance(self.gaps, Exception):
                 raise self.gaps

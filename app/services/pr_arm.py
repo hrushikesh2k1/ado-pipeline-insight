@@ -53,12 +53,17 @@ def _same_query(a: str, b: str) -> bool:
 def _kind(alert: dict[str, Any]) -> str:
     if alert.get("type") == "metric":
         return "metric alert"
+    if alert.get("legacy"):
+        return f"log alert (older {alert.get('api_version') or '2018-04-16'} format)"
     return f"log alert (kind {alert.get('kind') or 'LogAlert'})"
 
 
 def _severity(alert: dict[str, Any]) -> str:
     value = alert.get("severity")
-    return f"severity {value} ({SEVERITY_NAMES.get(value, 'unknown')}; 0 is the most severe)" if value is not None else "severity not set"
+    if value is None:
+        return "severity not set"
+    # Microsoft documents "0 is the most severe" for the newer format only
+    return f"severity {value} ({SEVERITY_NAMES.get(value, 'unknown')})" if alert.get("legacy") else f"severity {value} ({SEVERITY_NAMES.get(value, 'unknown')}; 0 is the most severe)"
 
 
 def describe(alert: dict[str, Any], number: int) -> str:
@@ -71,7 +76,7 @@ def describe(alert: dict[str, Any], number: int) -> str:
     lines.append(f"   Scope: {_show(alert.get('scopes'))}")
     groups = alert.get("action_groups") or []
     lines.append("   Action groups: " + (", ".join(groups) if groups else "none are set in this template, so nobody is notified when it fires"))
-    extras = [f"{label}: {_show(alert.get(key))}" for label, key in (("autoMitigate", "auto_mitigate"), ("muteActionsDuration", "mute_actions_duration"), ("overrideQueryTimeRange", "override_query_time_range")) if alert.get(key) is not None]
+    extras = [f"{label}: {_show(alert.get(key))}" for label, key in (("autoMitigate", "auto_mitigate"), ("muteActionsDuration", "mute_actions_duration"), ("overrideQueryTimeRange", "override_query_time_range"), ("throttlingInMin", "throttle_minutes")) if alert.get(key) is not None]
     if extras:
         lines.append("   " + "; ".join(extras))
     if _query(alert):
@@ -86,6 +91,7 @@ def _fields(alert: dict[str, Any]) -> dict[str, str]:
         "condition": _show(alert.get("condition_sentence")), "scope": _show(alert.get("scopes")),
         "action groups": _show(alert.get("action_groups")), "autoMitigate": _show(alert.get("auto_mitigate")),
         "muteActionsDuration": _show(alert.get("mute_actions_duration")), "overrideQueryTimeRange": _show(alert.get("override_query_time_range")),
+        "throttlingInMin": _show(alert.get("throttle_minutes")),
     }
 
 

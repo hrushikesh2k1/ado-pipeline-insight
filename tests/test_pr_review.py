@@ -9,7 +9,7 @@ import pytest
 from app.services import pr_review
 from app.services.pr_diff import build_view
 from app.services.pr_review import (
-    AiUnavailable, PullRequestReviewService, ReviewFailed, clean_findings, get_model_client, judge, summarize, thread_summaries,
+    AiUnavailable, PullRequestReviewService, ReviewFailed, clean_description, clean_findings, get_model_client, judge, summarize, thread_summaries,
 )
 from irp_support import FIXTURES
 from pr_support import DESCRIPTION, PS_NEW, PY_NEW, PY_OLD, FakeAdo, FakePrModel, change, finding, thread
@@ -284,14 +284,35 @@ class TestExistingComments:
         result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero")]}))
         assert result["comments"][0]["existing_thread"] is None
 
-    def test_the_reviewer_is_told_what_was_already_said_on_that_file_only(self):
+    def test_the_reviewer_is_told_what_was_said_on_that_file_and_on_the_pull_request_as_a_whole(self):
         ado = FakeAdo(threads=[thread(REPORT, 14, "Add a header comment", author="Alex"), thread(TOTALS, 5, "totals thread"), thread(None, None, "PR level remark"),
                                thread(REPORT, 9, "system noise", system=True)])
         _, _, model = run(ado)
         prompt = next(u for u in model.calls_of("file") if u.startswith(f"File: {REPORT}"))
-        assert "- line 14 [resolved] Alex: Add a header comment" in prompt
-        assert "totals thread" not in prompt and "PR level remark" not in prompt and "system noise" not in prompt
-        assert "(none)" in next(u for u in model.calls_of("file") if u.startswith("File: tests/test_report.py"))
+        assert "E1: line 14 [resolved] Alex: Add a header comment" in prompt
+        assert "E2: (on the pull request as a whole) [resolved] Sam Reviewer: PR level remark" in prompt
+        assert "totals thread" not in prompt and "system noise" not in prompt
+        other = next(u for u in model.calls_of("file") if u.startswith("File: tests/test_report.py"))
+        assert "E1: (on the pull request as a whole)" in other and "Alex" not in other
+
+    def test_the_last_reply_is_told_too_so_a_deferred_point_is_not_raised_again(self):
+        ado = FakeAdo(threads=[thread(REPORT, 14, "Use a dict lookup here", replies=[("Pat", "Will be done in the follow-up work item"), ("Sam", "Fine, resolved")])])
+        _, _, model = run(ado)
+        prompt = next(u for u in model.calls_of("file") if u.startswith(f"File: {REPORT}"))
+        assert "E1: line 14 [resolved] Sam Reviewer: Use a dict lookup here | last reply from Sam: Fine, resolved" in prompt
+
+    def test_a_comment_on_the_whole_file_is_told_but_is_not_matched_by_line(self):
+        ado = FakeAdo(threads=[thread(REPORT, None, "This file needs a header")])
+        result, _, model = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero")]}))
+        assert "E1: (on the file) [resolved] Sam Reviewer: This file needs a header" in next(u for u in model.calls_of("file") if u.startswith(f"File: {REPORT}"))
+        assert result["comments"][0]["existing_thread"] is None
+
+    def test_how_many_comments_are_told_is_bounded(self):
+        threads = [thread(REPORT, 3 + n % 5, f"file comment {n}") for n in range(15)] + [thread(None, None, f"general {n}") for n in range(14)]
+        _, _, model = run(FakeAdo(threads=threads))
+        prompt = next(u for u in model.calls_of("file") if u.startswith(f"File: {REPORT}"))
+        lines = [line for line in prompt.splitlines() if re.match(r"E\d+: ", line)]
+        assert len(lines) == pr_review.MAX_FILE_COMMENTS + pr_review.MAX_GENERAL_COMMENTS == 22
 
 
 class TestThreadSummaries:
@@ -567,6 +588,16 @@ class TestAlertTemplates:
         result, _, _ = run(alert_ado(), model)
         assert result["comments"] == []
 
+    def test_a_template_with_older_and_newer_format_alerts_tells_the_reviewer_the_truth_about_both(self):
+        from test_alert_legacy import current, legacy, template
+        old = template(legacy(query="KubePodInventory | take 1"), current(window="PT10M"))
+        new = template(legacy(query="KubePodInventory | take 2"), current(window="PT30M"))
+        _, _, model = run(alert_ado(new=new, old=old))
+        prompt = model.calls_of("file")[0]
+        assert '"AKS - Restart": log alert (older 2018-04-16 format), severity 2 (Warning), enabled' in prompt
+        assert "Action groups: ag-oncall" in prompt and "nobody is notified" not in prompt
+        assert '- "AKS - Restart": the query changed' in prompt and '- "AKS - Crash": window size: PT10M -> PT30M.' in prompt
+
     def test_a_template_that_is_no_longer_valid_json_is_put_in_front_of_the_reviewer(self):
         _, _, model = run(alert_ado(new=ALERT_NEW.replace('"resources": [', '"resources": [,')))
         assert "cannot be deployed as it is" in model.calls_of("file")[0]
@@ -606,6 +637,109 @@ class TestAlertTemplates:
         ado = FakeAdo(changes=[change(n, "add") for n in yaml] + [change(f"/{ALERT_PATH}")],
                       blobs={**{f"new-{n}": "a: 1\n" for n in yaml}, f"new-/{ALERT_PATH}": ALERT_NEW, f"old-/{ALERT_PATH}": ALERT_OLD}, description="")
         assert by_path(run(ado)[0])[ALERT_PATH]["status"] == "reviewed"
+
+
+class TestTheAuthorsExplanation:
+    LONG = "## Description\n\n" + ("Improves alerting. " * 80) + "\n\n**Second check**\n- Skips events newer than 3 minutes. The 3 minute pause lets late log lines arrive.\n- Window changes from PT10M to PT30M.\n"
+
+    def test_checklist_lines_images_and_html_comments_are_taken_out(self):
+        text = "Intro.\n\n- [ ] Spell check\n  * [X] Changelog updated\n- [x] [Wiki](https://x.example/y) is updated\n![shot](https://x.example/a.png)\n<!-- template hint -->\nMore words.\n\n\n\nEnd."
+        assert clean_description(text) == "Intro.\n\nMore words.\n\nEnd."
+
+    def test_a_description_that_is_only_a_checklist_is_empty(self):
+        assert clean_description("- [ ] a\n- [x] b\n") == "" and clean_description(None) == "" and clean_description("") == ""
+
+    def test_what_is_too_long_is_cut_at_the_end_and_says_so(self):
+        text = clean_description("word " * 5000, limit=100)
+        assert text.endswith("... (the rest of the description is cut)") and len(text) < 160
+
+    def test_the_explanation_reaches_the_reviewer_even_when_it_is_far_into_the_description(self):
+        assert self.LONG.index("The 3 minute pause") > 1200  # past the old cut-off
+        _, _, model = run(FakeAdo(description=self.LONG))
+        assert all("The 3 minute pause lets late log lines arrive." in prompt for prompt in model.calls_of("file"))
+
+    def test_and_the_second_check_sees_it_too(self):
+        model = FakePrModel({REPORT: [finding(17)]})
+        run(FakeAdo(description=self.LONG), model)
+        verify = model.calls_of("verify")[0]
+        assert "Why the author made this change" in verify and "The 3 minute pause lets late log lines arrive." in verify and "Pull request title: " not in verify
+
+    def test_the_checklist_is_not_sent_to_the_ai_because_the_code_reads_it(self):
+        _, _, model = run()
+        prompt = model.calls_of("file")[0]
+        assert "Adds a report." in prompt and "Regression results: https://" in prompt
+        assert "Changelog updated" not in prompt and "[x]" not in prompt
+
+    def test_the_description_check_uses_the_cleaned_text(self):
+        model = FakePrModel(gaps=[])
+        run(FakeAdo(description=self.LONG + "\n- [ ] Spell check performed\n"), model)
+        sent = model.calls_of("description")[0]
+        assert "The 3 minute pause" in sent and "Spell check performed" not in sent
+
+
+class TestWhatTheAiIsTold:
+    def test_the_reviewer_must_show_a_case_not_say_could_and_respect_what_is_intended(self):
+        for part in ('Do not write "could", "may" or "might" in place of a case', "says a behaviour is intended", "Report each problem once"):
+            assert part in pr_review.FILE_SYSTEM
+
+    def test_the_second_check_throws_out_vague_findings_and_intended_behaviour(self):
+        for part in ("could, may or might go wrong, without showing a concrete input", "says the behaviour is intended", "duplicate_of", "already_raised_by"):
+            assert part in pr_review.VERIFY_SYSTEM
+
+    def test_the_second_check_is_given_the_comments_numbered_like_the_reviewer_was(self):
+        ado = FakeAdo(threads=[thread(REPORT, 3, "Guard against empty lists", status="active", author="Alex"), thread(None, None, "Please update the wiki")])
+        model = FakePrModel({REPORT: [finding(17)]})
+        run(ado, model)
+        verify = model.calls_of("verify")[0]
+        assert "E1: line 3 [open] Alex: Guard against empty lists" in verify and "E2: (on the pull request as a whole) [resolved] Sam Reviewer: Please update the wiki" in verify
+
+
+class TestDuplicatesAndAlreadyRaised:
+    TWO = {REPORT: [finding(14, "Window is shifted", comment="The window starts 2 minutes late, so a crash in that gap is not matched."), finding(17, "Window is shifted again", comment="Here too the window starts 2 minutes late.")]}
+
+    def comments(self, holds, threads=(), findings=None):
+        result, _, _ = run(FakeAdo(threads=list(threads)), FakePrModel(findings or self.TWO, holds=holds))
+        return result
+
+    def test_a_finding_that_repeats_an_earlier_one_is_merged_into_it(self):
+        result = self.comments(lambda path, numbers: {2: {"duplicate_of": 1}})
+        assert [c["title"] for c in result["comments"]] == ["Window is shifted"]
+        assert result["comments"][0]["comment"].endswith(" The same applies at line 17.")
+        assert any("1 finding(s) repeated another finding" in n for n in result["notes"])
+        assert "1 finding: 1 warning." in result["summary"]
+
+    def test_a_repeat_is_not_merged_into_a_finding_that_was_itself_removed(self):
+        result = self.comments(lambda path, numbers: {1: (False, "no concrete case"), 2: {"duplicate_of": 1}})
+        assert [c["title"] for c in result["comments"]] == ["Window is shifted again"]
+
+    def test_only_an_earlier_finding_can_be_the_original(self):
+        result = self.comments(lambda path, numbers: {1: {"duplicate_of": 2}})
+        assert len(result["comments"]) == 2
+
+    def test_nonsense_references_are_ignored(self):
+        for said in ({2: {"duplicate_of": 2}}, {2: {"duplicate_of": 9}}, {2: {"duplicate_of": "banana"}}, {2: {"duplicate_of": 0}}):
+            assert len(self.comments(lambda path, numbers, said=said: said)["comments"]) == 2
+
+    def test_a_finding_an_existing_comment_already_makes_is_marked_whatever_line_it_is_on(self):
+        threads = [thread(REPORT, 3, "The window should not be shifted", status="active", author="Alex")]
+        result = self.comments(lambda path, numbers: {1: {"already_raised_by": "E1"}}, threads, {REPORT: [finding(17, "Window is shifted")]})
+        comment = result["comments"][0]
+        assert comment["existing_thread"] == "Already raised by Alex (open)" and comment["existing_status"] == "active"
+
+    def test_a_general_comment_counts_too_and_a_resolved_one_does_not_count_toward_the_verdict(self):
+        result = self.comments(lambda path, numbers: {1: {"already_raised_by": "E1"}}, [thread(None, None, "The window is wrong", status="fixed")], {REPORT: [finding(17, "Window is shifted")]})
+        assert result["comments"][0]["existing_thread"] == "Already raised by Sam Reviewer (resolved)"
+        assert result["verdict"] == "APPROVED"
+
+    def test_a_comment_number_that_does_not_exist_is_ignored(self):
+        for said in ("E9", "E0", "banana", 7, None):
+            result = self.comments(lambda path, numbers, said=said: {1: {"already_raised_by": said}}, [thread(REPORT, 3, "x")], {REPORT: [finding(17, "Window is shifted")]})
+            assert result["comments"][0]["existing_thread"] is None
+
+    def test_a_comment_on_the_same_lines_is_still_a_match_without_the_second_check(self):
+        model = FakePrModel({REPORT: [finding(17, "Division by zero")]}, holds=lambda path, numbers: RuntimeError("down"))
+        result, _, _ = run(FakeAdo(threads=[thread(REPORT, 16, "Guard against empty lists")]), model)
+        assert result["comments"][0]["existing_thread"] == "Already raised by Sam Reviewer (resolved)" and result["comments"][0]["verified"] is None
 
 
 class TestNothingIsMadeUp:

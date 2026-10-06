@@ -28,6 +28,9 @@ MAX_SPAN = 40
 WORKERS = 5
 MAX_FILE_BYTES = 200_000
 MAX_EXAMINED = 100  # files looked at in one review, whether or not they turn out to be reviewable
+MAX_DESCRIPTION_CHARS = 8000  # of the pull request description, after the checklist lines are taken out
+MAX_FILE_COMMENTS = 12  # existing comments on a file that the reviewer is told about
+MAX_GENERAL_COMMENTS = 10  # existing comments on the pull request as a whole
 REVIEW_BUDGET_SECONDS = 170  # Azure App Service ends a request after 230 s: a slow model gives a partial review, not a timeout
 CATEGORIES = ("correctness", "security", "performance", "maintainability", "test_coverage")
 SEVERITIES = ("critical", "warning", "suggestion")
@@ -88,6 +91,9 @@ Rules:
 - "severity": "critical" = a defect, security hole or data loss that will happen; "warning" = a likely bug or a real risk with a concrete failing case; "suggestion" = an improvement worth making. Never write praise.
 - "category": correctness | security | performance | maintainability | test_coverage.
 - "suggestion_code": only when you can give the exact replacement for lines "line" to "end_line": the code that should replace them, complete and valid for the file's language, without diff markers or line numbers. Otherwise null.
+- Every finding must show a concrete case: the input or situation, and what goes wrong. Do not write "could", "may" or "might" in place of a case; if you cannot show one, leave the finding out.
+- If the pull request description, a comment in the code, a name in the code or the alert's own description says a behaviour is intended, do not report it unless you can show a concrete case where it gives a wrong result.
+- Report each problem once. If the same problem appears on several lines, write one finding (use end_line, or name the other lines in the text), not one per line.
 - Returning no findings is fine, and often right. Do not invent findings to fill space.
 
 {guide}
@@ -96,9 +102,13 @@ Answer with JSON only: {{"purpose": "one sentence: what this change does in this
 
 VERIFY_SYSTEM = """You check findings that another reviewer made about a changed file. The file is shown as a diff with line numbers ("+" = added or changed, "-" = removed). For each numbered finding decide whether it is really true of the code shown.
 
-Set holds to false when: the code does not do what the finding says; the finding depends on code that is not shown; it is a preference rather than a defect with a concrete failing case; or the suggested replacement would not do what the finding says or would break the code. Be strict: a finding that cannot be shown from the code in front of you does not hold.
+You are also given the author's description of the change and the comments people already made. Use them.
 
-Answer with JSON only: {"findings": [{"number": 1, "holds": true, "reason": "one short sentence"}]}"""
+Set holds to false when: the code does not do what the finding says; the finding depends on code that is not shown; it is a preference rather than a defect with a concrete failing case; the suggested replacement would not do what the finding says or would break the code; the finding only says that something could, may or might go wrong, without showing a concrete input or situation in the code; or the description, a comment in the code or the alert's own description says the behaviour is intended and the finding does not show a case where it gives a wrong result. Be strict: a finding that cannot be shown from the code in front of you does not hold.
+
+Also set duplicate_of to the number of an EARLIER finding that describes the same problem (even on a different line), otherwise null. Set already_raised_by to the E-number (for example "E2") of an existing comment that already makes the same point, whatever line it is on, otherwise null.
+
+Answer with JSON only: {"findings": [{"number": 1, "holds": true, "reason": "one short sentence", "duplicate_of": null, "already_raised_by": null}]}"""
 
 DESCRIPTION_SYSTEM = """You compare the description of a pull request with what the pull request changes. You get the description and, for each changed file, one sentence about what changed in it.
 
@@ -158,7 +168,26 @@ def _holds(value: Any) -> bool:
     return bool(value)
 
 
+# ---------------------------------------------------------------- the author's explanation
+
+_CHECKBOX_LINE = re.compile(r"^[ \t]*[-*][ \t]*\[[ xX]\].*$", re.MULTILINE)
+
+
+def clean_description(text: str | None, limit: int = MAX_DESCRIPTION_CHARS) -> str:
+    """The author's explanation of the change. The checklist lines (which the code reads itself), images and HTML comments are taken out so
+    that the words that explain the change fit; what is still too long is cut at the end and says so."""
+    body = re.sub(r"<!--.*?-->", "", text or "", flags=re.DOTALL)
+    body = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", body)
+    body = _CHECKBOX_LINE.sub("", body)
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    return body if len(body) <= limit else body[:limit].rstrip() + "\n... (the rest of the description is cut)"
+
+
 # ---------------------------------------------------------------- existing comments
+
+def _plain(content: Any) -> str:
+    return _text(re.sub(r"!\[[^\]]*\]\([^)]*\)", "[image]", str(content or "")), 300)
+
 
 def thread_summaries(threads: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     """The comments people already made: what, where, by whom, and whether it is resolved. System messages are left out."""
@@ -172,27 +201,49 @@ def thread_summaries(threads: list[dict[str, Any]] | None) -> list[dict[str, Any
         context = thread.get("threadContext") or {}
         start = context.get("rightFileStart") or context.get("leftFileStart") or {}
         end = context.get("rightFileEnd") or context.get("leftFileEnd") or start
-        text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "[image]", comments[0].get("content") or "")
+        reply = comments[-1] if len(comments) > 1 else None  # the last word in the discussion, for example "will be done in a later work item"
         found.append({
             "path": (context.get("filePath") or "").lstrip("/"),
             "line": _int(start.get("line")), "end": _int(end.get("line")) or _int(start.get("line")),
             "status": thread.get("status") or "active",
             "author": ((comments[0].get("author") or {}).get("displayName") or "a reviewer"),
-            "text": _text(text, 300),
+            "text": _plain(comments[0].get("content")),
+            "reply": _plain(reply.get("content"))[:200] if reply else "",
+            "reply_author": ((reply.get("author") or {}).get("displayName") or "someone") if reply else "",
         })
     return found
 
 
-def _threads_for(summaries: list[dict[str, Any]], path: str) -> list[dict[str, Any]]:
-    return [t for t in summaries if t["path"] == path and t["line"] is not None]
+def context_threads(summaries: list[dict[str, Any]], path: str) -> list[dict[str, Any]]:
+    """What the reviewer is told people already said: the comments on this file, then the comments on the pull request as a whole."""
+    on_file = [{**t, "general": False} for t in summaries if t["path"] == path][:MAX_FILE_COMMENTS]
+    general = [{**t, "general": True} for t in summaries if not t["path"]][:MAX_GENERAL_COMMENTS]
+    return on_file + general
+
+
+def comments_block(existing: list[dict[str, Any]]) -> str:
+    """The existing comments as numbered lines (E1, E2, ...) so the second check can say which one a finding repeats."""
+    lines = []
+    for number, t in enumerate(existing, 1):
+        where = "(on the pull request as a whole)" if t["general"] else f"line {t['line']}" if t["line"] else "(on the file)"
+        reply = f" | last reply from {t['reply_author']}: {t['reply']}" if t.get("reply") else ""
+        lines.append(f"E{number}: {where} [{STATUS_WORDS.get(t['status'], t['status'])}] {t['author']}: {t['text']}{reply}")
+    return "\n".join(lines) or "(none)"
 
 
 def _existing_for(finding: dict[str, Any], threads: list[dict[str, Any]]) -> dict[str, Any] | None:
     first, last = finding["line_number"], finding["end_line"] or finding["line_number"]
     for thread in threads:
+        if thread["general"] or thread["line"] is None:
+            continue
         if thread["line"] <= last + 2 and (thread["end"] or thread["line"]) >= first - 2:
             return thread
     return None
+
+
+def _mark_existing(finding: dict[str, Any], thread: dict[str, Any]) -> None:
+    finding["existing_status"] = thread["status"]
+    finding["existing_thread"] = f"Already raised by {thread['author']} ({STATUS_WORDS.get(thread['status'], thread['status'])})"
 
 
 # ---------------------------------------------------------------- checking the findings
@@ -242,35 +293,64 @@ def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list
     return kept, removed
 
 
-def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
-    """A second, sceptical read of each finding against the code. Findings it cannot confirm are removed; if the check cannot run they stay, marked unchecked."""
+def _number(value: Any) -> int | None:
+    """3 for 3, "3" or "E3"; None for anything else."""
+    if value is None or isinstance(value, bool) or value == "":  # not `value in (False, True)`: 1 == True
+        return None
+    found = re.search(r"\d+", str(value))
+    return int(found.group()) if found else None
+
+
+def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], pr: dict[str, Any] | None = None,
+                    existing: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """A second, sceptical read of each finding against the code, the author's description and the comments already made. Findings it cannot
+    confirm, and findings that repeat an earlier one, are removed; one that an existing comment already makes is marked as such. If the check
+    cannot run the findings stay, marked unchecked."""
     if not findings:
         return findings, []
+    pr, existing = pr or {}, existing or []
     lines = []
     for number, f in enumerate(findings, 1):
         where = f"line {f['line_number']}" + (f"-{f['end_line']}" if f["end_line"] else "")
         lines.append(f"{number}. {where}: {f['title']}. {f['comment']}" + (f"\n   Suggested replacement:\n{f['suggestion_code']}" if f["suggestion_code"] else ""))
     alerts = f"\n\nThe alert rules, read from the template:\n{view.extra}" if view.extra else ""
-    user = f"File: {view.path} ({view.language})\n\nFindings to check:\n" + "\n".join(lines) + alerts + f"\n\nThe file:\n\n{view.shown}"
+    why = f"Why the author made this change (the pull request title and description):\n{pr.get('title', '')}\n{pr.get('description') or '(no description)'}\n\n"
+    user = (f"File: {view.path} ({view.language})\n\n{why}Comments people already made:\n{comments_block(existing)}\n\n"
+            "Findings to check:\n" + "\n".join(lines) + alerts + f"\n\nThe file:\n\n{view.shown}")
     try:
         answer = with_retry(lambda: chat_json(model, VERIFY_SYSTEM, user, temperature=0))
     except Exception as exc:
         logger.warning("Second check of the findings in %s failed: %s", view.path, type(exc).__name__)
         return findings, []
-    verdicts: dict[int, tuple[bool, str]] = {}
+    verdicts: dict[int, dict[str, Any]] = {}
     for entry in answer.get("findings") if isinstance(answer.get("findings"), list) else []:
         if isinstance(entry, dict) and _int(entry.get("number")) is not None:
-            verdicts[_int(entry["number"])] = (_holds(entry.get("holds")), _text(entry.get("reason"), 200))
-    kept, removed = [], []
+            verdicts[_int(entry["number"])] = {"holds": _holds(entry.get("holds")), "reason": _text(entry.get("reason"), 200),
+                                              "duplicate_of": _number(entry.get("duplicate_of")), "raised": _number(entry.get("already_raised_by"))}
+    kept: list[dict[str, Any]] = []
+    removed: list[tuple[str, str]] = []
+    kept_by_number: dict[int, dict[str, Any]] = {}
     for number, f in enumerate(findings, 1):
         verdict = verdicts.get(number)
         if verdict is None:
             kept.append(f)
-        elif verdict[0]:
-            f["verified"] = True
-            kept.append(f)
-        else:
-            removed.append((f["title"], "it did not hold on a second check" + (f": {verdict[1]}" if verdict[1] else "")))
+            kept_by_number[number] = f
+            continue
+        if not verdict["holds"]:
+            removed.append((f["title"], "it did not hold on a second check" + (f": {verdict['reason']}" if verdict["reason"] else "")))
+            continue
+        original = kept_by_number.get(verdict["duplicate_of"] or 0) if (verdict["duplicate_of"] or 0) < number else None  # only an earlier finding that was kept
+        if original is not None:
+            removed.append((f["title"], "it repeats another finding"))
+            where = f"line {f['line_number']}"
+            if where not in original["comment"]:
+                original["comment"] += f" The same applies at {where}."
+            continue
+        f["verified"] = True
+        if verdict["raised"] and 1 <= verdict["raised"] <= len(existing):
+            _mark_existing(f, existing[verdict["raised"] - 1])
+        kept.append(f)
+        kept_by_number[number] = f
     return kept, removed
 
 
@@ -279,27 +359,26 @@ def file_prompt(view: FileView, pr: dict[str, Any], existing: list[dict[str, Any
         shown = "the whole file"
     else:
         shown = "only the changed parts, with the lines around them" + ("; some changed parts are left out because the file is large" if view.omitted_hunks else "")
-    comments = "\n".join(f"- line {t['line']} [{STATUS_WORDS.get(t['status'], t['status'])}] {t['author']}: {t['text']}" for t in existing[:12]) or "(none)"
+    comments = comments_block(existing)
     alerts = f"What the alert rules in this template are, and what changed in them:\n{view.extra}\n\n" if view.extra else ""
     return (f"File: {view.path}\nLanguage: {view.language}\nChange: {view.change_type} (+{view.added_count} -{view.removed_count})\n"
-            f"Pull request title: {pr['title']}\nPull request description (start): {pr['description'][:1200] or '(none)'}\n\n"
-            f"Existing comments on this file (do not repeat them):\n{comments}\n\n{alerts}The file is shown as {shown}:\n\n{view.shown}")
+            f"Pull request title: {pr['title']}\nPull request description (the author's explanation of the change):\n{pr['description'] or '(none)'}\n\n"
+            f"Comments people already made on this file and on the pull request (do not repeat them):\n{comments}\n\n{alerts}The file is shown as {shown}:\n\n{view.shown}")
 
 
 def review_file(model: Any, view: FileView, pr: dict[str, Any], threads: list[dict[str, Any]]) -> dict[str, Any]:
     """Review one file: ask, check each finding in code, check again with a second call, and note what people already said."""
-    existing = _threads_for(threads, view.path)
+    existing = context_threads(threads, view.path)
     system = FILE_SYSTEM.format(guide=GUIDES.get(view.language, COMMON_GUIDE))
     answer = with_retry(lambda: chat_json(model, system, file_prompt(view, pr, existing), temperature=0.1))
     findings, removed = clean_findings(answer.get("findings"), view)
     overflow = max(0, len(findings) - MAX_FINDINGS_PER_FILE)
     findings = findings[:MAX_FINDINGS_PER_FILE]
-    findings, rejected = verify_findings(model, view, findings)
+    findings, rejected = verify_findings(model, view, findings, pr, existing)
     for finding in findings:
-        thread = _existing_for(finding, existing)
+        thread = _existing_for(finding, existing)  # a comment on the same lines is a match whatever the second check said
         if thread:
-            finding["existing_status"] = thread["status"]
-            finding["existing_thread"] = f"Already raised by {thread['author']} ({STATUS_WORDS.get(thread['status'], thread['status'])})"
+            _mark_existing(finding, thread)
     return {"purpose": _text(answer.get("purpose"), 200), "findings": findings, "removed": removed, "rejected": rejected, "overflow": overflow}
 
 
@@ -395,7 +474,7 @@ class PullRequestReviewService:
             raise ReviewFailed("This pull request has no file changes to review.", 422)
 
         description = pr.get("description") or ""
-        context = {"title": pr.get("title") or f"Pull request {pull_request_id}", "description": description}
+        context = {"title": pr.get("title") or f"Pull request {pull_request_id}", "description": clean_description(description)}
         threads = thread_summaries(self._optional(notes, "The existing comments", lambda: self.ado.get_pull_request_threads(project, repository_id, pull_request_id)))
         work_items = self._optional(notes, "The linked work items", lambda: [str(w.get("id")) for w in self.ado.get_pull_request_work_items(project, repository_id, pull_request_id)])
         build_check = self._build_check(project, pr, description)
@@ -418,7 +497,8 @@ class PullRequestReviewService:
             row.update(status="reviewed", findings=len(result["findings"]), purpose=result["purpose"] or None)
             comments.extend(result["findings"])
             for _, reason in result["removed"] + result["rejected"]:
-                key = "pointed at lines this pull request did not change" if "did not change" in reason else "did not hold on a second check" if "second check" in reason else "were malformed"
+                key = ("pointed at lines this pull request did not change" if "did not change" in reason else "did not hold on a second check" if "second check" in reason
+                       else "repeated another finding" if "repeats" in reason else "were malformed")
                 removed_total[key] = removed_total.get(key, 0) + 1
             for title, reason in result["rejected"]:
                 detail = reason.split(": ", 1)[1] if ": " in reason else ""
@@ -536,9 +616,10 @@ class PullRequestReviewService:
 
     def _description_gaps(self, files: list[dict[str, Any]], description: str) -> list[str]:
         purposes = [f"{f['path']}: {f['purpose']}" for f in files if f["status"] == "reviewed" and f["purpose"]]
-        if not description.strip() or not purposes:
+        body = clean_description(description)
+        if not body or not purposes:
             return []
-        user = f"Pull request description:\n{description[:3000]}\n\nChanged files:\n" + "\n".join(purposes)
+        user = f"Pull request description:\n{body}\n\nChanged files:\n" + "\n".join(purposes)
         try:
             answer = with_retry(lambda: chat_json(self.model, DESCRIPTION_SYSTEM, user, temperature=0))
         except Exception as exc:

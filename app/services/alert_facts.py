@@ -349,11 +349,59 @@ def _int(value: Any) -> int | None:
         return None
 
 
+def _flag(value: Any) -> Any:
+    """True or False for a flag written as a boolean or as the text "true" / "false" (the 2018-04-16 format writes text); anything else as it is."""
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    return value
+
+
+def _minutes(value: Any) -> str | None:
+    minutes = _int(value)
+    return f"PT{minutes}M" if minutes else None
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # One alert resource -> facts
 # ---------------------------------------------------------------------------------------------------------------------
 
+def _legacy_log_alert(resource: dict[str, Any], props: dict[str, Any]) -> dict[str, Any]:
+    """A log alert in the older 2018-04-16 format, as Microsoft documents it: the query and its data source in `source`, the timing in
+    `schedule`, and the severity, action group, threshold and throttling in `action`."""
+    source = props.get("source") if isinstance(props.get("source"), dict) else {}
+    schedule = props.get("schedule") if isinstance(props.get("schedule"), dict) else {}
+    action = props.get("action") if isinstance(props.get("action"), dict) else {}
+    trigger = action.get("trigger") if isinstance(action.get("trigger"), dict) else {}
+    metric = trigger.get("metricTrigger") if isinstance(trigger.get("metricTrigger"), dict) else {}
+    azns = action.get("aznsAction") if isinstance(action.get("aznsAction"), dict) else {}
+    scopes = [str(s) for s in [source.get("dataSourceId"), *(source.get("authorizedResources") or [])] if s]
+    op, threshold = _operator(trigger.get("thresholdOperator")), trigger.get("threshold")
+    sentence = f"the number of rows returned by the alert query is {op} {threshold}" if threshold is not None and op else "the number of rows returned by the alert query meets the alert condition"
+    if metric:
+        kind = str(metric.get("metricTriggerType") or "").lower()
+        sentence += f", with a metric trigger on column {metric.get('metricColumn') or 'the metric column'} ({kind + ': ' if kind else ''}{_operator(metric.get('thresholdOperator'))} {metric.get('threshold')})"
+    return {
+        "type": "log", "source": "Log", "arm_type": "Microsoft.Insights/scheduledQueryRules", "kind": "LogAlert", "legacy": True,
+        "api_version": resource.get("apiVersion"), "resource_name": resource.get("name"),
+        "name": props.get("displayName") or resource.get("name"), "description": props.get("description"),
+        "severity": _int(action.get("severity")), "enabled": _flag(props.get("enabled")),
+        "evaluation_frequency": _minutes(schedule.get("frequencyInMinutes")), "window_size": _minutes(schedule.get("timeWindowInMinutes")),
+        "scopes": scopes, "target_resource_types": [], "product": _product_of([], scopes),
+        "query": source.get("query"), "condition_sentence": sentence,
+        "condition": {
+            "time_aggregation": "Count", "operator": trigger.get("thresholdOperator"), "threshold": threshold,
+            "metric_measure_column": metric.get("metricColumn"), "resource_id_column": None, "dimensions": [], "failing_periods": None,
+            "criterion_type": None, "alert_sensitivity": None, "extra_conditions": 0,
+        },
+        "action_groups": _names(azns.get("actionGroup")),
+        "auto_mitigate": _flag(props.get("autoMitigate")), "mute_actions_duration": None, "override_query_time_range": None,
+        "throttle_minutes": _int(action.get("throttlingInMin")),
+    }
+
+
 def _log_alert(resource: dict[str, Any], props: dict[str, Any]) -> dict[str, Any]:
+    if "criteria" not in props and (isinstance(props.get("source"), dict) or isinstance(props.get("schedule"), dict)):
+        return _legacy_log_alert(resource, props)
     criteria = [c for c in ((props.get("criteria") or {}).get("allOf") or []) if isinstance(c, dict)]
     cond = criteria[0] if criteria else {}
     scopes = [str(s) for s in props.get("scopes") or []]
@@ -377,7 +425,7 @@ def _log_alert(resource: dict[str, Any], props: dict[str, Any]) -> dict[str, Any
         "type": "log", "source": "Log", "arm_type": "Microsoft.Insights/scheduledQueryRules", "kind": resource.get("kind") or "LogAlert",
         "api_version": resource.get("apiVersion"), "resource_name": resource.get("name"),
         "name": props.get("displayName") or resource.get("name"), "description": props.get("description"),
-        "severity": _int(props.get("severity")), "enabled": props.get("enabled"),
+        "severity": _int(props.get("severity")), "enabled": _flag(props.get("enabled")),
         "evaluation_frequency": props.get("evaluationFrequency"), "window_size": props.get("windowSize"),
         "scopes": scopes, "target_resource_types": types, "product": _product_of(types, scopes),
         "query": cond.get("query"), "condition_sentence": sentence,
@@ -388,7 +436,7 @@ def _log_alert(resource: dict[str, Any], props: dict[str, Any]) -> dict[str, Any
             "criterion_type": cond.get("criterionType"), "alert_sensitivity": cond.get("alertSensitivity"), "extra_conditions": max(0, len(criteria) - 1),
         },
         "action_groups": _names((props.get("actions") or {}).get("actionGroups")),
-        "auto_mitigate": props.get("autoMitigate"), "mute_actions_duration": props.get("muteActionsDuration"),
+        "auto_mitigate": _flag(props.get("autoMitigate")), "mute_actions_duration": props.get("muteActionsDuration"),
         "override_query_time_range": props.get("overrideQueryTimeRange"),
     }
 
@@ -428,12 +476,12 @@ def _metric_alert(resource: dict[str, Any], props: dict[str, Any]) -> dict[str, 
     return {
         "type": "metric", "source": "Metric", "arm_type": "Microsoft.Insights/metricAlerts", "kind": odata.rsplit(".", 1)[-1] or None,
         "api_version": resource.get("apiVersion"), "resource_name": resource.get("name"), "name": resource.get("name"),
-        "description": props.get("description"), "severity": _int(props.get("severity")), "enabled": props.get("enabled"),
+        "description": props.get("description"), "severity": _int(props.get("severity")), "enabled": _flag(props.get("enabled")),
         "evaluation_frequency": props.get("evaluationFrequency"), "window_size": props.get("windowSize"),
         "scopes": scopes, "target_resource_types": types, "product": _product_of(types, scopes), "query": None,
         "condition_sentence": sentence, "condition": {"criteria": items, "odata_type": odata or None},
         "action_groups": _names([a.get("actionGroupId") for a in props.get("actions") or [] if isinstance(a, dict)]),
-        "auto_mitigate": props.get("autoMitigate"), "mute_actions_duration": None, "override_query_time_range": None,
+        "auto_mitigate": _flag(props.get("autoMitigate")), "mute_actions_duration": None, "override_query_time_range": None,
         "target_resource_region": props.get("targetResourceRegion"),
     }
 
