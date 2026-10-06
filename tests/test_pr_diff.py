@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services.pr_diff import build_view, classify, is_changelog_path, is_test_path, priority, suggestable
+from app.services.pr_diff import MAX_LINES_TO_COMPARE, _opcodes, build_view, classify, is_changelog_path, is_test_path, priority, suggestable
 
 
 class TestClassify:
@@ -16,12 +16,16 @@ class TestClassify:
         assert classify(path, "edit") == (language, None)
 
     @pytest.mark.parametrize("path,reason", [
-        ("README.md", "documentation"), ("notes.txt", "documentation"), ("data/x.csv", "data or binary file"), ("logo.png", "data or binary file"),
+        ("CHANGELOG.md", "documentation (a changelog)"), ("docs/release-notes.md", "documentation (a changelog)"), ("notes.txt", "documentation"), ("data/x.csv", "data or binary file"), ("logo.png", "data or binary file"),
         ("package-lock.json", "lock file, generated or minified"), ("poetry.lock", "lock file, generated or minified"),
         ("dist/app.min.js", "lock file, generated or minified"), ("api/x_pb2.py", "lock file, generated or minified"), ("Makefile", "not a language this review covers"),
     ])
     def test_files_that_are_not(self, path, reason):
         assert classify(path, "edit") == (None, reason)
+
+    @pytest.mark.parametrize("path", ["README.md", "docs/guide.md", "notes.MARKDOWN"])
+    def test_markdown_is_read_but_a_changelog_is_not(self, path):
+        assert classify(path, "edit") == ("Markdown", None)
 
     def test_json_lock_files_are_still_skipped(self):
         assert classify("package-lock.json", "edit") == (None, "lock file, generated or minified")
@@ -49,8 +53,8 @@ class TestPaths:
         assert not is_changelog_path("tools/changelog_helper.py")
 
     def test_python_and_powershell_come_first_and_tests_after_the_code(self):
-        order = sorted([("YAML", "ci.yml"), ("Python", "tests/test_a.py"), ("PowerShell", "a.ps1"), ("Python", "app/b.py"), ("ARM template", "alerts/z.json")], key=lambda p: priority(*p))
-        assert [p[1] for p in order] == ["a.ps1", "alerts/z.json", "app/b.py", "tests/test_a.py", "ci.yml"]
+        order = sorted([("YAML", "ci.yml"), ("Markdown", "README.md"), ("Python", "tests/test_a.py"), ("PowerShell", "a.ps1"), ("Python", "app/b.py"), ("ARM template", "alerts/z.json")], key=lambda p: priority(*p))
+        assert [p[1] for p in order] == ["a.ps1", "alerts/z.json", "app/b.py", "tests/test_a.py", "ci.yml", "README.md"]  # Markdown last
 
 
 OLD = "alpha\nbeta\ngamma\ndelta\n"
@@ -90,8 +94,58 @@ class TestBuildView:
         assert not build_view("a.py", "Python", "edit", OLD, OLD).has_changes
 
     def test_a_file_that_is_too_long_to_compare_is_refused(self):
-        with pytest.raises(ValueError, match="4000"):
-            build_view("a.py", "Python", "edit", "", "x\n" * 4001)
+        with pytest.raises(ValueError, match=str(MAX_LINES_TO_COMPARE)):
+            build_view("a.py", "Python", "edit", "", "x\n" * (MAX_LINES_TO_COMPARE + 1))
+
+    def test_a_long_file_with_two_small_changes_is_compared_quickly_and_exactly(self):
+        old = "".join(f"line {n}\n" for n in range(1, 10001))
+        new = old.replace("line 10\n", "CHANGED 10\n").replace("line 9990\n", "CHANGED 9990\n")
+        view = build_view("a.py", "Python", "edit", old, new)
+        assert view.added == {10, 9990} and view.removed_count == 2
+
+    def test_the_quick_comparison_agrees_with_difflib_on_a_mixed_change(self):
+        import difflib
+        old = [f"l{n}" for n in range(60)]
+        new = old[:5] + ["new a", "new b"] + old[8:30] + old[32:] + ["tail"]
+        expected = [(t, i1, i2, j1, j2) for t, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes() if t != "equal"]
+        assert [op for op in _opcodes(old, new) if op[0] != "equal"] == expected
+
+    def test_only_the_changed_middle_is_compared(self, monkeypatch):
+        import difflib
+        compared = []
+
+        class Spy(difflib.SequenceMatcher):
+            def __init__(self, isjunk=None, a="", b="", autojunk=True):
+                compared.append((len(a), len(b), autojunk))
+                super().__init__(isjunk, a, b, autojunk)
+
+        monkeypatch.setattr("app.services.pr_diff.difflib.SequenceMatcher", Spy)
+        old = [f"line {n}" for n in range(10000)]
+        new = old[:5000] + ["CHANGED"] + old[5001:]
+        assert [op[0] for op in _opcodes(old, new)] == ["equal", "replace", "equal"]
+        assert compared == [(1, 1, False)]  # not 10,000 lines against 10,000
+
+    def test_a_huge_changed_middle_trades_exactness_for_speed(self, monkeypatch):
+        import difflib
+        compared = []
+
+        class Spy(difflib.SequenceMatcher):
+            def __init__(self, isjunk=None, a="", b="", autojunk=True):
+                compared.append((len(a), len(b), autojunk))
+                super().__init__(isjunk, a, b, autojunk)
+
+        monkeypatch.setattr("app.services.pr_diff.difflib.SequenceMatcher", Spy)
+        _opcodes([f"old {n}" for n in range(3000)], [f"new {n}" for n in range(3000)])
+        _opcodes([f"old {n}" for n in range(300)], [f"new {n}" for n in range(300)])
+        assert compared == [(3000, 3000, True), (300, 300, False)]
+
+    def test_identical_files_have_only_an_equal_part(self):
+        assert [op[0] for op in _opcodes(["a", "b"], ["a", "b"])] == ["equal"]
+        assert _opcodes([], []) == []
+
+    def test_a_file_that_was_emptied_or_filled(self):
+        assert [op[0] for op in _opcodes(["a", "b"], [])] == ["delete"]
+        assert [op[0] for op in _opcodes([], ["a", "b"])] == ["insert"]
 
     def test_a_long_line_is_cut(self):
         view = build_view("a.py", "Python", "add", "", "x" * 500 + "\n")

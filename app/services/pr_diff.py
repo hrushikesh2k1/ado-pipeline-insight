@@ -8,6 +8,7 @@ from __future__ import annotations
 import difflib
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.services.pr_arm import ARM_LANGUAGE
 
@@ -17,16 +18,17 @@ LANGUAGES = {
     ".py": "Python", ".ps1": "PowerShell", ".psm1": "PowerShell", ".psd1": "PowerShell", ".json": ARM_LANGUAGE, ".kql": "KQL",
     ".sh": "Shell", ".sql": "SQL", ".yml": "YAML", ".yaml": "YAML", ".bicep": "Bicep", ".tf": "Terraform",
     ".ts": "TypeScript", ".tsx": "TypeScript (React)", ".js": "JavaScript", ".jsx": "JavaScript (React)",
-    ".cs": "C#", ".go": "Go", ".java": "Java",
+    ".cs": "C#", ".go": "Go", ".java": "Java", ".md": "Markdown", ".markdown": "Markdown",
 }
 FIRST_LANGUAGES = ("Python", "PowerShell", ARM_LANGUAGE)  # reviewed first when a pull request has more files than can be reviewed
 
 LOCK_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "pipfile.lock", "composer.lock", "gemfile.lock", "cargo.lock", "go.sum", "packages.lock.json"}
-DOCUMENT_EXTENSIONS = {".md", ".markdown", ".txt", ".rst"}
+DOCUMENT_EXTENSIONS = {".txt", ".rst"}
 DATA_EXTENSIONS = {".csv", ".tsv", ".xml", ".toml", ".ini", ".cfg", ".conf", ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".xlsx", ".docx", ".pptx", ".dll", ".exe", ".pyc", ".whl"}
 GENERATED = re.compile(r"(\.min\.(js|css)$|\.map$|\.designer\.cs$|\.g\.cs$|_pb2\.py$|\.generated\.)", re.IGNORECASE)
 
-MAX_LINES_TO_COMPARE = 4000
+MAX_LINES_TO_COMPARE = 12000
+MAX_MATCH_CELLS = 4_000_000  # lines in the changed middle of the old file times those of the new: above this the comparison trades exactness for speed
 LINE_WIDTH = 240
 
 _TEST_NAME = re.compile(r"(^|/)(test_[^/]*\.py|[^/]*_test\.py|[^/]*\.tests?\.ps1|[^/]*\.(test|spec)\.[jt]sx?|[^/]*tests?\.cs)$", re.IGNORECASE)
@@ -47,6 +49,8 @@ def classify(path: str, change_type: str) -> tuple[str | None, str | None]:
         return None, "deleted file"
     if name.lower() in LOCK_FILES or GENERATED.search(path):
         return None, "lock file, generated or minified"
+    if ext in (".md", ".markdown") and is_changelog_path(path):
+        return None, "documentation (a changelog)"
     if ext in LANGUAGES:
         return LANGUAGES[ext], None
     if ext in DOCUMENT_EXTENSIONS:
@@ -65,8 +69,8 @@ def is_changelog_path(path: str) -> bool:
 
 
 def priority(language: str, path: str) -> tuple[int, int, str]:
-    """Python and PowerShell first, then the other languages; tests after the code they test."""
-    return (0 if language in FIRST_LANGUAGES else 1, 1 if is_test_path(path) else 0, path.lower())
+    """Python, PowerShell and alert templates first, then the other languages, then Markdown; tests after the code they test."""
+    return (0 if language in FIRST_LANGUAGES else 2 if language == "Markdown" else 1, 1 if is_test_path(path) else 0, path.lower())
 
 
 @dataclass
@@ -92,6 +96,9 @@ class FileView:
     omitted_hunks: int = 0
     shown: str = ""
     extra: str = ""  # what else the reviewer is told about this file (for an alert template: the alerts, in words)
+    facts: str = ""  # facts about the project the file belongs to, read from its project files (for C#: the target framework and language version)
+    old_text: Any = None  # the two versions as the client read them (they carry encoding facts: see core.ado_client.DecodedText)
+    new_text: Any = None
 
     @property
     def new_line_count(self) -> int:
@@ -112,6 +119,28 @@ def render_row(row: Row, width: int = LINE_WIDTH) -> str:
     return f"{'+' if row.kind == 'add' else ' '} {row.new:>5} | {_clip(row.text, width)}"
 
 
+def _opcodes(old: list[str], new: list[str]) -> list[tuple[str, int, int, int, int]]:
+    """difflib's opcodes, after the lines the two versions share at the start and at the end are set aside: a change is usually a few places in a
+    long file, and comparing only what lies between them is much faster. A very large changed middle is compared with difflib's junk heuristic."""
+    limit = min(len(old), len(new))
+    prefix = 0
+    while prefix < limit and old[prefix] == new[prefix]:
+        prefix += 1
+    suffix = 0
+    while suffix < limit - prefix and old[len(old) - 1 - suffix] == new[len(new) - 1 - suffix]:
+        suffix += 1
+    middle_old, middle_new = old[prefix:len(old) - suffix], new[prefix:len(new) - suffix]
+    ops: list[tuple[str, int, int, int, int]] = []
+    if prefix:
+        ops.append(("equal", 0, prefix, 0, prefix))
+    if middle_old or middle_new:
+        matcher = difflib.SequenceMatcher(None, middle_old, middle_new, autojunk=len(middle_old) * len(middle_new) > MAX_MATCH_CELLS)
+        ops.extend((tag, i1 + prefix, i2 + prefix, j1 + prefix, j2 + prefix) for tag, i1, i2, j1, j2 in matcher.get_opcodes())
+    if suffix:
+        ops.append(("equal", len(old) - suffix, len(old), len(new) - suffix, len(new)))
+    return ops
+
+
 def build_view(path: str, language: str, change_type: str, old_text: str | None, new_text: str,
                whole_file_lines: int = 350, context: int = 12, max_rows: int = 900, width: int = LINE_WIDTH) -> FileView:
     """The diff of one file, with the text shown to the reviewer. Raises ValueError when a file is too long to compare."""
@@ -124,7 +153,7 @@ def build_view(path: str, language: str, change_type: str, old_text: str | None,
     added: set[int] = set()
     removed_at: set[int] = set()
     removed = 0
-    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes():
+    for tag, i1, i2, j1, j2 in _opcodes(old_lines, new_lines):
         if tag == "equal":
             rows.extend(Row("keep", j1 + k + 1, i1 + k + 1, new_lines[j1 + k]) for k in range(i2 - i1))
             continue

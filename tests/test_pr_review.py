@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services import pr_review
-from app.services.pr_diff import build_view
+from app.services.pr_diff import MAX_LINES_TO_COMPARE, build_view
 from app.services.pr_review import (
     AiUnavailable, PullRequestReviewService, ReviewFailed, clean_description, clean_findings, get_model_client, judge, summarize, thread_summaries,
 )
@@ -49,7 +49,7 @@ class TestWhichFilesAreRead:
         rows = by_path(result)
         assert (rows[REPORT]["status"], rows[REPORT]["language"]) == ("reviewed", "Python")
         assert (rows[TOTALS]["status"], rows[TOTALS]["language"]) == ("reviewed", "PowerShell")
-        assert (rows["CHANGELOG.md"]["status"], rows["CHANGELOG.md"]["reason"]) == ("skipped", "documentation")
+        assert (rows["CHANGELOG.md"]["status"], rows["CHANGELOG.md"]["reason"]) == ("skipped", "documentation (a changelog)")
         assert result["method"] == "diff-per-file" and result["posted_to_ado"] is False
         assert result["source_commit"] == "a" * 40 and result["iterations"] == 1
 
@@ -83,7 +83,7 @@ class TestWhichFilesAreRead:
         ado = FakeAdo(blobs={**FakeAdo().blobs, "new-/scripts/totals.ps1": {"reason": "too_large"}, "new-/tests/test_report.py": {"reason": "binary"}})
         result, _, _ = run(ado)
         rows = by_path(result)
-        assert rows[TOTALS]["status"] == "skipped" and "200 KB" in rows[TOTALS]["reason"]
+        assert rows[TOTALS]["status"] == "skipped" and f"{pr_review.MAX_FILE_BYTES // 1000} KB" in rows[TOTALS]["reason"]
         assert rows["tests/test_report.py"]["reason"] == "not a text file"
 
     def test_a_file_whose_earlier_version_is_missing_is_skipped(self):
@@ -96,8 +96,14 @@ class TestWhichFilesAreRead:
         assert by_path(run(ado)[0])[REPORT]["reason"] == "no change in the content"
 
     def test_a_file_that_is_too_long_to_compare_is_skipped(self):
-        ado = FakeAdo(blobs={**FakeAdo().blobs, "new-/scripts/report.py": "x = 1\n" * 4001})
+        ado = FakeAdo(blobs={**FakeAdo().blobs, "new-/scripts/report.py": "x = 1\n" * (MAX_LINES_TO_COMPARE + 1)})
         assert "too long to compare" in by_path(run(ado)[0])[REPORT]["reason"]
+
+    def test_a_long_file_is_still_reviewed_when_it_is_under_the_limit(self):
+        long_text = "x = 1\n" * 6000 + "y = 2\n"
+        ado = FakeAdo(changes=[change("/scripts/report.py")], blobs={"new-/scripts/report.py": long_text, "old-/scripts/report.py": "x = 1\n" * 6000})
+        row = by_path(run(ado)[0])[REPORT]
+        assert row["status"] == "reviewed" and row["reason"] is None
 
     def test_deleted_files_are_listed_and_not_read(self):
         ado = FakeAdo(changes=[change("/old.py", "delete"), change("/scripts/report.py")])
@@ -105,21 +111,23 @@ class TestWhichFilesAreRead:
         assert by_path(result)["old.py"]["reason"] == "deleted file"
         assert "old-/old.py" not in ado.blob_calls
 
-    def test_at_most_twenty_files_are_reviewed_and_the_rest_say_why(self):
-        names = [f"/src/m{n:02d}.py" for n in range(25)]
+    def test_at_most_the_limit_of_files_are_reviewed_and_the_rest_say_why(self):
+        limit = pr_review.MAX_FILES
+        names = [f"/src/m{n:02d}.py" for n in range(limit + 5)]
         ado = FakeAdo(changes=[change(n, "add") for n in names], blobs={f"new-{n}": "x = 1\n" for n in names})
         result, _, model = run(ado)
-        assert sum(1 for f in result["files"] if f["status"] == "reviewed") == 20
+        assert sum(1 for f in result["files"] if f["status"] == "reviewed") == limit
         skipped = [f for f in result["files"] if f["status"] == "skipped"]
-        assert len(skipped) == 5 and all("over the limit of 20" in f["reason"] for f in skipped)
-        assert len(model.calls_of("file")) == 20
+        assert len(skipped) == 5 and all(f"over the limit of {limit}" in f["reason"] for f in skipped)
+        assert len(model.calls_of("file")) == limit
 
     def test_python_and_powershell_are_reviewed_first_when_there_is_not_room_for_everything(self):
-        yaml = [f"/ci/p{n:02d}.yml" for n in range(20)]
+        limit = pr_review.MAX_FILES
+        yaml = [f"/ci/p{n:02d}.yml" for n in range(limit)]
         ado = FakeAdo(changes=[change(n, "add") for n in yaml] + [change("/tools/x.ps1", "add")], blobs={**{f"new-{n}": "a: 1\n" for n in yaml}, "new-/tools/x.ps1": "Get-Date\n"})
         rows = by_path(run(ado)[0])
         assert rows["tools/x.ps1"]["status"] == "reviewed"
-        assert rows["ci/p19.yml"]["status"] == "skipped"
+        assert rows[f"ci/p{limit - 1:02d}.yml"]["status"] == "skipped"
 
     def test_only_a_changelog_means_nothing_is_reviewed_and_the_model_is_not_asked(self):
         ado = FakeAdo(changes=[change("/CHANGELOG.md")])
@@ -152,7 +160,7 @@ class TestCleaningFindings:
         assert kept == [] and removed == [("Old code", "it pointed at lines this pull request did not change")]
 
     def test_a_range_that_touches_a_changed_line_is_kept(self):
-        kept, _ = clean_findings([grounded(13, "Range", end_line=15)], view())
+        kept, _ = clean_findings([grounded(13, "Range", end_line=15, evidence="def average(values):")], view())
         assert kept and (kept[0]["line_number"], kept[0]["end_line"]) == (13, 15)
 
     def test_a_line_that_does_not_exist_or_is_missing(self):
@@ -210,7 +218,7 @@ class TestCleaningFindings:
 
     def test_code_that_was_only_removed_can_be_commented_on_at_the_next_line(self):
         gone = build_view("a.py", "Python", "edit", "first line\nsecond line\nthird line\n", "first line\nthird line\n")
-        kept, _ = clean_findings([grounded(2, "Removed the check", evidence="third line")], gone)
+        kept, _ = clean_findings([grounded(2, "Removed the check", evidence="second line")], gone)  # it quotes the line that was removed
         assert len(kept) == 1
 
 

@@ -22,7 +22,7 @@ def to_bytes(text):
 """
 
 PY_NEW = """import json
-from typing import Any
+from typing import Any  # noqa: F401
 
 
 def load(path) -> dict:
@@ -64,6 +64,17 @@ Regression results: https://dev.azure.com/org/proj/_build/results?buildId=100&vi
 """
 
 
+def decoded(text: str, has_bom: bool = False, bad_line: int | None = None, bad_count: int = 0):
+    """File text as the client reads it, with what decoding showed (see core.ado_client.DecodedText)."""
+    from core.ado_client import DecodedText
+    value = DecodedText(text)
+    value.has_bom, value.bad_byte_line, value.bad_byte_count = has_bom, bad_line, bad_count
+    return value
+
+
+CSPROJ = "<Project Sdk=\"Microsoft.NET.Sdk.Web\">\n  <PropertyGroup>\n    <TargetFramework>{tfm}</TargetFramework>\n  </PropertyGroup>\n</Project>\n"
+
+
 def change(path: str, kind: str = "edit", new_id: str | None = None, old_id: str | None = None) -> dict[str, Any]:
     item: dict[str, Any] = {"path": path, "objectId": new_id or f"new-{path}"}
     if kind != "add":
@@ -74,8 +85,11 @@ def change(path: str, kind: str = "edit", new_id: str | None = None, old_id: str
 class FakeAdo:
     """The few calls the review makes. `blobs` maps an object id to its text; `fail` names calls that raise."""
 
-    def __init__(self, changes=None, blobs=None, threads=None, work_items=None, builds=None, description=DESCRIPTION, fail=(), iterations=1):
+    def __init__(self, changes=None, blobs=None, threads=None, work_items=None, builds=None, description=DESCRIPTION, fail=(), iterations=1, repo_files=None, tree_unreadable=False):
         self.description = description
+        self.repo_files = repo_files if repo_files is not None else {}  # the rest of the repository, for lookups
+        self.tree_unreadable = tree_unreadable
+        self.item_calls: list[str] = []
         self.changes = changes if changes is not None else [
             change("/scripts/report.py"), change("/scripts/totals.ps1", "add"), change("/CHANGELOG.md"), change("/tests/test_report.py", "add"),
         ]
@@ -128,7 +142,16 @@ class FakeAdo:
         return (None, value["reason"]) if isinstance(value, dict) else (value, None)  # {"reason": "too_large"} stands for a file that cannot be read
 
     def get_item_text(self, project, repo, path, commit, max_bytes=200_000):
-        return None, "unreadable"
+        """A file of the repository at a commit: `repo_files` maps a path (no leading slash) to its text, or to {"reason": ...} for a file that cannot be read."""
+        self.item_calls.append(path)
+        value = self.repo_files.get(path.lstrip("/"))
+        if value is None:
+            return None, "unreadable"
+        return (None, value["reason"]) if isinstance(value, dict) else (value, None)
+
+    def list_repository_files(self, project, repo, commit_id, max_items=30000):
+        self._maybe("list_files")
+        return None if self.repo_files is None or self.tree_unreadable else ["/" + p for p in self.repo_files]
 
 
 def thread(path: str | None, line: int | None, text: str, status: str = "fixed", author: str = "Sam Reviewer", system: bool = False, replies=()) -> dict[str, Any]:
@@ -161,19 +184,27 @@ def evidence_at(text: str, line: int) -> str:
 
 
 _ROW = re.compile(r"^[+ ] +(\d+) \| (.*)$", re.MULTILINE)
+SILENT = object()  # for FakePrModel(holds=...): the second check does not answer for that finding
 
 
 class FakePrModel:
     """Answers the three kinds of prompt. `findings` maps a file path to what the first call says about it (a list, or an
     Exception to raise); `holds` says which finding numbers survive the second check (default: all)."""
 
-    def __init__(self, findings: dict[str, Any] | None = None, holds: Callable[[str, list[int]], dict[int, Any]] | None = None, gaps: Any = None, purposes: dict[str, str] | None = None):
+    def __init__(self, findings: dict[str, Any] | None = None, holds: Callable[[str, list[int]], dict[int, Any]] | None = None, gaps: Any = None, purposes: dict[str, str] | None = None,
+                 lookups: dict[str, list[tuple[str, dict[str, Any]]]] | None = None, decide: Callable[[str, list[int], list[str]], dict[int, Any]] | None = None):
+        """`lookups` maps a file path to the tool calls the second check makes before it answers (a list of (tool name, arguments)); `decide(path, numbers,
+        tool results)` then says which findings hold, in place of `holds`."""
         self.deployment = "fake"
         self.findings = findings if findings is not None else {}
         self.holds = holds
         self.gaps = [] if gaps is None else gaps
         self.purposes = purposes or {}
+        self.lookups = lookups or {}
+        self.decide = decide
         self.calls: list[tuple[str, str]] = []
+        self.tools_offered: list[bool] = []  # for each second check: were the lookup tools offered?
+        self.tool_results: list[str] = []
         self._lock = threading.Lock()
         self.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=self._create)))
 
@@ -181,10 +212,18 @@ class FakePrModel:
         marker = {"file": "You review one changed file", "verify": "You check findings", "description": "You compare the description"}[kind]
         return [user for system, user in self.calls if system.startswith(marker)]
 
-    def _create(self, model, messages, temperature=0, response_format=None):
+    def system_of(self, kind: str) -> list[str]:
+        marker = {"file": "You review one changed file", "verify": "You check findings", "description": "You compare the description"}[kind]
+        return [system for system, user in self.calls if system.startswith(marker)]
+
+    def _create(self, model, messages, temperature=0, response_format=None, tools=None, tool_choice=None):
         system, user = messages[0]["content"], messages[1]["content"]
+        results = [m["content"] for m in messages if m.get("role") == "tool"]
         with self._lock:
-            self.calls.append((system, user))
+            if not results:
+                self.calls.append((system, user))
+                if system.startswith("You check findings"):
+                    self.tools_offered.append(bool(tools))
         if system.startswith("You review one changed file"):
             path = re.search(r"^File: (.+)$", user, re.M).group(1).strip()
             said = self.findings.get(path, [])
@@ -203,7 +242,14 @@ class FakePrModel:
         elif system.startswith("You check findings"):
             path = re.search(r"^File: (\S+)", user, re.M).group(1)
             numbers = [int(n) for n in re.findall(r"^(\d+)\. line", user, re.M)]
-            decided = self.holds(path, numbers) if self.holds else {}
+            wanted = self.lookups.get(path) if tools else None
+            if wanted and not results:  # the second check looks things up first
+                calls = [SimpleNamespace(id=f"call{n}", function=SimpleNamespace(name=name, arguments=json.dumps(args))) for n, (name, args) in enumerate(wanted, 1)]
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=calls))])
+            if results:
+                with self._lock:
+                    self.tool_results.extend(results)
+            decided = self.decide(path, numbers, results) if (self.decide and results) else (self.holds(path, numbers) if self.holds else {})
             if isinstance(decided, Exception):
                 raise decided
             def answer(n: int) -> dict[str, Any]:
@@ -213,7 +259,7 @@ class FakePrModel:
                 holds, reason = (said[0], said[1]) if isinstance(said, tuple) else (bool(said), "ok")
                 return {"holds": holds, "reason": reason, "duplicate_of": None, "already_raised_by": None}
 
-            body = {"findings": [{"number": n, **answer(n)} for n in numbers]}
+            body = {"findings": [{"number": n, **answer(n)} for n in numbers if not (isinstance(decided, dict) and decided.get(n) is SILENT)]}  # SILENT: the check says nothing about it
         else:
             if isinstance(self.gaps, Exception):
                 raise self.gaps

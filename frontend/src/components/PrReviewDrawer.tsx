@@ -15,7 +15,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import type { AdoPullRequest, PullRequestReviewResponse, PullRequestReviewComment } from '../types/api'
-import { QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, allCommentsAsMarkdown, commentAsMarkdown, isAboutQueries, lineLabel, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
+import { QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, STATIC_CHECK, STATIC_CHECK_TIP, allCommentsAsMarkdown, commentAsMarkdown, isAboutQueries, lineLabel, lookedAtLine, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
 import { ChecklistCard, FilesCard, NotesCard } from './PrReviewPanels'
 
 interface PrReviewDrawerProps {
@@ -357,10 +357,13 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                           {comment.existing_thread}
                         </span>
                       )}
-                      {comment.verified === true && (
+                      {comment.source === 'static' && (
+                        <span className="prChip checked" data-testid="pr-comment-static" title={STATIC_CHECK_TIP}>{STATIC_CHECK}</span>
+                      )}
+                      {comment.source !== 'static' && comment.verified === true && (
                         <span className="prChip checked" data-testid="pr-comment-checked" title={SECOND_CHECK_TIP}>{SECOND_CHECK_AGREED}</span>
                       )}
-                      {comment.verified == null && (
+                      {comment.source !== 'static' && comment.verified == null && (
                         <span className="prChip" data-testid="pr-comment-unchecked" title="The second check did not run for this finding">{SECOND_CHECK_NOT_RUN}</span>
                       )}
                       {isAboutQueries(comment.language) && (
@@ -386,6 +389,9 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                   )}
                   {comment.evidence && (
                     <div className="prCaseLine"><b>Code it relies on:</b> <code className="prEvidence">{comment.evidence}</code></div>
+                  )}
+                  {lookedAtLine(comment.checked_with) && (
+                    <div className="prCaseLine" data-testid="pr-comment-looked"><b>Second check looked at:</b> {lookedAtLine(comment.checked_with)}</div>
                   )}
 
                   {comment.suggestion_code && (

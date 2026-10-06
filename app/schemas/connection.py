@@ -106,7 +106,9 @@ class PullRequestReviewCommentSchema(BaseModel):
     evidence: str | None = None  # the code the finding relies on, quoted from the file
     existing_thread: str | None = None  # set when people already raised this in the pull request comments
     existing_status: str | None = None
-    verified: bool | None = None  # True = confirmed by a second check; None = the second check did not run
+    verified: bool | None = None  # True = confirmed by a second check; None = the second check did not run (or, for a static check, was not needed)
+    source: str | None = None  # "ai" = found by the AI and checked; "static" = found by an exact check made in code, without the AI
+    checked_with: list[str] = Field(default_factory=list)  # what the second check looked up in the repository, for example "read src/Api/Api.csproj"
 
 
 class PullRequestReviewedFile(BaseModel):
@@ -141,6 +143,23 @@ class PullRequestReviewResponseSchema(BaseModel):
     checklist: list[PullRequestChecklistCheck] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     scope_note: str = ""
+
+
+class PullRequestReviewJobError(BaseModel):
+    status_code: int
+    detail: str
+
+
+class PullRequestReviewJobSchema(BaseModel):
+    """A review running in the background: where it is, and, when it is over, the review or why there is none."""
+    job_id: str
+    status: str  # running | done | failed
+    message: str = ""
+    done: int = 0
+    total: int = 0
+    elapsed_seconds: int = 0
+    result: PullRequestReviewResponseSchema | None = None
+    error: PullRequestReviewJobError | None = None
 
 
 class AdoTeam(BaseModel):

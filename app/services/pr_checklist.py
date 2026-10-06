@@ -36,6 +36,18 @@ def linked_build_ids(description: str) -> list[int]:
     return sorted({int(n) for n in _BUILD_LINK.findall(description or "")})
 
 
+_PLACEHOLDER = re.compile(r"\[(?:insert|add|enter|paste|put|provide|todo|tbd|link to|your)\b[^\]\n]{0,60}\](?!\s*\()|<(?:insert|add|enter|paste)\b[^>\n]{0,60}>", re.IGNORECASE)
+
+
+def placeholder_checks(description: str) -> list[dict[str, Any]]:
+    """Template text the author left in the description, such as "[Insert Pipeline Link]": a link or a value that was never filled in."""
+    found = list(dict.fromkeys(m.group(0) for m in _PLACEHOLDER.finditer(description or "")))
+    if not found:
+        return []
+    shown = ", ".join(f'"{p}"' for p in found[:3]) + (f" and {len(found) - 3} more" if len(found) > 3 else "")
+    return [{"item": "Template text left in the description", "checked": None, "status": OPEN, "evidence": f"not filled in: {shown}"}]
+
+
 def _verdict(checked: bool, found: bool, found_text: str, missing_text: str) -> tuple[str, str]:
     if found:
         return OK, found_text + ("" if checked else " (the box is not ticked)")

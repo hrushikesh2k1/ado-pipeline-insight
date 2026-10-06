@@ -12,6 +12,15 @@ from core.models import TimelineMetric
 from core.validation import validate_organization
 
 
+class DecodedText(str):
+    """The text of a file, plus what decoding it showed: whether it began with a UTF-8 byte order mark, and where its first byte
+    that is not valid UTF-8 is (that byte is shown as the replacement character in the text). Used to see a change of encoding."""
+
+    has_bom: bool = False
+    bad_byte_line: int | None = None  # line (1-based) of the first byte that is not valid UTF-8; None when the whole file is valid UTF-8
+    bad_byte_count: int = 0
+
+
 class AzureDevOpsClient:
     """Small REST client that returns normalized Azure DevOps build data."""
 
@@ -231,7 +240,14 @@ class AzureDevOpsClient:
             response.close()
         if b"\x00" in data[:8000]:
             return None, "binary"
-        return data.decode("utf-8-sig", errors="replace"), None
+        try:
+            decoded = DecodedText(data.decode("utf-8-sig"))
+        except UnicodeDecodeError as exc:
+            decoded = DecodedText(data.decode("utf-8-sig", errors="replace"))
+            decoded.bad_byte_line = data[:exc.start].count(b"\n") + 1
+            decoded.bad_byte_count = max(1, decoded.count("�") - data.count(b"\xef\xbf\xbd"))  # replacement characters the decoding made, not ones the file had
+        decoded.has_bom = data.startswith(b"\xef\xbb\xbf")
+        return decoded, None
 
     def get_blob_text(self, project: str, repository_id: str, object_id: str, max_bytes: int = 200_000) -> tuple[str | None, str | None]:
         """A Git blob as text: (text, None), or (None, why not)."""
@@ -260,6 +276,23 @@ class AzureDevOpsClient:
             logging.debug("Could not fetch %s at %s: %s", path, commit_id, exc)
             return None, "unreadable"
         return self._read_text(response, max_bytes)
+
+    def list_repository_files(self, project: str, repository_id: str, commit_id: str, max_items: int = 30000) -> list[str] | None:
+        """The paths of every file in a repository at a commit (folders left out), or None when the list could not be read.
+        Items - List with recursionLevel=full returns the whole tree in one response."""
+        try:
+            response = self.session.get(
+                self._url(project, f"_apis/git/repositories/{quote(repository_id, safe='')}/items"),
+                params={"scopePath": "/", "recursionLevel": "full", "versionDescriptor.version": commit_id, "versionDescriptor.versionType": "commit",
+                        "includeContentMetadata": "false", "api-version": self.api_version},
+                timeout=60,
+            )
+            response.raise_for_status()
+            items = self._json_response(response).get("value", [])
+        except Exception as exc:
+            logging.debug("Could not list the files of the repository at %s: %s", commit_id, exc)
+            return None
+        return [i["path"] for i in items if i.get("path") and not i.get("isFolder") and i.get("gitObjectType", "blob") == "blob"][:max_items]
 
     def get_blob_content(self, project: str, repository_id: str, object_id: str) -> str | None:
         """Fetch the text content of a Git blob by its object ID."""

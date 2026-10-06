@@ -8,10 +8,11 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ### Changed
 - **The AI PR review reads the real changes, file by file.** Each changed file is compared with its earlier version and the
-  reviewer is shown the diff with line numbers (`+` added or changed, `-` removed), so it can tell new code from old. Up to 20
-  files are reviewed per pull request, Python and PowerShell first; a large file shows its changed parts with the lines around
-  them. Every file that is not reviewed is listed with the reason (documentation, deleted, lock or generated file, too large,
-  over the limit). Before, the review read the first 4 source files, 200 lines each, as whole files with no diff.
+  reviewer is shown the diff with line numbers (`+` added or changed, `-` removed), so it can tell new code from old. Up to 30
+  files are reviewed per pull request, Python and PowerShell first, Markdown last; files up to 1 MB and 12,000 lines are read,
+  and a large file shows its changed parts with the lines around them. Every file that is not reviewed is listed with the
+  reason (changelog, deleted, lock or generated file, too large, over the limit). Before, the review read the first 4 source
+  files, 200 lines each, as whole files with no diff.
 - **Python and PowerShell guidance.** PowerShell files (`.ps1`, `.psm1`, `.psd1`) are now read at all. The PowerShell guidance
   names PSScriptAnalyzer rules and the slow patterns Microsoft documents (`+=` on arrays and strings in loops, repeated
   `Where-Object` filtering instead of a hashtable lookup, `Write-Host`); the Python guidance covers quadratic loops, statuses
@@ -63,8 +64,55 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   which lines to place it on so that **Apply Change** replaces exactly those lines. Comments are still shown on screen only and
   are not posted to Azure DevOps.
 - The review says plainly that it reads code changes only and cannot judge how a result looks or behaves when run.
+- **The second check can look things up in the repository.** A finding is often about something outside the file it points at:
+  the project's target framework, whether a setting is still used under its old name, where a type is defined, what another
+  file of the same pull request contains. The second check now has three read-only tools (`find_files`, `read_file`,
+  `search_code`) over the whole repository at the commit being reviewed, up to six model calls per file, and is told that a
+  search which did not cover every file proves nothing about what is absent (each search says how many files it covered). A
+  finding whose case only exists "if" code in another file is wrong (still uses the old name, not defined elsewhere, ...) is
+  kept only when a lookup was made; otherwise it is removed. Each finding shows what the check looked at ("Second check looked
+  at: searched the code for ...") and the review notes list the files it read. Nothing is written to Azure DevOps.
+- **Exact checks made in code, with no AI.** A variable that a changed line assigns and nothing reads (PowerShell, as in the
+  PSScriptAnalyzer rule `UseDeclaredVarsMoreThanAssignments`; Python, read with the standard `ast` module, also unused
+  imports), a file that was valid UTF-8 and no longer is (for example saved in Windows-1252, which showed as replacement
+  characters), a script that lost its UTF-8 byte order mark while holding non-ASCII text (Microsoft documents that Windows
+  PowerShell then reads it in the ANSI code page) and a Markdown table row with a different number of cells than its header
+  (GitHub-flavored Markdown adds an empty cell or drops the extra one). These findings are marked "static check (no AI)" and
+  do not go through the second check.
+- **The reviewer is told what it cannot know.** Today's date (an AI called past dates "future"), the project's language
+  version for C# (read from the `.csproj`, or a `Directory.Build.props`, using Microsoft's table of the default language version
+  per target framework: a `net8.0` project uses C# 12, so `[]` is valid), and the names of the pull request's other changed
+  files, with the rule that it sees one file only. A finding that says code "will not compile" or has a syntax error is
+  removed, because only the build can show that; a finding must rest on at least one line the pull request changed, not only
+  on unchanged context; findings about naming, structure, style or missing tests are capped at "suggestion". The alert guidance
+  now carries the documented facts that a model had reported as mistakes (`ResultCount` in the older log alert format,
+  `timeWindowInMinutes` not below `frequencyInMinutes`, the `autoMitigate` defaults).
+- **Markdown files are reviewed** (changelogs are not), with guidance for removed content other text depends on, broken links
+  and unclosed code blocks, and no comments on wording. C# files get their own guidance.
+- **Reviews run in the background.** The page starts the review, shows its progress ("Reviewed 3 of 12 files") and fetches the
+  result when it is ready, so a review that looks things up is no longer limited by the 230 seconds Azure App Service gives one
+  request (the budget is 10 minutes in the background; the old request still works with 170 seconds). A second click while a
+  review runs follows the same review; at most four run at once. A review is kept in the app's memory only (never written to
+  disk, the token is never kept) for an hour; if the app restarts meanwhile, the page says so and the review is started again.
+- **Less noise in the notes.** A "the description does not mention ..." note is dropped when the description already uses at least
+  half of its words; template text left in the description (`[Insert Pipeline Link]`) is listed in the checklist; a note is
+  never said twice.
 
 ### Fixed
+- **Valid newer syntax was reported as a critical error.** In a project targeting `net8.0`, an empty collection expression
+  (`= [];`, C# 12) was reported as invalid C# twice, as critical, because the model's training data ends before that syntax
+  existed (Microsoft lists October 2023 for `gpt-4o-mini`). The reviewer is now told the project's language version, and a
+  compile or syntax claim is removed (see above).
+- **Findings about other files were guesses.** A model that saw one file said that a namespace "may not exist" and that a renamed
+  setting "may break binding" when the same pull request added the namespace and updated the setting. Such findings now need a
+  lookup that confirms them.
+- **A real change of file encoding was invisible.** The file bytes were decoded with replacement, so a file re-saved in
+  Windows-1252 reached the AI as text with replacement characters and no one said the encoding had changed. The client now
+  records the byte order mark and the first invalid byte, and the review reports the change.
+- **An unused variable was missed** while the AI reported a long list of other things; it is now found by code.
+- **Files over 200 KB or 4,000 lines were skipped.** The limits are 1 MB and 12,000 lines; the comparison sets aside the lines
+  the two versions share at the start and the end first, so a long file with a few changes is compared quickly.
+- **Only 20 files were reviewed** of a pull request with 40. The limit is 30, and 150 files are looked at (it was 100).
 - **Guesses were shown as warnings.** A real review of an alert change gave four warnings that said "may", "could" or "confirm
   that", and every one was wrong, while the second check agreed with all of them. Asking the AI in the prompt not to guess did
   not work, so it is now enforced in code (see above).
@@ -100,13 +148,19 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 ### Notes
 - No new dependency, table or setting. The token needs Code (Read). If it lacks the read scope for the existing comments, the
   linked work items or the builds, the review still runs and says what it could not read.
-- A review looks at no more than 100 files; the rest are listed as not examined.
-- A review makes one AI call per file, a second call for each file that has findings, and one for the description, five at a
-  time. It stops starting new files after 170 seconds (Azure App Service ends a request after 230) and lists the files it did not
-  reach.
+- A review looks at no more than 150 files and reviews 30; the rest are listed with the reason.
+- A review makes one AI call per file, a second check for each file that has findings (up to six calls when it looks things up),
+  and one for the description, five files at a time. It stops starting new files when its time is up (10 minutes in the
+  background, 170 seconds inside one request, since Azure App Service ends a request after 230) and lists the files it did not
+  reach. Looking things up reads files of the repository through Azure DevOps: at most 400 file reads per review, each file once.
 - `POST /api/v1/ado/pullrequests/review` returns `method`, `source_commit`, `iterations`, `files`, `checklist`, `notes` and
-  `scope_note`; each comment gains `end_line`, `language`, `existing_thread`, `existing_status` and `verified`; the verdict can
-  be `NOT_REVIEWED`. `GET /api/v1/ado/pullrequests` returns `last_source_commit`.
+  `scope_note`; each comment gains `end_line`, `language`, `failing_case`, `evidence`, `existing_thread`, `existing_status`,
+  `verified`, `source` (`ai` or `static`) and `checked_with`; the verdict can be `NOT_REVIEWED`. `POST
+  /api/v1/ado/pullrequests/review/start` starts the same review in the background (202 with a job) and `GET
+  /api/v1/ado/pullrequests/review/status/{job_id}` gives its progress and result. `GET /api/v1/ado/pullrequests` returns
+  `last_source_commit`.
+- Lookups use the token's Code (Read) scope, as the review already does; if the repository's file list cannot be read, only the
+  pull request's own files are searched and the result says so.
 - The unused `PullRequestReviewComment` and `PullRequestReviewResponse` classes were removed from `core/models.py`.
 
 ## [1.8.1] - 2026-10-06

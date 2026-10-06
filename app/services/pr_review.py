@@ -10,31 +10,38 @@ from __future__ import annotations
 import logging
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from app.core.config import get_settings
-from app.services.llm_util import chat_json, with_retry
+from app.services.llm_util import chat_json, chat_json_with_tools, with_retry
 from app.services.pr_arm import ARM_LANGUAGE, ARM_LINE_WIDTH, arm_context, is_arm_template
-from app.services.pr_checklist import evaluate_checklist, linked_build_ids, parse_checklist
+from app.services.pr_checklist import evaluate_checklist, linked_build_ids, parse_checklist, placeholder_checks
 from app.services.pr_diff import LINE_WIDTH, FileView, build_view, classify, priority, suggestable
+from app.services.pr_lookup import TOOLS, RepoReader, ToolBelt, csharp_facts
+from app.services.pr_static import static_findings
 from core.openai_client import PipelineRecommendationClient
 
 logger = logging.getLogger(__name__)
 
-MAX_FILES = 20
+MAX_FILES = 30
 MAX_FINDINGS_PER_FILE = 8
 MAX_SPAN = 40
 WORKERS = 5
-MAX_FILE_BYTES = 200_000
-MAX_EXAMINED = 100  # files looked at in one review, whether or not they turn out to be reviewable
+MAX_FILE_BYTES = 1_000_000
+MAX_EXAMINED = 150  # files looked at in one review, whether or not they turn out to be reviewable
+MAX_VERIFY_TURNS = 6  # model calls in one second check (lookups included); the last one must answer
+MAX_OTHER_FILES = 40  # names of the pull request's other changed files that the reviewer is told about
 MAX_DESCRIPTION_CHARS = 8000  # of the pull request description, after the checklist lines are taken out
 MAX_FILE_COMMENTS = 12  # existing comments on a file that the reviewer is told about
 MAX_GENERAL_COMMENTS = 10  # existing comments on the pull request as a whole
 MIN_CASE_CHARS = 20  # a concrete case is at least a short sentence
 MIN_EVIDENCE_CHARS = 6  # of quoted code, ignoring spaces, for a piece of evidence to count
-REVIEW_BUDGET_SECONDS = 170  # Azure App Service ends a request after 230 s: a slow model gives a partial review, not a timeout
+REVIEW_BUDGET_SECONDS = 170  # a review answered inside one web request: Azure App Service ends a request after 230 s, so a slow model gives a partial review, not a timeout
+BACKGROUND_BUDGET_SECONDS = 600  # a review that runs in the background (see pr_review_jobs) has no request to keep alive
 CATEGORIES = ("correctness", "security", "performance", "maintainability", "test_coverage")
+SOFT_CATEGORIES = ("maintainability", "test_coverage")  # findings here are capped at "suggestion"
 SEVERITIES = ("critical", "warning", "suggestion")
 RESOLVED = {"fixed", "closed", "wontFix", "byDesign"}
 STATUS_WORDS = {"active": "open", "pending": "pending", "fixed": "resolved", "closed": "closed", "wontFix": "won't fix", "byDesign": "by design"}
@@ -43,6 +50,18 @@ SCOPE_NOTE = ("This review reads the code changes only. It cannot judge how the 
               "run it and look at the output yourself.")
 
 COMMON_GUIDE = "Look for correctness, security and error-handling problems in the changed lines."
+CSHARP_GUIDE = (
+    "C#: look for these when the changed code has them. An empty catch, or a catch of Exception that hides the cause. async code that blocks with .Result or .Wait() (it can deadlock), "
+    "async void outside an event handler, a Task that is not awaited. IDisposable objects (streams, connections, an HttpClient created for each call) that are not disposed. "
+    "SQL built by string concatenation instead of parameters. Secrets or connection strings written in the code. DateTime.Now where UTC is needed. "
+    "A query or loop over database results with no limit. lock on this or on a public object. Mutable static state shared between requests. "
+    "Use the project facts you are given: syntax that the project's C# version supports is valid, so never call it invalid."
+)
+MARKDOWN_GUIDE = (
+    "Markdown: look for content this change removed that the rest of the document still depends on (a heading that other text or a link points to, a table row, a step that later steps need), "
+    "instructions or commands that no longer match each other, links to files or anchors this change broke, and a code block that is opened and never closed. "
+    "Do not comment on wording, spelling or style."
+)
 PYTHON_GUIDE = (
     "Python: look for these when the changed code has them. Loops that search a list for each item of another list (quadratic: use a dict or a set). "
     "Fixed sets of strings used as statuses (use an Enum). Return types narrower than what is returned (json.load returns any JSON type, not only a dict). "
@@ -74,13 +93,15 @@ ARM_GUIDE = (
     "A resource group scope with targetResourceTypes (one alert per resource of that type). A metric alert with several conditions fires only when all of them are true. "
     "Query mistakes: a table or column the query does not have, a filter that can never match, a count compared with a threshold meant for a measure column. "
     "Secrets: a parameter that holds a password or key must be securestring, and a secure value set on a property that does not expect one (a tag, for example) is stored as plain text; "
-    "secure values must not be outputs. Other ARM templates: the same secrets rule, and hard-coded subscription or resource ids that tie the template to one environment."
+    "secure values must not be outputs. Other ARM templates: the same secrets rule, and hard-coded subscription or resource ids that tie the template to one environment. "
+    "Facts from Microsoft's documentation, which are true and must not be reported as mistakes: in the older 2018-04-16 format of a log alert (a resource of type Microsoft.Insights/scheduledQueryRules with a source and a schedule), "
+    "the value of source.queryType is ResultCount; timeWindowInMinutes must be greater than or equal to frequencyInMinutes; and autoMitigate is false unless it is set (in the newer format it is true unless it is set)."
 )
 KQL_GUIDE = (
     "KQL: look for a missing or misplaced time filter, a join that multiplies rows, a column or table the query does not have, a filter that can never match, "
     "results that are not bounded, and a summarize or threshold that does not measure what its name says."
 )
-GUIDES = {"Python": PYTHON_GUIDE, "PowerShell": POWERSHELL_GUIDE, ARM_LANGUAGE: ARM_GUIDE, "KQL": KQL_GUIDE}
+GUIDES = {"Python": PYTHON_GUIDE, "PowerShell": POWERSHELL_GUIDE, ARM_LANGUAGE: ARM_GUIDE, "KQL": KQL_GUIDE, "C#": CSHARP_GUIDE, "Markdown": MARKDOWN_GUIDE}
 
 FILE_SYSTEM = """You review one changed file of an Azure DevOps pull request. The file is shown as a diff: every line has its line number in the new version, a "+" marks a line this pull request added or changed, a "-" marks a line it removed, and unmarked lines are unchanged context.
 
@@ -98,6 +119,8 @@ Rules:
 - Do not ask the author to verify or confirm something. State a defect you can show, or leave the finding out.
 - If the pull request description, a comment in the code, a name in the code or the alert's own description says a behaviour is intended, do not report it unless you can show a concrete case where it gives a wrong result.
 - Report each problem once. If the same problem appears on several lines, write one finding (use end_line, or name the other lines in the text), not one per line.
+- You see this one file only. Do not report what might be wrong in other files, a name you cannot see defined, or code you cannot see: the other files of this pull request are listed only so you know they exist.
+- Do not report that code will not compile or has a syntax error: the build checks that. Believe the project facts and today's date you are given: a date on or before today is not in the future, and syntax that the project's language version supports is valid.
 - Returning no findings is fine, and often right. Do not invent findings to fill space.
 
 {guide}
@@ -114,7 +137,15 @@ Set holds to false when: the code does not do what the finding says; the case it
 
 Also set duplicate_of to the number of an EARLIER finding that describes the same problem (even on a different line), otherwise null. Set already_raised_by to the E-number (for example "E2") of an existing comment that already makes the same point, whatever line it is on, otherwise null.
 
+Believe the project facts and today's date you are given. A finding that says code will not compile or has a syntax error does not hold unless the project facts show the syntax is newer than the project's language version.
+
 Answer with JSON only: {"findings": [{"number": 1, "holds": true, "reason": "one short sentence", "duplicate_of": null, "already_raised_by": null}]}"""
+
+VERIFY_TOOLS = """
+
+You can look things up before you decide, with the tools find_files, read_file and search_code. They read the whole repository at the commit being reviewed, not only this pull request's files. Use them for what a finding depends on that the file shown does not settle: the project's target framework, whether a setting or a name is defined or used elsewhere, what another file of this pull request really contains. Do not use them for what the file already shows. Look first, then answer; at most a few lookups are needed.
+
+A finding that depends on code you cannot see, and that your lookups did not confirm, does not hold. A search tells you how many files it searched: when it did not search them all, finding nothing does not prove the text is absent. Never agree with a finding only because it sounds plausible."""
 
 DESCRIPTION_SYSTEM = """You compare the description of a pull request with what the pull request changes. You get the description and, for each changed file, one sentence about what changed in it.
 
@@ -257,6 +288,13 @@ def _mark_existing(finding: dict[str, Any], thread: dict[str, Any]) -> None:
 _HEDGE = re.compile(r"\b(may|might|could|potentially|possibly|perhaps|probably)\b", re.IGNORECASE)
 _ASK = re.compile(r"\b(?:verify|confirm|double[- ]check)\s+(?:that|whether|if|the|this|these|it)\b|\b(?:make|be) sure (?:that|this|it)\b|\bis (?:this|that|it) (?:intended|expected|deliberate)\b|\bplease (?:confirm|verify|check)\b", re.IGNORECASE)
 _LINE_MARKS = re.compile(r"^[ \t]*(?:[+\-]?[ \t]*\d+|-)[ \t]*\|[ \t]?", re.MULTILINE)  # "+  17 | code", "   17 | code" or, for a removed line, "-      | code"
+# The review cannot compile anything (the build does), and a model that has not seen newer syntax calls it invalid.
+_COMPILE = re.compile(r"\b(?:will|would|does|do|did|can|could)(?:\s+not|n't)\s+compile\b|\bcompil(?:e|ation)[- ](?:time )?(?:error|fail\w*)\b|\bsyntax error\b|\b(?:not valid|invalid) (?:C#|(?:Python|PowerShell|syntax)\b)|"
+                      r"\bCS\d{4}\b|\bfails? to (?:compile|build|parse)\b", re.IGNORECASE)
+# A case that only exists if code in another file is wrong ("if X is not defined elsewhere") cannot be shown from this file: a lookup has to confirm it.
+# (A dot inside a name, as in appsettings.json, does not end the sentence.)
+_CONDITIONAL = re.compile(r"\bif\b(?:[^.;]|\.(?=\w)){0,120}?\b(?:not (?:been )?(?:defined|declared|imported|registered|updated|renamed)|still (?:uses?|used|refers?|references?|calls?|expects?)|elsewhere|differs?|differing|mismatch\w*|"
+                          r"(?:other|another|different) (?:files?|places?|projects?|modules?|classes|usages?))\b", re.IGNORECASE)
 
 
 def _compact(text: str) -> str:
@@ -275,14 +313,23 @@ def _grounded(evidence: str, haystack: str) -> bool | None:
     return all(p in haystack for p in pieces) if pieces else None
 
 
-def unfounded(title: str, body: str, case: str, evidence: str, haystack: str) -> str | None:
+def _touches_change(evidence: str, changed: str) -> bool:
+    """True when at least one piece of the quoted code is a line this pull request added, changed or removed."""
+    pieces = [p for p in (_compact(p) for p in re.split(r"\.\.\.|…", evidence)) if len(p) >= MIN_EVIDENCE_CHARS]
+    return any(p in changed for p in pieces)
+
+
+def unfounded(title: str, body: str, case: str, evidence: str, haystack: str, changed: str | None = None) -> str | None:
     """Why a finding is only a guess, or None. A finding must show a concrete case, quote the code it relies on, and state a defect rather than
-    ask the author to confirm something. This is enforced here because asking the model to do it in a prompt was not enough."""
+    ask the author to confirm something. This is enforced here because asking the model to do it in a prompt was not enough. `changed` is the
+    compact text of the lines this pull request changed: a finding has to rest on at least one of them."""
     if len(case) < MIN_CASE_CHARS:
         return "it showed no concrete case"
     guess = _HEDGE.search(case)
     if guess:
         return f"its case was a guess ('{guess.group(1).lower()}')"
+    if _COMPILE.search(f"{title} {body} {case}"):
+        return "it claimed a compile or syntax error, which only the build can show"
     if _ASK.search(title) or _ASK.search(body):
         return "it asked the author to confirm something instead of showing a defect"
     found = _grounded(evidence, haystack)
@@ -290,6 +337,8 @@ def unfounded(title: str, body: str, case: str, evidence: str, haystack: str) ->
         return "it did not quote the code it relies on"
     if not found:
         return "the code it quoted is not in the file"
+    if changed is not None and not _touches_change(evidence, changed):
+        return "all the code it quoted is unchanged context"
     return None
 
 
@@ -299,6 +348,7 @@ def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list
     removed: list[tuple[str, str]] = []
     allowed = view.added | view.removed_at
     haystack = _compact("\n".join(r.text for r in view.rows) + "\n" + view.extra)
+    changed = _compact("\n".join(r.text for r in view.rows if r.kind != "keep") + "\n" + view.extra)  # the alert details count as changed: they are about the changed rule
     seen: set[tuple[int, str]] = set()
     for item in raw if isinstance(raw, list) else []:
         if not isinstance(item, dict):
@@ -321,7 +371,7 @@ def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list
             removed.append((title, "it pointed at lines this pull request did not change"))
             continue
         case, evidence = _text(item.get("failing_case"), 400), _quoted(item.get("evidence"))
-        guess = unfounded(title, body, case, evidence, haystack)
+        guess = unfounded(title, body, case, evidence, haystack, changed)
         if guess:
             removed.append((title, guess))
             continue
@@ -333,13 +383,17 @@ def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list
         if suggestion and (not suggestable(view, line, end) or suggestion.strip() == "\n".join(view.new_lines[line - 1:end]).strip()):
             suggestion = None
         category = _text(item.get("category"), 30).lower()
+        category = category if category in CATEGORIES else "maintainability"
+        severity = severity if severity in SEVERITIES else "suggestion"
+        if category in SOFT_CATEGORIES:  # naming, structure, style and missing tests are suggestions, never warnings or blockers
+            severity = "suggestion"
         kept.append({
-            "category": category if category in CATEGORIES else "maintainability",
-            "severity": severity if severity in SEVERITIES else "suggestion",
+            "category": category, "severity": severity,
             "title": title, "comment": body, "file_path": view.path, "language": view.language,
             "line_number": line, "end_line": end if end > line else None, "suggestion_code": suggestion,
             "failing_case": case, "evidence": evidence,
-            "existing_thread": None, "existing_status": None, "verified": None,
+            "existing_thread": None, "existing_status": None, "verified": None, "source": "ai", "checked_with": [],
+            "needs_lookup": bool(_CONDITIONAL.search(case)),
         })
     kept.sort(key=lambda f: SEVERITIES.index(f["severity"]))
     return kept, removed
@@ -351,14 +405,21 @@ REMOVAL_GROUPS = (
     ("repeats", "repeated another finding"),
     ("no concrete case", "showed no concrete case"),
     ("was a guess", "only guessed at a case"),
+    ("compile or syntax", "claimed a compile or syntax error, which only the build can show"),
     ("asked the author", "asked the author to confirm something instead of showing a defect"),
+    ("unchanged context", "quoted only code this pull request did not change"),
+    ("outside this file", "depended on code outside the file that no lookup confirmed"),
     ("quote", "relied on code that is not in the file"),
 )
-GUESS_GROUPS = {"showed no concrete case", "only guessed at a case", "asked the author to confirm something instead of showing a defect", "relied on code that is not in the file"}
+GUESS_GROUPS = {"showed no concrete case", "only guessed at a case", "claimed a compile or syntax error, which only the build can show", "asked the author to confirm something instead of showing a defect",
+                "quoted only code this pull request did not change", "depended on code outside the file that no lookup confirmed", "relied on code that is not in the file"}
 
 
 def removal_group(reason: str) -> str:
     return next((group for needle, group in REMOVAL_GROUPS if needle in reason), "were malformed")
+
+
+NEEDS_LOOKUP = "it depended on code outside this file, and no lookup confirmed it"
 
 
 def _number(value: Any) -> int | None:
@@ -369,11 +430,21 @@ def _number(value: Any) -> int | None:
     return int(found.group()) if found else None
 
 
+def today() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def facts_block(view: FileView) -> str:
+    """What is known for certain about the file's setting: today's date and, for a file that belongs to a project, what its project files say."""
+    return f"Today's date: {today()}" + (f"\n{view.facts}" if view.facts else "")
+
+
 def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], pr: dict[str, Any] | None = None,
-                    existing: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
-    """A second, sceptical read of each finding against the code, the author's description and the comments already made. Findings it cannot
-    confirm, and findings that repeat an earlier one, are removed; one that an existing comment already makes is marked as such. If the check
-    cannot run the findings stay, marked unchecked."""
+                    existing: list[dict[str, Any]] | None = None, belt: ToolBelt | None = None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """A second, sceptical read of each finding against the code, the author's description and the comments already made. With a `belt` the
+    check may also look things up in the repository. Findings it cannot confirm, and findings that repeat an earlier one, are removed; one that an
+    existing comment already makes is marked as such. A finding that depends on code outside the file stays only if a lookup was made. If the
+    check cannot run the findings stay, marked unchecked (except those that need a lookup)."""
     if not findings:
         return findings, []
     pr, existing = pr or {}, existing or []
@@ -384,13 +455,22 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
                      + (f"\n   Suggested replacement:\n{f['suggestion_code']}" if f["suggestion_code"] else ""))
     alerts = f"\n\nThe alert rules, read from the template:\n{view.extra}" if view.extra else ""
     why = f"Why the author made this change (the pull request title and description):\n{pr.get('title', '')}\n{pr.get('description') or '(no description)'}\n\n"
-    user = (f"File: {view.path} ({view.language})\n\n{why}Comments people already made:\n{comments_block(existing)}\n\n"
+    others = f"Other files changed in this pull request: {', '.join(pr['others'])}\n\n" if pr.get("others") else ""
+    user = (f"File: {view.path} ({view.language})\n{facts_block(view)}\n\n{why}{others}Comments people already made:\n{comments_block(existing)}\n\n"
             "Findings to check:\n" + "\n".join(lines) + alerts + f"\n\nThe file:\n\n{view.shown}")
+
+    def ask() -> dict[str, Any]:
+        if belt is not None:
+            return chat_json_with_tools(model, VERIFY_SYSTEM + VERIFY_TOOLS, user, TOOLS, belt.run, max_turns=MAX_VERIFY_TURNS)
+        return chat_json(model, VERIFY_SYSTEM, user, temperature=0)
+
     try:
-        answer = with_retry(lambda: chat_json(model, VERIFY_SYSTEM, user, temperature=0))
+        answer = with_retry(ask)
     except Exception as exc:
         logger.warning("Second check of the findings in %s failed: %s", view.path, type(exc).__name__)
-        return findings, []
+        unresolved = [f for f in findings if f.get("needs_lookup")]
+        return [f for f in findings if not f.get("needs_lookup")], [(f["title"], NEEDS_LOOKUP) for f in unresolved]
+    looked = list(belt.looked)[:8] if belt is not None else []
     verdicts: dict[int, dict[str, Any]] = {}
     for entry in answer.get("findings") if isinstance(answer.get("findings"), list) else []:
         if isinstance(entry, dict) and _int(entry.get("number")) is not None:
@@ -402,6 +482,9 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
     for number, f in enumerate(findings, 1):
         verdict = verdicts.get(number)
         if verdict is None:
+            if f.get("needs_lookup"):  # the check said nothing about it: nothing confirmed what it depends on
+                removed.append((f["title"], NEEDS_LOOKUP))
+                continue
             kept.append(f)
             kept_by_number[number] = f
             continue
@@ -415,7 +498,11 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
             if where not in original["comment"]:
                 original["comment"] += f" The same applies at {where}."
             continue
+        if f.get("needs_lookup") and not looked:
+            removed.append((f["title"], NEEDS_LOOKUP))
+            continue
         f["verified"] = True
+        f["checked_with"] = looked
         if verdict["raised"] and 1 <= verdict["raised"] <= len(existing):
             _mark_existing(f, existing[verdict["raised"] - 1])
         kept.append(f)
@@ -430,25 +517,31 @@ def file_prompt(view: FileView, pr: dict[str, Any], existing: list[dict[str, Any
         shown = "only the changed parts, with the lines around them" + ("; some changed parts are left out because the file is large" if view.omitted_hunks else "")
     comments = comments_block(existing)
     alerts = f"What the alert rules in this template are, and what changed in them:\n{view.extra}\n\n" if view.extra else ""
-    return (f"File: {view.path}\nLanguage: {view.language}\nChange: {view.change_type} (+{view.added_count} -{view.removed_count})\n"
-            f"Pull request title: {pr['title']}\nPull request description (the author's explanation of the change):\n{pr['description'] or '(none)'}\n\n"
+    others = [p for p in pr.get("others") or [] if p != view.path]
+    listed = f"Other files changed in this pull request (you cannot see them here): {', '.join(others)}\n\n" if others else ""
+    return (f"File: {view.path}\nLanguage: {view.language}\nChange: {view.change_type} (+{view.added_count} -{view.removed_count})\n{facts_block(view)}\n"
+            f"Pull request title: {pr['title']}\nPull request description (the author's explanation of the change):\n{pr['description'] or '(none)'}\n\n{listed}"
             f"Comments people already made on this file and on the pull request (do not repeat them):\n{comments}\n\n{alerts}The file is shown as {shown}:\n\n{view.shown}")
 
 
-def review_file(model: Any, view: FileView, pr: dict[str, Any], threads: list[dict[str, Any]]) -> dict[str, Any]:
-    """Review one file: ask, check each finding in code, check again with a second call, and note what people already said."""
+def review_file(model: Any, view: FileView, pr: dict[str, Any], threads: list[dict[str, Any]], belt: ToolBelt | None = None) -> dict[str, Any]:
+    """Review one file: ask, check each finding in code, check again with a second call (which may look things up), add what the static checks
+    find, and note what people already said."""
     existing = context_threads(threads, view.path)
     system = FILE_SYSTEM.format(guide=GUIDES.get(view.language, COMMON_GUIDE))
     answer = with_retry(lambda: chat_json(model, system, file_prompt(view, pr, existing), temperature=0.1))
     findings, removed = clean_findings(answer.get("findings"), view)
     overflow = max(0, len(findings) - MAX_FINDINGS_PER_FILE)
     findings = findings[:MAX_FINDINGS_PER_FILE]
-    findings, rejected = verify_findings(model, view, findings, pr, existing)
+    findings, rejected = verify_findings(model, view, findings, pr, existing, belt)
+    exact = static_findings(view, view.old_text, view.new_text)
+    findings = sorted(findings + exact, key=lambda f: SEVERITIES.index(f["severity"]))
     for finding in findings:
         thread = _existing_for(finding, existing)  # a comment on the same lines is a match whatever the second check said
         if thread:
             _mark_existing(finding, thread)
-    return {"purpose": _text(answer.get("purpose"), 200), "findings": findings, "removed": removed, "rejected": rejected, "overflow": overflow}
+    return {"purpose": _text(answer.get("purpose"), 200), "findings": findings, "removed": removed, "rejected": rejected, "overflow": overflow,
+            "looked": list(belt.looked) if belt is not None else [], "static": len(exact)}
 
 
 # ---------------------------------------------------------------- verdict, scorecard, summary
@@ -529,8 +622,12 @@ class PullRequestReviewService:
             return None, None, "the earlier version could not be read"
         return old, new, None
 
-    def review(self, project: str, repository_id: str, pull_request_id: int) -> dict[str, Any]:
+    def review(self, project: str, repository_id: str, pull_request_id: int, progress: Callable[[int, int, str], None] | None = None,
+               budget: float = REVIEW_BUDGET_SECONDS) -> dict[str, Any]:
+        """The review of one pull request. `progress(done, total, message)` is told how far it has got; `budget` is the seconds the model calls may take."""
+        tell = progress or (lambda done, total, message: None)
         notes: list[str] = []
+        tell(0, 0, "Reading the pull request")
         pr = self.ado.get_pull_request(project, repository_id, pull_request_id)
         iterations = self.ado.get_pull_request_iterations(project, repository_id, pull_request_id)
         if not iterations:
@@ -548,8 +645,11 @@ class PullRequestReviewService:
         work_items = self._optional(notes, "The linked work items", lambda: [str(w.get("id")) for w in self.ado.get_pull_request_work_items(project, repository_id, pull_request_id)])
         build_check = self._build_check(project, pr, description)
 
-        files, views = self._plan(project, repository_id, entries, refs)
-        results, failures = self._review_all(views, context, threads)
+        tell(0, 0, "Reading the changed files")
+        reader = RepoReader(self.ado, project, repository_id, refs["source"], [(e.get("item") or {}).get("path", "") for e in entries]) if refs["source"] else None
+        files, views = self._plan(project, repository_id, entries, refs, reader)
+        context["others"] = [f["path"] for f in files][:MAX_OTHER_FILES]
+        results, failures = self._review_all(views, context, threads, reader, budget, tell)
         for path, reason in failures.items():
             self._mark(files, path, "skipped", reason)
         if views and not results:
@@ -572,6 +672,8 @@ class PullRequestReviewService:
                 if key in GUESS_GROUPS:
                     guessed.append(f"{view.path}: {title} ({reason.removeprefix('it ')})")
             for title, reason in result["rejected"]:
+                if removal_group(reason) in GUESS_GROUPS:  # already listed above, with the other findings that rested on a guess
+                    continue
                 detail = reason.split(": ", 1)[1] if ": " in reason else ""
                 rejected.append(f"{view.path}: {title}" + (f" ({detail})" if detail else ""))
             if result["overflow"]:
@@ -580,18 +682,27 @@ class PullRequestReviewService:
                 notes.append(f"{view.path} is large: {view.omitted_hunks} changed part(s) at the end were not reviewed.")
         for number, comment in enumerate(comments, 1):
             comment["id"] = f"pr-{pull_request_id}-{number}"
+            comment.pop("needs_lookup", None)
+        exact = sum(r["static"] for r in results.values())
+        if exact:
+            notes.append(f"{exact} finding(s) come from static checks made in code, without the AI (marked \"static check\").")
+        read = sorted({item for r in results.values() for item in r["looked"] if item.startswith("read ")})
+        if read:
+            notes.append(f"While checking findings, the second check read {len(read)} file(s) of the repository: " + ", ".join(i.removeprefix("read ") for i in read[:6]) + (", ..." if len(read) > 6 else "") + ".")
         if removed_total:
             notes.append("Removed before showing: " + "; ".join(f"{n} finding(s) {why}" for why, n in removed_total.items()) + ".")
         notes.extend(f"Removed as a guess: {line}" for line in guessed[:6])
         if len(guessed) > 6:
             notes.append(f"{len(guessed) - 6} more findings were removed as guesses.")
         notes.extend(f"Removed on a second check: {line}" for line in rejected[:5])
-        if sum(1 for c in comments if c["verified"] is None):
-            notes.append("The second check could not run for some findings; they are marked as not double-checked.")
+        if sum(1 for c in comments if c["verified"] is None and c.get("source") != "static"):
+            notes.append("The second check could not run for some findings; they are marked \"second check did not run\".")
 
+        tell(1, 1, "Writing the summary")
         clarifications = self._description_gaps(files, description)
         evidence = {"changed_paths": [f["path"] for f in files], "work_items": work_items, "build_check": build_check}
-        checklist = evaluate_checklist(parse_checklist(description), evidence)
+        checklist = evaluate_checklist(parse_checklist(description), evidence) + placeholder_checks(description)
+        notes = list(dict.fromkeys(notes))  # the same note, for example "could not be read", is not said twice
         verdict, scorecard = judge(comments)
         if not any(f["status"] == "reviewed" for f in files):
             verdict = "NOT_REVIEWED"
@@ -619,7 +730,7 @@ class PullRequestReviewService:
             logger.info("PR review: the linked run could not be compared (%s)", type(exc).__name__)
             return {"error": True}
 
-    def _plan(self, project: str, repo: str, entries: list[dict[str, Any]], refs: dict[str, str]) -> tuple[list[dict[str, Any]], list[FileView]]:
+    def _plan(self, project: str, repo: str, entries: list[dict[str, Any]], refs: dict[str, str], reader: RepoReader | None = None) -> tuple[list[dict[str, Any]], list[FileView]]:
         files: list[dict[str, Any]] = []
         candidates: list[tuple[dict[str, Any], dict[str, Any], str]] = []
         for entry in entries:
@@ -653,33 +764,47 @@ class PullRequestReviewService:
                 continue
             if language == ARM_LANGUAGE:
                 view.extra = arm_context(old, new)
+            view.old_text, view.new_text = old, new
             row["reason"] = None
             views.append(view)
+        if reader is not None:
+            for view in views:
+                if view.language == "C#":
+                    try:
+                        view.facts = csharp_facts(reader, view.path)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.info("PR review: the project facts of %s could not be read (%s)", view.path, type(exc).__name__)
         return files, views
 
-    def _review_all(self, views: list[FileView], context: dict[str, Any], threads: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    def _review_all(self, views: list[FileView], context: dict[str, Any], threads: list[dict[str, Any]], reader: RepoReader | None = None,
+                    budget: float = REVIEW_BUDGET_SECONDS, tell: Callable[[int, int, str], None] | None = None) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
         results: dict[str, dict[str, Any]] = {}
         failures: dict[str, str] = {}
         if not views:
             return results, failures
-
-        deadline = time.monotonic() + REVIEW_BUDGET_SECONDS
+        tell = tell or (lambda done, total, message: None)
+        deadline = time.monotonic() + budget
 
         def one(view: FileView) -> tuple[str, dict[str, Any] | None, str]:
             if time.monotonic() > deadline:
                 return view.path, None, "not reached in the time allowed"
+            belt = ToolBelt(reader, view.path, deadline) if reader is not None else None
             try:
-                return view.path, review_file(self.model, view, context, threads), ""
+                return view.path, review_file(self.model, view, context, threads, belt), ""
             except Exception as exc:
                 logger.warning("PR review: the AI call for %s failed (%s)", view.path, type(exc).__name__)
                 return view.path, None, "the AI call failed"
 
-        with ThreadPoolExecutor(max_workers=min(WORKERS, len(views))) as pool:
-            for path, result, reason in pool.map(one, views):
+        total = len(views)
+        tell(0, total, f"Reviewing {total} file{'s' if total != 1 else ''}")
+        with ThreadPoolExecutor(max_workers=min(WORKERS, total)) as pool:
+            for done, future in enumerate(as_completed([pool.submit(one, view) for view in views]), 1):
+                path, result, reason = future.result()
                 if result is not None:
                     results[path] = result
                 else:
                     failures[path] = reason
+                tell(done, total, f"Reviewed {done} of {total} files")
         return results, failures
 
     @staticmethod
@@ -700,4 +825,23 @@ class PullRequestReviewService:
             logger.info("PR review: the description check failed (%s)", type(exc).__name__)
             return []
         gaps = answer.get("missing_from_description")
-        return [f"The description does not mention: {_text(g, 200)}" for g in (gaps if isinstance(gaps, list) else [])[:3] if _text(g, 200)]
+        return [f"The description does not mention: {_text(g, 200)}" for g in (gaps if isinstance(gaps, list) else [])[:3] if _text(g, 200) and not covered_by(_text(g, 200), body)]
+
+
+_STOP_WORDS = {"this", "that", "with", "from", "have", "been", "were", "will", "into", "also", "than", "then", "when", "which", "while", "their", "there", "these", "those",
+               "added", "adds", "change", "changes", "changed", "update", "updated", "updates", "file", "files", "code", "new", "function", "functions", "method", "methods"}
+
+
+def _significant(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9_]{4,}", text.lower()) if w not in _STOP_WORDS}
+
+
+def covered_by(gap: str, description: str) -> bool:
+    """True when the description already says what a "not mentioned" note claims it leaves out: at least half of the note's own words
+    (or their first five letters, so "validator" and "validation" match) are in the description."""
+    words = _significant(gap)
+    if not words:
+        return False
+    have = _significant(description)
+    stems = {w[:5] for w in have}
+    return sum(1 for w in words if w in have or w[:5] in stems) * 2 >= len(words)

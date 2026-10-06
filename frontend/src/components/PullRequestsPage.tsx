@@ -18,7 +18,7 @@ import {
 import { api } from '../services/api'
 import type { AdoRepository, AdoPullRequest, AdoReviewer, PullRequestReviewResponse } from '../types/api'
 import { PrReviewDrawer } from './PrReviewDrawer'
-import { reviewIsStale } from '../utils/prReview'
+import { progressText, reviewIsStale } from '../utils/prReview'
 import { usePlugins } from '../context/PluginContext'
 
 interface PullRequestsPageProps {
@@ -122,6 +122,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
   const [activeReview, setActiveReview] = useState<{ pr: AdoPullRequest; review: PullRequestReviewResponse } | null>(null)
   const [reviewsCache, setReviewsCache] = useState<Record<number, PullRequestReviewResponse>>({})
   const [reviewError, setReviewError] = useState<{ prId: number; message: string } | null>(null)
+  const [reviewProgress, setReviewProgress] = useState<{ prId: number; text: string } | null>(null)
 
   const handleReviewPR = (targetPr: AdoPullRequest, force = false) => {
     // A review made at the commit that is still at the tip of the branch is shown as it is; after new commits, or when asked, it is made again
@@ -133,6 +134,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
 
     setReviewingPrId(targetPr.id)
     setReviewError(null)
+    setReviewProgress({ prId: targetPr.id, text: 'Starting' })
 
     api.reviewPullRequest({
       organization,
@@ -140,14 +142,16 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
       repository_id: selectedRepoId,
       pull_request_id: targetPr.id,
       pat,
-    })
+    }, (job) => setReviewProgress({ prId: targetPr.id, text: progressText(job) }))
       .then((res) => {
         setReviewingPrId(null)
+        setReviewProgress(null)
         setReviewsCache((prev) => ({ ...prev, [targetPr.id]: res }))
         setActiveReview({ pr: targetPr, review: res })
       })
       .catch((err) => {
         setReviewingPrId(null)
+        setReviewProgress(null)
         setReviewError({
           prId: targetPr.id,
           message: err instanceof Error ? err.message : 'Failed to generate review comments',
@@ -648,6 +652,13 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
                           </a>
                         )}
                       </div>
+
+                      {reviewProgress && reviewProgress.prId === pr.id && (
+                        <div className="prCardReviewProgress" data-testid="pr-review-progress" role="status">
+                          <Clock3 size={11} />
+                          <span>{reviewProgress.text}</span>
+                        </div>
+                      )}
 
                       {reviewError && reviewError.prId === pr.id && (
                         <div className="prCardReviewError">

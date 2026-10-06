@@ -10,6 +10,7 @@ import type {
   AdoRepository,
   AdoPullRequest,
   PullRequestReviewResponse,
+  PullRequestReviewJob,
   AdoTeam,
   AdoIteration,
   AdoSprintBoardResponse,
@@ -35,6 +36,8 @@ import type {
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+const REVIEW_POLL_MS = 1500
+const REVIEW_POLL_RETRIES = 3
 async function request<T>(path:string, init?:RequestInit):Promise<T>{
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: 'same-origin',
@@ -95,12 +98,27 @@ export const api = {
     if (pat) p.set('pat', pat)
     return request<AdoPullRequest[]>(`/api/v1/ado/pullrequests?${p.toString()}`)
   },
-  reviewPullRequest:(payload:{organization:string;project:string;repository_id:string;pull_request_id:number;pat?:string})=>{
-    return request<PullRequestReviewResponse>('/api/v1/ado/pullrequests/review', {
+  /** Starts the review in the background and follows it until it is done (a review can take minutes, longer than one web request may last). */
+  reviewPullRequest:async(payload:{organization:string;project:string;repository_id:string;pull_request_id:number;pat?:string}, onProgress?:(job:PullRequestReviewJob)=>void, pollMs=REVIEW_POLL_MS):Promise<PullRequestReviewResponse>=>{
+    let job = await request<PullRequestReviewJob>('/api/v1/ado/pullrequests/review/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     })
+    let failures = 0
+    while (job.status === 'running') {
+      onProgress?.(job)
+      await new Promise(resolve => setTimeout(resolve, pollMs))
+      try {
+        job = await request<PullRequestReviewJob>(`/api/v1/ado/pullrequests/review/status/${encodeURIComponent(job.job_id)}`)
+        failures = 0
+      } catch (error) {
+        // a lost connection for a moment is not the end of the review; a review that is gone (404) or a refusal is
+        if (++failures > REVIEW_POLL_RETRIES || (error instanceof Error && /^(4\d\d):/.test(error.message))) throw error
+      }
+    }
+    if (job.status === 'failed' || !job.result) throw new Error(job.error?.detail || 'The review failed. Nothing was reviewed.')
+    return job.result
   },
   teams:(organization:string,project:string,pat?:string)=>{
     const p = new URLSearchParams({ organization, project })

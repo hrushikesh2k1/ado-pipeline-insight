@@ -73,6 +73,10 @@ export type PullRequestReviewComment = {
   existing_thread?: string | null
   existing_status?: string | null
   verified?: boolean | null
+  /** 'static' = found by an exact check made in code, without the AI */
+  source?: 'ai' | 'static' | null
+  /** What the second check looked up in the repository, for example "read src/Api/Api.csproj" */
+  checked_with?: string[]
 }
 
 export type PullRequestReviewedFile = {
@@ -107,6 +111,18 @@ export type PullRequestReviewResponse = {
   checklist?: PullRequestChecklistCheck[]
   notes?: string[]
   scope_note?: string
+}
+
+/** A review running in the background: where it is and, when it is over, the review or why there is none. */
+export type PullRequestReviewJob = {
+  job_id: string
+  status: 'running' | 'done' | 'failed'
+  message: string
+  done: number
+  total: number
+  elapsed_seconds: number
+  result?: PullRequestReviewResponse | null
+  error?: { status_code: number; detail: string } | null
 }
 
 export type AdoTeam = {

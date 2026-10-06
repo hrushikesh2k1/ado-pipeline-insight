@@ -29,6 +29,7 @@ from app.schemas.connection import (
     AdoPullRequest,
     PullRequestReviewRequest,
     PullRequestReviewResponseSchema,
+    PullRequestReviewJobSchema,
     AdoTeam,
     AdoIteration,
     AdoWorkItem,
@@ -55,7 +56,7 @@ from app.schemas.connection import (
 from app.repositories.release_repository import ReleaseRepository
 from app.services.release_service import ReleaseService
 from app.services.irp_service import IrpService
-from app.services import pr_review
+from app.services import pr_review, pr_review_jobs
 from app.schemas.insights import AlertInventoryUpload, InsightsRefreshRequest
 from app.services.work_item_insights import WorkItemInsightsService
 from app.repositories import work_item_insights_repository as insights_store
@@ -467,21 +468,76 @@ def review_pull_request(payload: PullRequestReviewRequest) -> PullRequestReviewR
         model = pr_review.get_model_client()
         service = pr_review.PullRequestReviewService(AzureDevOpsClient(organization=org_clean, pat=token), model)
         result = service.review(proj_clean, repo_clean, payload.pull_request_id)
-    except pr_review.AiUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except pr_review.ReviewFailed as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-    except requests.HTTPError as exc:
+    except Exception as exc:
+        status, detail = _explain_review_error(exc)
+        raise HTTPException(status_code=status, detail=detail) from exc
+    return PullRequestReviewResponseSchema(**result)
+
+
+def _explain_review_error(exc: Exception) -> tuple[int, str]:
+    """(HTTP status, message for the page) for a review that failed."""
+    if isinstance(exc, pr_review.AiUnavailable):
+        return 503, str(exc)
+    if isinstance(exc, pr_review.ReviewFailed):
+        return exc.status_code, str(exc)
+    if isinstance(exc, requests.HTTPError):
         code = exc.response.status_code if exc.response is not None else 0
         if code in {401, 403, 203}:
-            raise HTTPException(status_code=401, detail="Azure DevOps authentication failed. Check that the PAT has Code (Read) permission.") from exc
+            return 401, "Azure DevOps authentication failed. Check that the PAT has Code (Read) permission."
         if code == 404:
-            raise HTTPException(status_code=404, detail="That pull request was not found in this repository.") from exc
-        raise HTTPException(status_code=502, detail=f"Azure DevOps returned HTTP {code}.") from exc
-    except Exception as exc:
-        logging.error("Pull request review failed: %s", exc)
-        raise HTTPException(status_code=502, detail="The pull request review failed. Nothing was reviewed.") from exc
-    return PullRequestReviewResponseSchema(**result)
+            return 404, "That pull request was not found in this repository."
+        return 502, f"Azure DevOps returned HTTP {code}."
+    logging.error("Pull request review failed: %s", exc)
+    return 502, "The pull request review failed. Nothing was reviewed."
+
+
+@router.post(
+    "/ado/pullrequests/review/start",
+    response_model=PullRequestReviewJobSchema,
+    status_code=202,
+    tags=["ado"],
+    operation_id="start_pull_request_review",
+)
+def start_pull_request_review(payload: PullRequestReviewRequest) -> PullRequestReviewJobSchema:
+    """Start the AI review of a pull request in the background and return a job id; ask /review/status/{job_id} for progress and the result.
+
+    A review that looks things up in the repository can take minutes, longer than one web request may last. The comments are only returned for
+    display in the application. They are NOT posted to Azure DevOps. The review is kept in memory only (nothing is written to disk).
+    """
+    org_clean = validate_organization(payload.organization.strip())
+    proj_clean = validate_project(payload.project.strip())
+    repo_clean = payload.repository_id.strip()
+    token = _resolve_pat(org_clean, payload.pat)
+    try:
+        model = pr_review.get_model_client()
+    except pr_review.AiUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    service = pr_review.PullRequestReviewService(AzureDevOpsClient(organization=org_clean, pat=token), model)
+
+    def work(progress):
+        result = service.review(proj_clean, repo_clean, payload.pull_request_id, progress, pr_review.BACKGROUND_BUDGET_SECONDS)
+        return PullRequestReviewResponseSchema(**result).model_dump()
+
+    key = pr_review_jobs.ReviewJobs.fingerprint(org_clean, proj_clean, repo_clean, payload.pull_request_id, token)
+    try:
+        job_id = pr_review_jobs.jobs.start(key, work, _explain_review_error)
+    except pr_review_jobs.TooManyReviews as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    return PullRequestReviewJobSchema(**pr_review_jobs.jobs.get(job_id))
+
+
+@router.get(
+    "/ado/pullrequests/review/status/{job_id}",
+    response_model=PullRequestReviewJobSchema,
+    tags=["ado"],
+    operation_id="pull_request_review_status",
+)
+def pull_request_review_status(job_id: Annotated[str, ApiPath(pattern=r"^[A-Za-z0-9_-]{8,64}$")]) -> PullRequestReviewJobSchema:
+    """Where a background review is, and its result when it is done."""
+    job = pr_review_jobs.jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="This review is no longer available (the app was restarted, or the review was kept too long). Start it again.")
+    return PullRequestReviewJobSchema(**job)
 
 
 @router.get(

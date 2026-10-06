@@ -1,4 +1,4 @@
-import type { AdoPullRequest, PullRequestChecklistCheck, PullRequestReviewComment, PullRequestReviewResponse, PullRequestReviewedFile } from '../types/api'
+import type { AdoPullRequest, PullRequestChecklistCheck, PullRequestReviewComment, PullRequestReviewJob, PullRequestReviewResponse, PullRequestReviewedFile } from '../types/api'
 
 /** The tool reads code changes; it does not approve a pull request. The wording says what it found, not what to decide. */
 const VERDICT_LABEL: Record<string, string> = {
@@ -45,6 +45,21 @@ export const QUERY_NOT_RUN = 'not verified by running the query'
 /** Findings in alert templates and KQL are about queries nobody has run: say so next to them. */
 export function isAboutQueries(language?: string | null): boolean {
   return language === 'ARM template' || language === 'KQL'
+}
+
+/** A finding the code itself made, with no AI in it: said plainly, because it needs no second check. */
+export const STATIC_CHECK = 'static check (no AI)'
+export const STATIC_CHECK_TIP = 'Found by an exact check made in code, without the AI, from the text of the file. It has not run the code.'
+
+/** What the second check looked at in the repository, as one line; empty when it looked at nothing. */
+export function lookedAtLine(items?: string[] | null): string {
+  return (items ?? []).filter(Boolean).join('; ')
+}
+
+/** Progress of a review that runs in the background: "Reviewed 3 of 12 files (45 s)". */
+export function progressText(job: Pick<PullRequestReviewJob, 'message' | 'elapsed_seconds'>): string {
+  const seconds = job.elapsed_seconds >= 5 ? ` (${job.elapsed_seconds} s)` : ''
+  return `${job.message || 'Working'}${seconds}`
 }
 
 /** '24' or '24-26'; empty when the comment has no line. */
