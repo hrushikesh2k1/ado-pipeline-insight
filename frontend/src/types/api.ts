@@ -356,6 +356,8 @@ export type IrpCommand = {
   text: string
   /** Only QA can make a command verified; every generated command starts as unverified. */
   status: 'unverified' | 'verified'
+  /** Where the command came from: the alert's own query, that query with operators added, or written by the AI. */
+  origin?: 'alert-query' | 'alert-query-plus' | 'ai-written'
   issues: { id: string; severity: 'fail' | 'warn'; message: string; doc: string }[]
 }
 

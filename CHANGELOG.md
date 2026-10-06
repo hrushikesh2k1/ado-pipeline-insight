@@ -4,6 +4,50 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.8.1] - 2026-10-06
+
+Accuracy fixes for the IRP writer, found by testing 1.8.0 on a real AKS memory alert in Azure Government.
+
+### Fixed
+- **The alert query is no longer repeated in every step.** It is shown once, in Prerequisites, as a code block. A step that
+  runs it says "the alert query (see Prerequisites)", and a step that adds to it shows only what is added ("with this added at
+  the end: `| where ...`"). The writer refers to the query by a reference that the code expands, so the query can no longer be
+  retyped with a mistake in it; a query the writer retyped anyway is turned back into the reference. QA still sees the full
+  query in the command list.
+- **A name taken from part of the alert's scope is no longer used as a resource name.** The scope of a log alert is its Log
+  Analytics workspace, not the resource it watches, and the writer was using part of the workspace name as the AKS cluster
+  name. The writer is told so, and a name in a command that is only part of the scope's name (or its resource group) is flagged
+  in the checklist.
+- **One spelling for each `<value>`.** `<DeploymentName>` and `<deployment_name>` in different rows of one IRP are now written
+  one way, so Prerequisites lists each blank once.
+- **Preparation that was missing.** Prerequisites now say how to connect `kubectl` (`az aks get-credentials`) and which roles
+  the changes need whenever the steps use `kubectl` or `az aks`, and, when the alert is in Azure Government, to run
+  `az cloud set --name AzureUSGovernment` and sign in again (Microsoft documents both).
+- **The closing row says how long the alert can take to resolve** after a fix, from how often the template evaluates it (or
+  that it does not resolve by itself when `autoMitigate` is off), so a late resolution is not taken for a failed fix.
+- **Causes that are the same fix, and causes that only restate the alert, are caught.** A cause must not repeat the symptom in
+  the alert name, and a fix must change what the alert measures (adding nodes does not change memory used per container limit).
+- "Queries are well formed" is now "Quotes and brackets balance in queries". It never proved that a query runs, and the new
+  name says what it checks.
+
+### Added
+- **A second review of every IRP.** After the cases are written, a second model call reads each fix against what the alert
+  measures. A case it doubts is rewritten once with the reason, then reviewed again. A doubt that remains is reported in the
+  checklist with the reviewer's reason; if the review itself fails, the checklist says "not checked" instead of passing.
+- **Checklist:** *Each fix changes what the alert measures*, *The root causes are distinct*, *Names are not guessed from the
+  alert's scope*, *Prerequisites list a role that can make the changes*, and *Queries written by the AI, not copied from the
+  alert* (information only).
+- **Commands for QA** show where each query came from ("The alert's own query", "The alert query, with operators added",
+  "Written by the AI: test first"), and the queries the AI wrote are listed right after the commands with a known problem.
+- **Analyze the alert** shows how far back the query looks next to the alert's window ("looks back 10m (the alert window is
+  10 minutes)"), so a mismatch is visible before the IRP is written.
+
+### Changed
+- Writing an IRP makes one more model call for the review, and one per case that is rewritten.
+
+### Notes
+- No new endpoint, setting, table or dependency. The `commands` in the `/api/v1/irp/generate` response gain an `origin` field.
+
 ## [1.8.0] - 2026-10-06
 
 ### Added

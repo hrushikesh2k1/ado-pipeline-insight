@@ -1,7 +1,7 @@
 import React, { useState } from 'react'
 import { Check, CircleAlert, CircleCheck, CircleX, Copy, ExternalLink, FlaskConical, Info, ListChecks, Plus, Search, Trash2, TriangleAlert } from 'lucide-react'
 import type { IrpAnalyzeResponse, IrpCase, IrpCommand, IrpScoreCheck, IrpScorecard } from '../types/api'
-import { LANGUAGE_LABEL, MAX_CASES, STATUS_LABEL, commandsAsText, commandsByRisk, scoreHeadline } from '../utils/irpGrounded'
+import { LANGUAGE_LABEL, MAX_CASES, ORIGIN_LABEL, STATUS_LABEL, commandsAsText, commandsByRisk, humanDuration, isAiWrittenQuery, scoreHeadline } from '../utils/irpGrounded'
 import './IrpGroundedPanels.css'
 
 const lastPart = (id: string) => id.replace(/\/+$/, '').split('/').pop() || id
@@ -76,6 +76,7 @@ export const IrpAnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, stale, 
                 {facts.kql.source === 'input' ? 'the query you pasted' : 'from the ARM template'}
                 {facts.kql.tables.length > 0 && <> · reads <code>{facts.kql.tables.join(', ')}</code></>}
                 {facts.kql.filters.slice(0, 3).map(f => <span key={f.column + f.values.join()} className="irpgChip">{f.column} {f.operator} {f.values.join(', ')}</span>)}
+                {facts.kql.time_windows.length > 0 && <div className="irpgMuted" data-testid="irp-lookback">The query looks back {facts.kql.time_windows.join(', ')}{alert?.window_size ? ` (the alert window is ${humanDuration(alert.window_size)})` : ''}</div>}
                 {facts.kql.output_columns.length > 0 && <div className="irpgMuted">Output columns: {facts.kql.output_columns.join(', ')}</div>}
               </dd>
             </>
@@ -154,6 +155,11 @@ const CommandItem: React.FC<{ command: IrpCommand }> = ({ command }) => {
       <div className="irpgCommandHead">
         <span className="irpgChip lang">{LANGUAGE_LABEL[command.language]}</span>
         <span className={`irpgChip ${command.status}`}>{command.status === 'verified' ? 'Verified by QA' : 'Unverified'}</span>
+        {command.origin && command.language === 'kql' && (
+          <span className={`irpgChip origin ${isAiWrittenQuery(command) ? 'ai' : 'alert'}`} data-testid="irp-command-origin">
+            {isAiWrittenQuery(command) ? 'Written by the AI: test first' : ORIGIN_LABEL[command.origin]}
+          </span>
+        )}
         <span className="irpgCommandRow">{command.row}{command.where ? ` · ${command.where}` : ''}</span>
         <button type="button" className="irpgIconBtn" onClick={copy} aria-label="Copy command">{copied ? <Check size={14} /> : <Copy size={14} />}</button>
       </div>
@@ -186,7 +192,7 @@ export const IrpCommandsCard: React.FC<{ commands: IrpCommand[] }> = ({ commands
         <div className="irpgTitle"><FlaskConical size={17} /> <span>Commands for QA to test</span></div>
         <button type="button" className="irpgBtn" onClick={copyAll} disabled={commands.length === 0}>{copied ? <Check size={13} /> : <Copy size={13} />} Copy all</button>
       </div>
-      <p className="irpgHint">{commands.length} command{commands.length === 1 ? '' : 's'} in this IRP, {unverified} not yet verified by QA. Commands with a known problem are listed first.</p>
+      <p className="irpgHint">{commands.length} command{commands.length === 1 ? '' : 's'} in this IRP, {unverified} not yet verified by QA. Commands with a known problem come first, then queries the AI wrote.</p>
       <ul className="irpgCommands">{commandsByRisk(commands).map(c => <CommandItem key={c.id} command={c} />)}</ul>
     </div>
   )

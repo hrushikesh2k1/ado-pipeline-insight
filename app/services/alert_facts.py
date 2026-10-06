@@ -647,7 +647,8 @@ def facts_for_prompt(facts: dict[str, Any]) -> str:
         if alert.get("product"):
             lines.append(f"- Target resource type: {alert['product']}")
         if alert.get("scopes"):
-            lines.append("- Scope: " + "; ".join(alert["scopes"][:3]))
+            lines.append("- Scope (where the alert's data is queried; it is NOT necessarily the resource being monitored, so never reuse its names for another resource): "
+                         + "; ".join(alert["scopes"][:3]))
         if alert.get("action_groups"):
             lines.append("- Action group(s): " + ", ".join(alert["action_groups"]))
         if alert.get("description"):
@@ -683,3 +684,37 @@ def arm_severity(facts: dict[str, Any]) -> str | None:
     alert = facts.get("alert") or {}
     level = alert.get("severity")
     return f"Sev{level} ({SEVERITY_NAMES[level]})" if level in SEVERITY_NAMES else None
+
+
+def scope_names(facts: dict[str, Any]) -> list[dict[str, str]]:
+    """The resource groups and resource names the alert's scopes spell out (values that are <placeholders> are left out)."""
+    found: list[dict[str, str]] = []
+    for scope in (facts.get("alert") or {}).get("scopes") or []:
+        group = re.search(r"/resourceGroups/([^/]+)", scope, re.IGNORECASE)
+        kind = re.search(r"/providers/([^/]+/[^/]+)/([^/]+)", scope, re.IGNORECASE)
+        group_name, resource_name = (group.group(1) if group else ""), (kind.group(2) if kind else "")
+        entry = {"resource_group": "" if "<" in group_name else group_name, "type": kind.group(1) if kind else "", "name": "" if "<" in resource_name else resource_name}
+        if entry["resource_group"] or entry["name"]:
+            found.append(entry)
+    return found
+
+
+def workspace_name(facts: dict[str, Any]) -> str:
+    """The Log Analytics workspace the alert's scope names, or ''."""
+    return next((s["name"] for s in scope_names(facts) if s["type"].lower() == "microsoft.operationalinsights/workspaces"), "")
+
+
+def is_government_cloud(facts: dict[str, Any], *extra: str) -> bool:
+    """True when the alert's name, scope or location points at Azure Government (usgov*, usdod*)."""
+    alert = facts.get("alert") or {}
+    haystack = " ".join([str(alert.get("name") or ""), " ".join(alert.get("scopes") or []), str(facts.get("resolved_resource_json") or ""), *extra])
+    return bool(re.search(r"us(?:gov|dod)", haystack, re.IGNORECASE))
+
+
+def evaluation_note(facts: dict[str, Any]) -> str:
+    """When the alert can be expected to resolve after a fix, from how the template evaluates it."""
+    alert = facts.get("alert") or {}
+    if alert.get("auto_mitigate") is False:
+        return "This alert does not resolve by itself: resolve it in Azure Monitor once the fix is verified."
+    frequency = human_duration(alert.get("evaluation_frequency"))
+    return f"The alert is re-evaluated every {frequency}, so it can take up to that long to resolve after the fix." if frequency else ""

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { IrpCommand, IrpScorecard } from '../../types/api'
-import { casesForRequest, commandsAsText, commandsByRisk, inputsKey, scoreHeadline } from '../../utils/irpGrounded'
+import { ORIGIN_LABEL, casesForRequest, commandsAsText, commandsByRisk, humanDuration, inputsKey, isAiWrittenQuery, scoreHeadline } from '../../utils/irpGrounded'
 
 const command = (over: Partial<IrpCommand> = {}): IrpCommand => ({
   id: 'c1', row: 'Case 1: x', kind: 'fix', where: 'Azure Cloud Shell', language: 'cli', text: 'az x', status: 'unverified', issues: [], ...over,
@@ -50,9 +50,38 @@ describe('commands for QA', () => {
     const text = commandsAsText([command({ text: 'az a' }), command({ id: 'c2', text: 'az b', where: '' }), command({ id: 'c3', row: 'Case 2: y', text: 'T | take 1', where: 'Log Analytics' })])
     expect(text).toBe('# Case 1: x\n[Azure Cloud Shell] az a\naz b\n# Case 2: y\n[Log Analytics] T | take 1')
   })
+  it('list known problems first, then queries the AI wrote, then everything else in its order', () => {
+    const bad = command({ id: 'bad', language: 'kql', origin: 'ai-written', issues: [{ id: 'r', severity: 'fail', message: 'm', doc: 'd' }] })
+    const warn = command({ id: 'warn', issues: [{ id: 'r', severity: 'warn', message: 'm', doc: 'd' }] })
+    const written = command({ id: 'written', language: 'kql', origin: 'ai-written' })
+    const copied = command({ id: 'copied', language: 'kql', origin: 'alert-query' })
+    const cli = command({ id: 'cli', origin: 'ai-written' })
+    expect(commandsByRisk([copied, cli, written, warn, bad]).map(c => c.id)).toEqual(['bad', 'warn', 'written', 'copied', 'cli'])
+  })
+
+  it('tell a query the AI wrote from the alert query itself, and a command from a query', () => {
+    expect(isAiWrittenQuery(command({ language: 'kql', origin: 'ai-written' }))).toBe(true)
+    expect(isAiWrittenQuery(command({ language: 'kql', origin: 'alert-query' }))).toBe(false)
+    expect(isAiWrittenQuery(command({ language: 'cli', origin: 'ai-written' }))).toBe(false)
+    expect(isAiWrittenQuery(command({ language: 'kql' }))).toBe(false)
+    expect(ORIGIN_LABEL['alert-query']).toBe("The alert's own query")
+  })
+
   it('list the ones with a known problem first, and keep the order otherwise', () => {
     const bad = command({ id: 'bad', issues: [{ id: 'r', severity: 'fail', message: 'm', doc: 'd' }] })
     const warn = command({ id: 'warn', issues: [{ id: 'r', severity: 'warn', message: 'm', doc: 'd' }] })
     expect(commandsByRisk([command({ id: 'a' }), warn, command({ id: 'b' }), bad]).map(c => c.id)).toEqual(['bad', 'warn', 'a', 'b'])
+  })
+})
+
+describe('human duration', () => {
+  it.each([['PT10M', '10 minutes'], ['PT1M', '1 minute'], ['PT1H', '1 hour'], ['PT2H', '2 hours'], ['P1D', '1 day'], ['PT1H30M', '1 hour 30 minutes'], ['PT30S', '30 seconds']])('%s is %s', (iso, text) => {
+    expect(humanDuration(iso)).toBe(text)
+  })
+  it('returns anything else as it is', () => {
+    expect(humanDuration('PT')).toBe('PT')
+    expect(humanDuration('every day')).toBe('every day')
+    expect(humanDuration(null)).toBe('')
+    expect(humanDuration(undefined)).toBe('')
   })
 })

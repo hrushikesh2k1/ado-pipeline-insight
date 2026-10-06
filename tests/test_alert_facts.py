@@ -10,10 +10,14 @@ from app.services.alert_facts import (
     facts_for_prompt,
     find_alerts,
     human_duration,
+    evaluation_note,
+    is_government_cloud,
     load_arm,
     read_alert,
+    scope_names,
     strip_json_comments,
     strip_kql_comments,
+    workspace_name,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "irp"
@@ -312,3 +316,33 @@ class TestKql:
     def test_empty_and_odd_input_never_raises(self):
         assert analyze_kql(None)["tables"] == [] and analyze_kql("   ")["tables"] == []
         analyze_kql(";;;|||(((")
+
+
+class TestScopeAndTiming:
+    def alert(self, **props):
+        return read_alert(json.dumps({"type": "Microsoft.Insights/scheduledQueryRules", "name": "a", "properties": {"criteria": {"allOf": [{"query": "T"}]}, **props}}))
+
+    def test_the_names_a_scope_spells_out(self):
+        facts = self.alert(scopes=["/subscriptions/s/resourceGroups/rg-mon/providers/Microsoft.OperationalInsights/workspaces/LA-alp01v3-x"])
+        assert scope_names(facts) == [{"resource_group": "rg-mon", "type": "Microsoft.OperationalInsights/workspaces", "name": "LA-alp01v3-x"}]
+        assert workspace_name(facts) == "LA-alp01v3-x"
+
+    def test_a_placeholder_is_not_a_name(self):
+        facts = read_alert(fixture("vpn_log_alert.arm.json"))
+        assert scope_names(facts) == [{"resource_group": "", "type": "Microsoft.OperationalInsights/workspaces", "name": "law-network-prod"}]
+
+    def test_a_scope_that_is_not_a_workspace_has_no_workspace(self):
+        facts = self.alert(scopes=["/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/virtualNetworkGateways/gw"])
+        assert workspace_name(facts) == "" and scope_names(facts)[0]["name"] == "gw"
+        assert scope_names(read_alert("", "T")) == [] and workspace_name(read_alert("", "T")) == ""
+
+    def test_azure_government_is_recognised_from_the_name_the_scope_or_what_the_owner_typed(self):
+        assert is_government_cloud(self.alert(scopes=["/subscriptions/s/resourceGroups/alp-usgovvirginia-rg/providers/Microsoft.OperationalInsights/workspaces/w"]))
+        assert is_government_cloud(read_alert(json.dumps({"type": "Microsoft.Insights/metricAlerts", "name": "AKS memory (alp01v3 - common - usgovvirginia)", "properties": {}})))
+        assert is_government_cloud(self.alert(), "Azure usdod region")
+        assert not is_government_cloud(self.alert(scopes=["/subscriptions/s/resourceGroups/rg-eastus/providers/Microsoft.OperationalInsights/workspaces/w"]), "Production")
+
+    def test_when_the_alert_can_be_expected_to_resolve(self):
+        assert evaluation_note(self.alert(evaluationFrequency="PT2H")) == "The alert is re-evaluated every 2 hours, so it can take up to that long to resolve after the fix."
+        assert evaluation_note(self.alert(evaluationFrequency="PT2H", autoMitigate=False)) == "This alert does not resolve by itself: resolve it in Azure Monitor once the fix is verified."
+        assert evaluation_note(self.alert()) == "" and evaluation_note(read_alert("", "T")) == ""

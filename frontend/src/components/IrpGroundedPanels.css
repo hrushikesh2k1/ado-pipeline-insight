@@ -66,6 +66,9 @@
 .irpgChip.unverified { color: var(--g-warn); border-color: rgba(245, 158, 11, 0.45); }
 .irpgChip.verified { color: var(--g-pass); border-color: rgba(34, 197, 94, 0.45); }
 .irpgChip.status { margin-left: 0; }
+.irpgChip.origin { margin-left: 0; }
+.irpgChip.origin.ai { color: var(--g-warn); border-color: rgba(245, 158, 11, 0.45); }
+.irpgChip.origin.alert { color: var(--g-pass); border-color: rgba(34, 197, 94, 0.45); }
 .irpgChip.status.pass { color: var(--g-pass); border-color: rgba(34, 197, 94, 0.45); }
 .irpgChip.status.warn { color: var(--g-warn); border-color: rgba(245, 158, 11, 0.45); }
 .irpgChip.status.fail { color: var(--g-fail); border-color: rgba(239, 68, 68, 0.45); }

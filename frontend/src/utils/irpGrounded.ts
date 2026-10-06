@@ -41,8 +41,25 @@ export function commandsAsText(commands: IrpCommand[]): string {
 
 export const LANGUAGE_LABEL: Record<IrpCommand['language'], string> = { kql: 'KQL', cli: 'CLI', powershell: 'PowerShell' }
 
-/** Commands with a known problem first, so QA starts with them. */
+/** True for a query the AI wrote itself: a column or a table can be wrong in it even when the brackets balance. */
+export const isAiWrittenQuery = (c: IrpCommand) => c.language === 'kql' && c.origin === 'ai-written'
+
+export const ORIGIN_LABEL: Record<NonNullable<IrpCommand['origin']>, string> = {
+  'alert-query': "The alert's own query",
+  'alert-query-plus': 'The alert query, with operators added',
+  'ai-written': 'Written by the AI',
+}
+
+/** The order QA should test in: known problems first, then queries the AI wrote, then the rest. */
 export function commandsByRisk(commands: IrpCommand[]): IrpCommand[] {
-  const weight = (c: IrpCommand) => (c.issues.some(i => i.severity === 'fail') ? 0 : c.issues.length ? 1 : 2)
+  const weight = (c: IrpCommand) => (c.issues.some(i => i.severity === 'fail') ? 0 : c.issues.length ? 1 : isAiWrittenQuery(c) ? 2 : 3)
   return [...commands].sort((a, b) => weight(a) - weight(b))
+}
+
+/** 'PT10M' -> '10 minutes', 'PT2H' -> '2 hours', 'P1D' -> '1 day'; anything that is not an ISO 8601 duration is returned as it is. */
+export function humanDuration(iso: string | null | undefined): string {
+  const match = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/i.exec((iso ?? '').trim())
+  if (!match || !match.slice(1).some(Boolean)) return iso ?? ''
+  const units: Array<[string | undefined, string]> = [[match[1], 'day'], [match[2], 'hour'], [match[3], 'minute'], [match[4], 'second']]
+  return units.filter(([n]) => n).map(([n, unit]) => `${Number(n)} ${unit}${Number(n) === 1 ? '' : 's'}`).join(' ')
 }

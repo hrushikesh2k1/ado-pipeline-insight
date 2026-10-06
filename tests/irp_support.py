@@ -117,8 +117,12 @@ FRAME = {
 class FakeIrpModel:
     """Answers the three kinds of prompt the writer sends. Override `cases`, `frame` or `case_row` to make it misbehave."""
 
-    def __init__(self, cases=None, frame=None, case_row: Callable[[str, int], Any] | None = None, single_pass: str | None = None):
+    def __init__(self, cases=None, frame=None, case_row: Callable[[str, int], Any] | None = None, single_pass: str | None = None,
+                 review: Callable[[int, int], Any] | None = None):
         self.deployment = "fake"
+        # review(number of cases, how many reviews so far) -> the answer; by default every fix is found to change what the alert measures
+        self.review = review or (lambda cases, nth: {"cases": [{"number": n, "fixes_the_alert": True, "reason": "ok"} for n in range(1, cases + 1)], "overlaps": [], "symptom_cases": []})
+        self._reviews = 0
         self.single_pass = single_pass if single_pass is not None else SINGLE_PASS
         self.cases = CASES if cases is None else cases
         self.frame = FRAME if frame is None else frame
@@ -136,6 +140,14 @@ class FakeIrpModel:
             body: Any = {"cases": self.cases}
         elif system.startswith("You write the frame"):
             body = self.frame
+        elif system.startswith("You review the root-cause rows"):
+            import re as _re
+            with self._lock:
+                self._reviews += 1
+                nth = self._reviews
+            body = self.review(len(_re.findall(r"^Case \d+:", user, _re.M)), nth)
+            if isinstance(body, Exception):
+                raise body
         elif system.startswith("You are a Principal Cloud Site Reliability Engineer writing an Incident Response Plan"):
             body = self.single_pass  # the older, one-call writer
         else:
@@ -150,5 +162,5 @@ class FakeIrpModel:
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
 
     def calls_of(self, kind: str) -> list[tuple[str, str]]:
-        marks = {"cases": "You are a Principal Site Reliability Engineer. You are given the facts", "frame": "You write the frame", "case": "You write ONE row"}
+        marks = {"cases": "You are a Principal Site Reliability Engineer. You are given the facts", "frame": "You write the frame", "case": "You write ONE row", "review": "You review the root-cause rows"}
         return [c for c in self.calls if c[0].startswith(marks[kind])]
