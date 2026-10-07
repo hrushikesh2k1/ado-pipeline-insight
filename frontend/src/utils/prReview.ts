@@ -109,15 +109,14 @@ export function saveKnowledge(text: string): void {
 
 // ---------------------------------------------------------------- which model reviews
 
-export const MODEL_STORAGE_KEY = 'ado_pr_review_model'
 export const MODEL_LABEL: Record<ReviewModelChoice, string> = { standard: 'Standard', strong: 'Strong' }
 export const MODEL_TIP: Record<ReviewModelChoice, string> = {
   standard: 'The usual model: quicker and cheaper.',
   strong: 'A stronger model: slower and it costs more. If it cannot answer, the standard model finishes the review.',
 }
-export const MODEL_HELP = 'Choose the model for the next review. A review made with the other model is offered again.'
+export const MODEL_SELECT_TIP = 'The AI model that reviews this pull request. A review made with the other model is offered again.'
 
-/** The model a review will use: the one the user chose, when the server has it, otherwise the server's own default. */
+/** The model a review of one pull request will use: the one chosen for it, when the server has it, otherwise the server's own default. */
 export function chosenModel(models: PullRequestReviewModels | null | undefined, saved: ReviewModelChoice | null | undefined): ReviewModelChoice {
   if (!models) return 'standard'
   if (saved && models[saved]) return saved
@@ -127,17 +126,6 @@ export function chosenModel(models: PullRequestReviewModels | null | undefined, 
 /** True when a review was made with another model than the one chosen now. A review the page did not record is not compared. */
 export function modelChanged(used: ReviewModelChoice | null | undefined, current: ReviewModelChoice): boolean {
   return Boolean(used) && used !== current
-}
-
-export function loadModelChoice(): ReviewModelChoice | null {
-  try {
-    const saved = localStorage.getItem(MODEL_STORAGE_KEY)
-    return saved === 'standard' || saved === 'strong' ? saved : null
-  } catch { return null }
-}
-
-export function saveModelChoice(choice: ReviewModelChoice): void {
-  try { localStorage.setItem(MODEL_STORAGE_KEY, choice) } catch { /* storage blocked: the choice holds for this visit */ }
 }
 
 /** "model: gpt-6-sol", or, when the strong one could not answer, "model: gpt-4.1-mini (gpt-6-sol could not answer)". Empty when the server did not say. */

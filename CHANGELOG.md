@@ -106,14 +106,15 @@ things up in the repository. Comments are still shown on screen only: nothing is
   list or dict that the function changes, `except Exception: pass` with no comment, a shell command built from values with
   `shell=True`, and a `requests` call with no `timeout` (the Requests documentation says leaving it out can hang the program
   indefinitely). A `# noqa` on the line turns the check off.
-- **A switch for the review model, with a fallback.** Set `AZURE_OPENAI_REVIEW_DEPLOYMENT` to the name of a stronger deployment in
-  the same Azure OpenAI resource (everything else keeps using `AZURE_OPENAI_DEPLOYMENT`). The pull request page then shows
-  **AI review model: Standard | Strong**, kept in your browser, and each review is made with the one you chose; changing it offers
-  "Review again (model changed)". The strong one is the default when it is set up. If the strong deployment cannot answer (not
-  found, access refused, busy, down or unreachable) the standard one finishes the review, and the review says so in its notes and
-  in its header; a request that is wrong in itself is not hidden by asking the other model. The header of every review names the
-  model that made it. A model that does not accept a temperature setting is asked again without it. Without a strong deployment
-  nothing changes and the switch does not show.
+- **A model selector on every pull request, with a fallback.** Set `AZURE_OPENAI_REVIEW_DEPLOYMENT` to the name of a stronger
+  deployment in the same Azure OpenAI resource (everything else keeps using `AZURE_OPENAI_DEPLOYMENT`). Each pull request card
+  then has its own selector, **Standard** or **Strong**, next to **Review with AI**, and the review drawer has the same selector
+  next to **Review again**. A pull request is reviewed with the model chosen for it; the others are not affected, and changing it
+  offers "Review again (model changed)". Pull requests start on the strong model when it is set up. If the strong deployment
+  cannot answer (not found, access refused, busy, down or unreachable) the standard one finishes the review, and the review says
+  so in its notes and in its header; a request that is wrong in itself is not hidden by asking the other model. The header of every
+  review names the model that made it. A model that does not accept a temperature setting is asked again without it. Without a
+  strong deployment nothing changes and no selector shows.
 
 **Your own knowledge base**
 - **A box on the pull request page for your own checks.** You write what you know goes wrong often, or must always be looked at,

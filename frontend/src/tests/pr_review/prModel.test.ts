@@ -1,30 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../services/api'
 import type { PullRequestReviewModels } from '../../types/api'
-import { MODEL_HELP, MODEL_LABEL, MODEL_STORAGE_KEY, MODEL_TIP, chosenModel, loadModelChoice, modelChanged, modelLine, saveModelChoice } from '../../utils/prReview'
-
-function fakeStorage(initial: Record<string, string> = {}, broken = false) {
-  const data = { ...initial }
-  const guard = () => { if (broken) throw new Error('storage is blocked') }
-  return {
-    data,
-    getItem: (key: string) => { guard(); return key in data ? data[key] : null },
-    setItem: (key: string, value: string) => { guard(); data[key] = value },
-    removeItem: (key: string) => { guard(); delete data[key] },
-  }
-}
+import { MODEL_LABEL, MODEL_SELECT_TIP, MODEL_TIP, chosenModel, modelChanged, modelLine } from '../../utils/prReview'
 
 const both: PullRequestReviewModels = { standard: 'standard-mini', strong: 'strong-sol', default: 'strong' }
 const standardOnly: PullRequestReviewModels = { standard: 'standard-mini', strong: null, default: 'standard' }
 
 afterEach(() => vi.unstubAllGlobals())
 
-describe('which model the next review uses', () => {
-  it('is the default of the server when the user has not chosen', () => {
+describe('which model the next review of a pull request uses', () => {
+  it('is the default of the server when none was chosen for the pull request', () => {
     expect(chosenModel(both, null)).toBe('strong')
     expect(chosenModel({ ...both, default: 'standard' }, null)).toBe('standard')
   })
-  it('is the choice of the user when the server has that model', () => {
+  it('is the choice made for the pull request when the server has that model', () => {
     expect(chosenModel(both, 'standard')).toBe('standard')
     expect(chosenModel(both, 'strong')).toBe('strong')
   })
@@ -53,26 +42,6 @@ describe('what counts as a change of the model', () => {
   })
 })
 
-describe('keeping the choice in this browser', () => {
-  it('saves and loads it', () => {
-    const storage = fakeStorage()
-    vi.stubGlobal('localStorage', storage)
-    expect(loadModelChoice()).toBeNull()
-    saveModelChoice('standard')
-    expect(storage.data[MODEL_STORAGE_KEY]).toBe('standard')
-    expect(loadModelChoice()).toBe('standard')
-  })
-  it('ignores anything that is not one of the two models', () => {
-    vi.stubGlobal('localStorage', fakeStorage({ [MODEL_STORAGE_KEY]: 'gpt-anything' }))
-    expect(loadModelChoice()).toBeNull()
-  })
-  it('works without storage', () => {
-    vi.stubGlobal('localStorage', fakeStorage({}, true))
-    expect(loadModelChoice()).toBeNull()
-    expect(() => saveModelChoice('strong')).not.toThrow()
-  })
-})
-
 describe('what the review says about its model', () => {
   it('names the deployment', () => {
     expect(modelLine({ deployment: 'strong-sol' })).toBe('model: strong-sol')
@@ -89,7 +58,8 @@ describe('the words on the switch', () => {
   it('describe both models and make no claim about quality', () => {
     expect(MODEL_LABEL).toEqual({ standard: 'Standard', strong: 'Strong' })
     expect(MODEL_TIP.strong).toContain('standard model finishes the review')
-    expect(MODEL_HELP).toContain('the other model is offered again')
+    expect(MODEL_SELECT_TIP).toContain('this pull request')
+    expect(MODEL_SELECT_TIP).toContain('the other model is offered again')
   })
 })
 

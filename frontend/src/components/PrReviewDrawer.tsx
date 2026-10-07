@@ -14,9 +14,10 @@ import {
   ThumbsUp,
   RefreshCw,
 } from 'lucide-react'
-import type { AdoPullRequest, PullRequestReviewResponse, PullRequestReviewComment } from '../types/api'
+import type { AdoPullRequest, PullRequestReviewModels, PullRequestReviewResponse, PullRequestReviewComment, ReviewModelChoice } from '../types/api'
 import { QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, STATIC_CHECK, STATIC_CHECK_TIP, allCommentsAsMarkdown, commentAsMarkdown, isAboutQueries, lineLabel, lookedAtLine, modelLine, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
 import { ChecklistCard, FilesCard, KnowledgeCard, NotesCard } from './PrReviewPanels'
+import { PrModelSelect } from './PrModelSelect'
 
 interface PrReviewDrawerProps {
   reviewData: {
@@ -30,6 +31,10 @@ interface PrReviewDrawerProps {
   knowledgeChanged?: boolean
   /** The model was switched after this review was made. */
   modelChanged?: boolean
+  /** What the server has set up and the model chosen for this pull request: the drawer lets the user change it before reviewing again. */
+  models?: PullRequestReviewModels | null
+  model?: ReviewModelChoice
+  onModelChange?: (choice: ReviewModelChoice) => void
   isReReviewing?: boolean
   onReReview?: () => void
   /** Why the last attempt to review again failed. */
@@ -100,7 +105,7 @@ function getScoreBadgeClass(score: string) {
   }
 }
 
-export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onClose, isStale = false, knowledgeChanged = false, modelChanged = false, isReReviewing = false, onReReview, error = null }) => {
+export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onClose, isStale = false, knowledgeChanged = false, modelChanged = false, models = null, model, onModelChange, isReReviewing = false, onReReview, error = null }) => {
   const { pr, review } = reviewData
   const [severityFilter, setSeverityFilter] = useState<string>('all')
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -178,6 +183,9 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
             </div>
           </div>
           <div className="prDrawerActions">
+            {model && onModelChange && (
+              <PrModelSelect models={models} value={model} onChange={onModelChange} disabled={isReReviewing} testId="pr-drawer-model" />
+            )}
             {onReReview && (
               <button type="button" className="prReReview" onClick={onReReview} disabled={isReReviewing} data-testid="pr-rereview">
                 <RefreshCw size={12} className={isReReviewing ? 'spin' : ''} />
