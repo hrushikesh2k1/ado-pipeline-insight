@@ -633,20 +633,22 @@ class TestAlertTemplates:
         _, _, model = run(alert_ado(new=ALERT_NEW.replace('"resources": [', '"resources": [,')))
         assert "cannot be deployed as it is" in model.calls_of("file")[0]
 
-    def test_json_that_is_not_an_arm_template_is_skipped_with_that_reason_and_costs_one_fetch(self):
+    def test_json_that_is_not_an_arm_template_is_reviewed_as_plain_json(self):
         ado = FakeAdo(changes=[change("/config/data.json")], blobs={"new-/config/data.json": '{"name": "pkg", "items": [1, 2]}', "old-/config/data.json": "{}"}, description="")
-        result, ado, model = run(ado)
-        assert by_path(result)["config/data.json"]["reason"] == "JSON file that is not an ARM template"
-        assert "old-/config/data.json" not in ado.blob_calls and model.calls == []
-        assert "Nothing could be reviewed: config/data.json (JSON file that is not an ARM template)." in result["summary"]
+        result, _, model = run(ado)
+        row = by_path(result)["config/data.json"]
+        assert (row["status"], row["language"], row["reason"]) == ("reviewed", "JSON", None)
+        assert "Reviewed 1 of 1 changed files (1 JSON)" in result["summary"] and len(model.calls_of("file")) == 1
 
-    def test_json_files_that_are_not_templates_do_not_use_up_the_limit(self):
-        names = [f"/data/d{n:02d}.json" for n in range(25)] + ["/src/a.py", "/src/b.py"]
-        blobs = {f"new-{n}": '{"x": 1}' for n in names[:25]} | {"new-/src/a.py": "x = 1\n", "new-/src/b.py": "y = 2\n"}
+    def test_plain_json_files_are_reviewed_after_the_code_when_there_is_not_room_for_all(self, monkeypatch):
+        monkeypatch.setattr(pr_review, "MAX_FILES", 4)
+        names = [f"/data/d{n:02d}.json" for n in range(6)] + ["/src/a.py", "/src/b.py"]
+        blobs = {f"new-{n}": '{"x": 1}' for n in names[:6]} | {"new-/src/a.py": "x = 1\n", "new-/src/b.py": "y = 2\n"}
         result, _, _ = run(FakeAdo(changes=[change(n, "add") for n in names], blobs=blobs, description=""))
         rows = by_path(result)
         assert rows["src/a.py"]["status"] == "reviewed" and rows["src/b.py"]["status"] == "reviewed"
-        assert all(rows[f"data/d{n:02d}.json"]["reason"] == "JSON file that is not an ARM template" for n in range(25))
+        assert [rows[f"data/d{n:02d}.json"]["status"] for n in range(6)] == ["reviewed", "reviewed"] + ["skipped"] * 4
+        assert all(rows[f"data/d{n:02d}.json"]["reason"] == "over the limit of 4 files reviewed in one go" for n in range(2, 6))
 
     def test_a_very_large_pull_request_is_not_read_without_end(self, monkeypatch):
         monkeypatch.setattr(pr_review, "MAX_EXAMINED", 3)
@@ -654,7 +656,7 @@ class TestAlertTemplates:
         ado = FakeAdo(changes=[change(n, "add") for n in names], blobs={f"new-{n}": '{"x": 1}' for n in names}, description="")
         result, ado, _ = run(ado)
         reasons = [f["reason"] for f in result["files"]]
-        assert reasons.count("JSON file that is not an ARM template") == 3 and reasons.count("not examined: more than 3 files in this pull request") == 2
+        assert reasons.count(None) == 3 and reasons.count("not examined: more than 3 files in this pull request") == 2
         assert len(ado.blob_calls) == 3
 
     def test_kql_files_are_read_with_kql_guidance(self):

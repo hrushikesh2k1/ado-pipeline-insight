@@ -347,7 +347,7 @@ class TestSecondCheckLooksThingsUp:
     def test_what_was_read_is_listed_in_the_notes(self):
         lookups = {OPTIONS_PATH: [("read_file", {"path": "src/Api/Api.csproj"}), ("read_file", {"path": "/src/Api/appsettings.json"}), ("search_code", {"text": "PollSeconds"})]}
         result, _ = self.review(lookups=lookups, decide=lambda path, numbers, results: {1: True})
-        assert "While checking findings, the second check read 2 file(s) of the repository: src/Api/Api.csproj, src/Api/appsettings.json." in result["notes"]
+        assert "While reviewing, the AI read 2 file(s) of the repository: src/Api/Api.csproj, src/Api/appsettings.json." in result["notes"]
         assert result["comments"][0]["checked_with"] == ["read src/Api/Api.csproj", "read src/Api/appsettings.json", 'searched the code for "PollSeconds"']
 
     def test_without_a_commit_to_read_the_tools_are_not_offered_and_a_finding_that_needs_them_is_removed(self):

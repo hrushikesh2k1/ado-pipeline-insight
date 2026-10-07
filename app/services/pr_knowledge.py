@@ -33,7 +33,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "arm": ("ARM template",), "alert": ("ARM template",), "alerts": ("ARM template",), "arm template": ("ARM template",), "template": ("ARM template",),
     "kql": ("KQL",),
     "markdown": ("Markdown",), "md": ("Markdown",), "docs": ("Markdown",), "readme": ("Markdown",),
-    "yaml": ("YAML",), "yml": ("YAML",), "pipeline": ("YAML",), "pipelines": ("YAML",),
+    "json": ("JSON",), "postman": ("JSON",), "yaml": ("YAML",), "yml": ("YAML",), "pipeline": ("YAML",), "pipelines": ("YAML",),
     "shell": ("Shell",), "bash": ("Shell",), "sh": ("Shell",),
     "typescript": ("TypeScript", "TypeScript (React)"), "ts": ("TypeScript", "TypeScript (React)"), "tsx": ("TypeScript (React)",),
     "javascript": ("JavaScript", "JavaScript (React)"), "js": ("JavaScript", "JavaScript (React)"), "jsx": ("JavaScript (React)",),

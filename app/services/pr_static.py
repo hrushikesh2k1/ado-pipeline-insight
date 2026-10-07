@@ -11,6 +11,8 @@ import logging
 import re
 from typing import Any
 
+from app.services import pr_json
+from app.services.pr_arm import ARM_LANGUAGE
 from app.services.pr_diff import FileView
 
 logger = logging.getLogger(__name__)
@@ -315,6 +317,55 @@ def python_hazards(view: FileView) -> list[dict[str, Any]]:
     return found
 
 
+# ---------------------------------------------------------------- JSON: a file that stopped being valid, a key written twice, a secret
+
+MAX_SECRET_FINDINGS = 3
+
+
+def json_findings(view: FileView, old: Any = None, new: Any = None) -> list[dict[str, Any]]:
+    """Exact checks for a JSON file (settings, a test collection, an ARM template), on lines this pull request changed."""
+    lines = view.new_lines
+    text = chr(10).join(lines)
+    found: list[dict[str, Any]] = []
+
+    if old is not None and str(old).strip():
+        _, before = pr_json.parse(str(old))
+        _, after = pr_json.parse(text)
+        if before is None and after is not None:
+            anchor = next((n for n in (after.lineno, after.lineno - 1) if n in view.added), None) or _anchor(view)
+            if anchor:
+                found.append(_finding(view, anchor, "The file is no longer valid JSON",
+                                      f"{after.msg} at line {after.lineno}, column {after.colno}. Whatever reads this file (the app, a pipeline, Postman) stops at that error and gets nothing from it.",
+                                      f"A reader that parses this file fails with \"{after.msg}\" at line {after.lineno}, so no value in the file can be read.",
+                                      lines[anchor - 1], severity="warning", category="correctness"))
+
+    reported: set[tuple[str, int]] = set()
+    for key, first, second in pr_json.JsonMap(text).duplicates:
+        if (key, second) in reported or not (first in view.added or second in view.added):
+            continue
+        reported.add((key, second))
+        anchor = second if second in view.added else first
+        found.append(_finding(view, anchor, f'"{key}" is written twice in the same object',
+                              f'`"{key}"` is on line {first} and again on line {second} of the same object. A JSON reader keeps only the last one, so the value on line {first} is silently ignored. '
+                              "Remove one of them, or rename it if both were meant.",
+                              f'Reading this file gives the value from line {second}; the value from line {first} never takes effect.',
+                              lines[anchor - 1], category="correctness", severity="warning"))
+
+    secrets = 0
+    for number in sorted(view.added):
+        if secrets >= MAX_SECRET_FINDINGS:
+            break
+        for what, secret, severity in pr_json.secrets_in(lines[number - 1]):
+            secrets += 1
+            found.append(_finding(view, number, f"{what[0].upper()}{what[1:]} is written in the file",
+                                  f"This line holds {what} in clear text. Anyone who can read the repository can use it, and it stays in the history after the line is removed. "
+                                  "Use a variable (such as `{{token}}` in a Postman collection) or a secret store, and revoke the one that is exposed.",
+                                  "Anyone with read access to the repository, or to a copy of this file, can use the secret.",
+                                  pr_json.mask(lines[number - 1], secret), severity=severity, category="security"))
+            break
+    return found
+
+
 # ---------------------------------------------------------------- Markdown: a table row with a different number of cells than its header
 
 _SEPARATOR = re.compile(r"^\s*\|?\s*:?-{1,}:?\s*(?:\|\s*:?-{1,}:?\s*)*\|?\s*$")
@@ -387,6 +438,8 @@ def static_findings(view: FileView, old: Any = None, new: Any = None) -> list[di
         checks.append(lambda: python_hazards(view))
     elif view.language == "Markdown":
         checks.append(lambda: markdown_tables(view))
+    elif view.language in ("JSON", ARM_LANGUAGE):
+        checks.append(lambda: json_findings(view, old, new))
     for check in checks:
         try:
             found.extend(check())

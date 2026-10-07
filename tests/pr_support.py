@@ -194,12 +194,15 @@ class FakePrModel:
 
     def __init__(self, findings: dict[str, Any] | None = None, holds: Callable[[str, list[int]], dict[int, Any]] | None = None, gaps: Any = None, purposes: dict[str, str] | None = None,
                  lookups: dict[str, list[tuple[str, dict[str, Any]]]] | None = None, decide: Callable[[str, list[int], list[str]], dict[int, Any]] | None = None,
-                 refutes: dict[str, Any] | None = None, team_checks: Any = None):
+                 refutes: dict[str, Any] | None = None, team_checks: Any = None, first_lookups: dict[str, list[tuple[str, dict[str, Any]]]] | None = None):
         """`lookups` maps a file path to the tool calls the second check makes before it answers (a list of (tool name, arguments)); `decide(path, numbers,
         tool results)` then says which findings hold, in place of `holds`. `refutes` maps a file path to {finding number: (why it is wrong, code that shows it)}
         for the refutation call (or to an Exception to raise); `team_checks` is {check number: (breaks, why, quote)} for the team's checks about the pull request
         (or an Exception)."""
         self.refutes = refutes or {}
+        self.first_lookups = first_lookups or {}  # tool calls the FIRST read of a file makes before it answers (only when it is offered the tools)
+        self.first_tools_offered: list[bool] = []  # for each first read: were the lookup tools offered?
+        self.first_tool_results: list[str] = []
         self.team_checks = team_checks if team_checks is not None else {}
         self.deployment = "fake"
         self.findings = findings if findings is not None else {}
@@ -233,6 +236,15 @@ class FakePrModel:
                     self.tools_offered.append(bool(tools))
         if system.startswith("You review one changed file"):
             path = re.search(r"^File: (.+)$", user, re.M).group(1).strip()
+            with self._lock:
+                if not results:
+                    self.first_tools_offered.append(bool(tools))
+                else:
+                    self.first_tool_results.extend(results)
+            wanted_first = self.first_lookups.get(path) if tools else None
+            if wanted_first and not results:
+                calls = [SimpleNamespace(id=f"first{n}", function=SimpleNamespace(name=name, arguments=json.dumps(args))) for n, (name, args) in enumerate(wanted_first, 1)]
+                return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=None, tool_calls=calls))])
             said = self.findings.get(path, [])
             if isinstance(said, Exception):
                 raise said

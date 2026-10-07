@@ -434,7 +434,7 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                     <div className="prCaseLine" data-testid="pr-comment-kb-text"><b>From your knowledge base:</b> {comment.knowledge}</div>
                   )}
                   {lookedAtLine(comment.checked_with) && (
-                    <div className="prCaseLine" data-testid="pr-comment-looked"><b>Second check looked at:</b> {lookedAtLine(comment.checked_with)}</div>
+                    <div className="prCaseLine" data-testid="pr-comment-looked"><b>Looked at:</b> {lookedAtLine(comment.checked_with)}</div>
                   )}
 
                   {comment.suggestion_code && (

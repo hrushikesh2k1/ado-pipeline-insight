@@ -106,6 +106,21 @@ things up in the repository. Comments are still shown on screen only: nothing is
   list or dict that the function changes, `except Exception: pass` with no comment, a shell command built from values with
   `shell=True`, and a `requests` call with no `timeout` (the Requests documentation says leaving it out can hang the program
   indefinitely). A `# noqa` on the line turns the check off.
+- **JSON files are reviewed.** Settings, test collections (for example Postman) and data files used to be skipped unless they were alert
+  templates. Now they are read as JSON. The reviewer is told where each changed part sits in the structure, for example
+  `item[3] "Orders" > item[1] "Get one order" > request`, because a few changed lines in the middle of thousands say nothing
+  on their own. It answers a JSON checklist: an entry copied from a neighbor that kept the neighbor's name or URL, a type or unit that
+  differs from the siblings, a host or customer written in where the siblings use a variable, a test that checks less than it says,
+  a note that contradicts the code it describes, a name that must agree with another file, a file that a script of the repository
+  generates. Exact checks in code report a file that stopped being valid JSON (comments and trailing commas are allowed), a key
+  written twice in one object (a JSON reader keeps only the last), and a secret written in the file (a token, a private key, an
+  authorization header, a password or account key); the review never repeats the secret, it shows its first four characters. The
+  same exact checks run on alert templates. A pull request with more files than fit reviews plain JSON after the code files.
+- **For a JSON file the first read can look things up in the repository** (find files, read a file, search the code) before it
+  answers. That is how a note in a test collection ("the service returns null, so expect 204") can be checked against the service.
+  What was looked up is shown on the finding (**Looked at:**, which used to say "Second check looked at") and in the notes.
+  With `gpt-6-sol` the lookups run with reasoning turned off, as Microsoft documents for tool calls on that model.
+- A check in your knowledge base can be limited to JSON files with `[JSON]` (or `[Postman]`).
 - **A model selector on every pull request, with a fallback.** Set `AZURE_OPENAI_REVIEW_DEPLOYMENT` to the name of a stronger
   deployment in the same Azure OpenAI resource (everything else keeps using `AZURE_OPENAI_DEPLOYMENT`). Each pull request card
   then has its own selector, **Standard** or **Strong**, next to **Review with AI**, and the review drawer has the same selector

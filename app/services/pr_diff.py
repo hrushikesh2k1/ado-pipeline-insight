@@ -12,8 +12,8 @@ from typing import Any
 
 from app.services.pr_arm import ARM_LANGUAGE
 
-# A .json file is only reviewed when its content is an ARM template (see pr_arm.is_arm_template): the review checks that
-# after fetching the file, because most JSON files are data.
+# A .json file is reviewed as an ARM template when its content is one (see pr_arm.is_arm_template) and as plain JSON otherwise; the review decides that
+# after fetching the file.
 LANGUAGES = {
     ".py": "Python", ".ps1": "PowerShell", ".psm1": "PowerShell", ".psd1": "PowerShell", ".json": ARM_LANGUAGE, ".kql": "KQL",
     ".sh": "Shell", ".sql": "SQL", ".yml": "YAML", ".yaml": "YAML", ".bicep": "Bicep", ".tf": "Terraform",
@@ -96,6 +96,7 @@ class FileView:
     omitted_hunks: int = 0
     shown: str = ""
     extra: str = ""  # what else the reviewer is told about this file (for an alert template: the alerts, in words)
+    outline: str = ""  # for a JSON file: where each changed part sits in the structure
     facts: str = ""  # facts about the project the file belongs to, read from its project files (for C#: the target framework and language version)
     old_text: Any = None  # the two versions as the client read them (they carry encoding facts: see core.ado_client.DecodedText)
     new_text: Any = None

@@ -8,6 +8,7 @@ checks). The items are discrete and each names the pattern, with a short example
 from __future__ import annotations
 
 from app.services.pr_arm import ARM_LANGUAGE
+from app.services.pr_json import JSON_LANGUAGE
 
 PYTHON = [
     "A loop that, for each item, searches another list (a list comprehension, any(), next() or `in` over a list inside the loop): quadratic. A dict or a set lookup fixes it.",
@@ -60,6 +61,17 @@ SQL = [
     "A header comment that contradicts the code beside it: a procedure name, a parameter, or a last-modified date earlier than the created date. It is a documentation fault: category maintainability, severity suggestion.",
 ]
 
+JSON = [
+    "An entry copied from a neighbor that still carries the neighbor's name, URL, id or description (what its name says is not what it does).",
+    "A value whose type or unit differs from the same key in the sibling entries (a number written as a string, seconds where the siblings use milliseconds, another date format).",
+    "A hard-coded host, environment URL, customer, subscription or tenant id, or date where the sibling entries use a variable or a parameter.",
+    "A test, request or case that checks less than its name or message says (no assertion, an assertion that cannot fail), or whose expectation contradicts the code it describes: look the code up.",
+    "A rationale, description or note written as a value that does not match what the code does (it says a service returns null, an empty list or 403 and the code does otherwise): search the repository.",
+    "A name, route, key, path or port that must agree with another file and was changed in this file only: look up the other side.",
+    "A file produced by a script of the repository (search for the file's name): a change made by hand is lost the next time the script runs, unless the script is among the changed files.",
+    "A key that the sibling entries all have and a new entry lacks, or an entry that the code reading this file would not understand.",
+]
+
 ALERTS = [
     "A changed threshold, operator, windowSize, evaluationFrequency, failingPeriods or query that changes when the alert fires (say what now fires or stops firing).",
     "minFailingPeriodsToAlert larger than numberOfEvaluationPeriods.",
@@ -105,7 +117,7 @@ COMMON = [
 ]
 
 CHECKS: dict[str, list[str]] = {
-    "Python": PYTHON, "PowerShell": POWERSHELL, "C#": CSHARP, "SQL": SQL, ARM_LANGUAGE: ALERTS, "KQL": KQL, "Markdown": MARKDOWN, "YAML": YAML,
+    "Python": PYTHON, "PowerShell": POWERSHELL, "C#": CSHARP, "SQL": SQL, ARM_LANGUAGE: ALERTS, JSON_LANGUAGE: JSON, "KQL": KQL, "Markdown": MARKDOWN, "YAML": YAML,
 }
 
 
