@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from app.core.config import get_settings
-from app.services.llm_util import chat_json, chat_json_with_tools, with_retry
+from app.services.llm_util import WithBackup, chat_json, chat_json_with_tools, with_retry
 from app.services.pr_arm import ARM_LANGUAGE, ARM_LINE_WIDTH, arm_context, is_arm_template
 from app.services.pr_checklist import evaluate_checklist, linked_build_ids, parse_checklist, placeholder_checks
 from app.services import pr_checks, pr_knowledge
@@ -209,17 +209,56 @@ class ReviewFailed(Exception):
         self.status_code = status_code
 
 
-def get_model_client() -> PipelineRecommendationClient:
+MODEL_CHOICES = ("standard", "strong")
+
+
+def review_models() -> dict[str, Any]:
+    """The models a review can use: the standard deployment (AZURE_OPENAI_DEPLOYMENT), the optional strong one (AZURE_OPENAI_REVIEW_DEPLOYMENT) and which is used
+    when the page does not say. Names are None when not configured."""
     settings = get_settings()
+    configured = bool(getattr(settings, "azure_openai_endpoint", None))
+    standard = (getattr(settings, "azure_openai_deployment", "") or "").strip() or None
+    strong = (getattr(settings, "azure_openai_review_deployment", "") or "").strip() or None
+    standard, strong = (standard if configured else None), (strong if configured else None)
+    return {"standard": standard, "strong": strong, "default": "strong" if strong else "standard"}
+
+
+def effective_choice(choice: str | None) -> str:
+    """"strong" or "standard": what a review will use. No choice means the default; "strong" without a strong deployment means the standard one."""
+    models = review_models()
+    wanted = choice if choice in MODEL_CHOICES else models["default"]
+    return "strong" if wanted == "strong" and models["strong"] else "standard" if models["standard"] else "strong"
+
+
+def get_model_client(choice: str | None = None) -> Any:
+    """The model for a review. The strong choice is the strong deployment with the standard one behind it: if the strong one cannot answer
+    (not found, busy, down), the review goes on with the standard one and says so."""
+    settings = get_settings()
+    models = review_models()
     endpoint = getattr(settings, "azure_openai_endpoint", None)
-    deployment = (getattr(settings, "azure_openai_review_deployment", "") or "").strip() or getattr(settings, "azure_openai_deployment", None)
-    if not endpoint or not deployment:
+    if not endpoint or not (models["standard"] or models["strong"]):
         raise AiUnavailable("Azure OpenAI is not configured (its endpoint and deployment are missing), so the AI review is unavailable. Nothing was reviewed.")
+    version, key = getattr(settings, "azure_openai_api_version", "2024-02-01"), getattr(settings, "azure_openai_api_key", None) or None
     try:
-        return PipelineRecommendationClient(endpoint, deployment, getattr(settings, "azure_openai_api_version", "2024-02-01"), getattr(settings, "azure_openai_api_key", None) or None)
+        if effective_choice(choice) == "strong":
+            strong = PipelineRecommendationClient(endpoint, models["strong"], version, key)
+            if models["standard"] and models["standard"] != models["strong"]:
+                return WithBackup(strong, PipelineRecommendationClient(endpoint, models["standard"], version, key))
+            return strong
+        return PipelineRecommendationClient(endpoint, models["standard"], version, key)
     except Exception as exc:
         logger.warning("Could not start the Azure OpenAI client for the PR review: %s", exc)
         raise AiUnavailable("The Azure OpenAI client could not be started, so the AI review is unavailable. Nothing was reviewed.") from exc
+
+
+def model_info(model: Any) -> dict[str, Any] | None:
+    """Which deployment a review asked, and, when the strong one could not answer, which one finished it and why."""
+    first = getattr(model, "primary", model)
+    name = getattr(first, "deployment", None)
+    if not name:
+        return None
+    reason = getattr(model, "fell_back_because", None)
+    return {"deployment": str(name), "fallback_deployment": str(model.backup.deployment) if reason else None, "fallback_reason": reason}
 
 
 # ---------------------------------------------------------------- small helpers
@@ -936,6 +975,10 @@ class PullRequestReviewService:
                             f"{len(comments) - exact} from the AI and {exact} from exact checks in code {'is' if len(comments) == 1 else 'are'} shown.")
         evidence = {"changed_paths": [f["path"] for f in files], "work_items": work_items, "build_check": build_check}
         checklist = evaluate_checklist(parse_checklist(description), evidence) + placeholder_checks(description)
+        switched = getattr(self.model, "fell_back_because", None)
+        if switched:
+            notes.insert(0, f"The strong model ({self.model.primary.deployment}) could not answer ({switched}), so the standard model ({self.model.backup.deployment}) did the rest of this review. "
+                            "Review again later to use the strong model.")
         notes = list(dict.fromkeys(notes))  # the same note, for example "could not be read", is not said twice
         verdict, scorecard = judge(comments)
         if not any(f["status"] == "reviewed" for f in files):
@@ -944,7 +987,7 @@ class PullRequestReviewService:
             "pull_request_id": pull_request_id, "verdict": verdict, "summary": summarize(files, comments, refs["source"], int(last.get("id") or len(iterations)), len(iterations)),
             "scorecard": scorecard, "comments": comments, "clarifications": clarifications, "posted_to_ado": False,
             "method": "diff-per-file", "source_commit": refs["source"] or None, "iterations": len(iterations),
-            "files": files, "checklist": checklist, "notes": notes, "scope_note": SCOPE_NOTE, "knowledge_checks": knowledge_checks,
+            "files": files, "checklist": checklist, "notes": notes, "scope_note": SCOPE_NOTE, "knowledge_checks": knowledge_checks, "model": model_info(self.model),
         }
 
     # ------------------------------------------------------------ steps

@@ -15,7 +15,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import type { AdoPullRequest, PullRequestReviewResponse, PullRequestReviewComment } from '../types/api'
-import { QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, STATIC_CHECK, STATIC_CHECK_TIP, allCommentsAsMarkdown, commentAsMarkdown, isAboutQueries, lineLabel, lookedAtLine, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
+import { QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, STATIC_CHECK, STATIC_CHECK_TIP, allCommentsAsMarkdown, commentAsMarkdown, isAboutQueries, lineLabel, lookedAtLine, modelLine, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
 import { ChecklistCard, FilesCard, KnowledgeCard, NotesCard } from './PrReviewPanels'
 
 interface PrReviewDrawerProps {
@@ -28,6 +28,8 @@ interface PrReviewDrawerProps {
   isStale?: boolean
   /** The knowledge base was changed after this review was made. */
   knowledgeChanged?: boolean
+  /** The model was switched after this review was made. */
+  modelChanged?: boolean
   isReReviewing?: boolean
   onReReview?: () => void
   /** Why the last attempt to review again failed. */
@@ -98,7 +100,7 @@ function getScoreBadgeClass(score: string) {
   }
 }
 
-export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onClose, isStale = false, knowledgeChanged = false, isReReviewing = false, onReReview, error = null }) => {
+export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onClose, isStale = false, knowledgeChanged = false, modelChanged = false, isReReviewing = false, onReReview, error = null }) => {
   const { pr, review } = reviewData
   const [severityFilter, setSeverityFilter] = useState<string>('all')
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -165,6 +167,14 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                   </span>
                 </>
               )}
+              {modelLine(review.model) && (
+                <>
+                  <span className="prDrawerSubDot">•</span>
+                  <span className="prDrawerSubItem" data-testid="pr-review-model" title={review.model?.fallback_reason ? `The strong model could not answer: ${review.model.fallback_reason}` : 'The AI model that made this review'}>
+                    {modelLine(review.model)}
+                  </span>
+                </>
+              )}
             </div>
           </div>
           <div className="prDrawerActions">
@@ -198,6 +208,13 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
           <div className="prStaleNote" data-testid="pr-review-kb-stale">
             <AlertTriangle size={14} />
             <span>Your knowledge base has changed since this review. Review again to apply it.</span>
+          </div>
+        )}
+
+        {modelChanged && (
+          <div className="prStaleNote" data-testid="pr-review-model-stale">
+            <AlertTriangle size={14} />
+            <span>You switched the review model since this review. Review again to use it.</span>
           </div>
         )}
 

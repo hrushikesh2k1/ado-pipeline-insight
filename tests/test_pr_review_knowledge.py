@@ -177,7 +177,7 @@ class TestWhatHappenedToEachCheck:
 def api(monkeypatch):
     state = {"ado": FakeAdo(), "model": FakePrModel()}
     monkeypatch.setattr(routes, "AzureDevOpsClient", lambda organization, pat: state["ado"])
-    monkeypatch.setattr(pr_review, "get_model_client", lambda: state["model"])
+    monkeypatch.setattr(pr_review, "get_model_client", lambda *choice: state["model"])
     monkeypatch.setattr("app.services.llm_util.time.sleep", lambda seconds: None)
     monkeypatch.setattr(pr_review_jobs, "jobs", ReviewJobs())
     return TestClient(create_app(), raise_server_exceptions=False), state

@@ -4,10 +4,60 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
+from types import SimpleNamespace
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
+
+_UNAVAILABLE = {401: "the key was refused", 403: "access was refused", 404: "the deployment was not found", 408: "it timed out", 429: "it is busy (rate limit)"}
+
+
+def model_unavailable(exc: Exception) -> str | None:
+    """Why a deployment cannot answer right now (not found, no access, busy, down, unreachable), or None for any other error: a bad request is our own
+    mistake and must not be hidden by asking another model."""
+    status = getattr(exc, "status_code", None)
+    if status in _UNAVAILABLE:
+        return _UNAVAILABLE[status]
+    if isinstance(status, int) and status >= 500:
+        return f"it answered HTTP {status}"
+    name = type(exc).__name__
+    return "it could not be reached" if "Timeout" in name or "Connection" in name else None
+
+
+class WithBackup:
+    """A model client that asks `primary` and, once its deployment cannot answer, carries on with `backup` for the rest of the review.
+    The switch is for good (a review is never half one model and half the other by chance after a single slow answer) and `fell_back_because` says why."""
+
+    def __init__(self, primary: Any, backup: Any):
+        self.primary, self.backup = primary, backup
+        self.fell_back_because: str | None = None
+        self._lock = threading.Lock()
+        outer = self
+
+        class Completions:
+            @staticmethod
+            def create(**request: Any) -> Any:
+                if outer.fell_back_because is None:
+                    try:
+                        return outer.primary.client.chat.completions.create(**{**request, "model": outer.primary.deployment})
+                    except Exception as exc:
+                        why = model_unavailable(exc)
+                        if why is None:
+                            raise
+                        with outer._lock:
+                            if outer.fell_back_because is None:
+                                outer.fell_back_because = why
+                                logger.warning("The deployment %s cannot answer (%s): the review goes on with %s", outer.primary.deployment, why, outer.backup.deployment)
+                return outer.backup.client.chat.completions.create(**{**request, "model": outer.backup.deployment})
+
+        self.client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+
+    @property
+    def deployment(self) -> str:
+        """The deployment that answers now."""
+        return self.backup.deployment if self.fell_back_because else self.primary.deployment
 
 
 def parse_json_object(text: str | None) -> dict[str, Any]:

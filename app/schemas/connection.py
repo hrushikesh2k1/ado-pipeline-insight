@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from core.validation import validate_organization, validate_pat, validate_project
@@ -90,6 +90,7 @@ class PullRequestReviewRequest(BaseModel):
     pull_request_id: int = Field(ge=1, le=2**31 - 1)
     pat: str | None = Field(default=None, max_length=512)
     knowledge: str | None = Field(default=None, max_length=6000)  # the team's own checks, as the user wrote them (see pr_knowledge)
+    model: Literal["standard", "strong"] | None = None  # which model reviews; none means the server's default (the strong one when it is set up)
 
 
 class PullRequestReviewCommentSchema(BaseModel):
@@ -150,6 +151,20 @@ class PullRequestKnowledgeCheck(BaseModel):
     hits: list[PullRequestKnowledgeHit] = Field(default_factory=list)  # where a term the team put in `backticks` appears in the changed lines
 
 
+class PullRequestReviewModelInfo(BaseModel):
+    """Which model a review used: the deployment it asked and, when that one could not answer, the one that finished it and why."""
+    deployment: str
+    fallback_deployment: str | None = None
+    fallback_reason: str | None = None
+
+
+class PullRequestReviewModelsSchema(BaseModel):
+    """The models a review can use. A name is null when it is not set up."""
+    standard: str | None = None
+    strong: str | None = None
+    default: str = "standard"
+
+
 class PullRequestReviewResponseSchema(BaseModel):
     pull_request_id: int
     verdict: str
@@ -166,6 +181,7 @@ class PullRequestReviewResponseSchema(BaseModel):
     notes: list[str] = Field(default_factory=list)
     scope_note: str = ""
     knowledge_checks: list[PullRequestKnowledgeCheck] = Field(default_factory=list)
+    model: PullRequestReviewModelInfo | None = None
 
 
 class PullRequestReviewJobError(BaseModel):

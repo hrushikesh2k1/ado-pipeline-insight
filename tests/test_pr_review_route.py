@@ -25,7 +25,7 @@ def api(monkeypatch):
         return state["ado"]
 
     monkeypatch.setattr(routes, "AzureDevOpsClient", make_ado)
-    monkeypatch.setattr(pr_review, "get_model_client", lambda: state["model"])
+    monkeypatch.setattr(pr_review, "get_model_client", lambda *choice: state["model"])
     monkeypatch.setattr("app.services.llm_util.time.sleep", lambda seconds: None)
     return TestClient(create_app(), raise_server_exceptions=False), state
 
@@ -58,7 +58,7 @@ def test_the_callers_pat_is_used_for_azure_devops(api):
 def test_without_the_ai_the_request_fails_and_nothing_is_made_up(api, monkeypatch):
     client, _ = api
 
-    def unavailable():
+    def unavailable(*choice):
         raise pr_review.AiUnavailable("Azure OpenAI is not configured, so the AI review is unavailable. Nothing was reviewed.")
 
     monkeypatch.setattr(pr_review, "get_model_client", unavailable)

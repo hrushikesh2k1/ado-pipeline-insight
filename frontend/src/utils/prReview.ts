@@ -1,4 +1,4 @@
-import type { AdoPullRequest, PullRequestChecklistCheck, PullRequestKnowledgeCheck, PullRequestReviewComment, PullRequestReviewJob, PullRequestReviewResponse, PullRequestReviewedFile } from '../types/api'
+import type { AdoPullRequest, PullRequestChecklistCheck, PullRequestKnowledgeCheck, PullRequestReviewComment, PullRequestReviewJob, PullRequestReviewModelInfo, PullRequestReviewModels, PullRequestReviewResponse, PullRequestReviewedFile, ReviewModelChoice } from '../types/api'
 
 /** The tool reads code changes; it does not approve a pull request. The wording says what it found, not what to decide. */
 const VERDICT_LABEL: Record<string, string> = {
@@ -105,6 +105,45 @@ export function saveKnowledge(text: string): void {
     if (text.trim()) localStorage.setItem(KNOWLEDGE_STORAGE_KEY, text)
     else localStorage.removeItem(KNOWLEDGE_STORAGE_KEY)
   } catch { /* storage blocked: the text stays on the page for this visit */ }
+}
+
+// ---------------------------------------------------------------- which model reviews
+
+export const MODEL_STORAGE_KEY = 'ado_pr_review_model'
+export const MODEL_LABEL: Record<ReviewModelChoice, string> = { standard: 'Standard', strong: 'Strong' }
+export const MODEL_TIP: Record<ReviewModelChoice, string> = {
+  standard: 'The usual model: quicker and cheaper.',
+  strong: 'A stronger model: slower and it costs more. If it cannot answer, the standard model finishes the review.',
+}
+export const MODEL_HELP = 'Choose the model for the next review. A review made with the other model is offered again.'
+
+/** The model a review will use: the one the user chose, when the server has it, otherwise the server's own default. */
+export function chosenModel(models: PullRequestReviewModels | null | undefined, saved: ReviewModelChoice | null | undefined): ReviewModelChoice {
+  if (!models) return 'standard'
+  if (saved && models[saved]) return saved
+  return models[models.default] ? models.default : models.strong ? 'strong' : 'standard'
+}
+
+/** True when a review was made with another model than the one chosen now. A review the page did not record is not compared. */
+export function modelChanged(used: ReviewModelChoice | null | undefined, current: ReviewModelChoice): boolean {
+  return Boolean(used) && used !== current
+}
+
+export function loadModelChoice(): ReviewModelChoice | null {
+  try {
+    const saved = localStorage.getItem(MODEL_STORAGE_KEY)
+    return saved === 'standard' || saved === 'strong' ? saved : null
+  } catch { return null }
+}
+
+export function saveModelChoice(choice: ReviewModelChoice): void {
+  try { localStorage.setItem(MODEL_STORAGE_KEY, choice) } catch { /* storage blocked: the choice holds for this visit */ }
+}
+
+/** "model: gpt-6-sol", or, when the strong one could not answer, "model: gpt-4.1-mini (gpt-6-sol could not answer)". Empty when the server did not say. */
+export function modelLine(info?: PullRequestReviewModelInfo | null): string {
+  if (!info?.deployment) return ''
+  return info.fallback_deployment ? `model: ${info.fallback_deployment} (${info.deployment} could not answer)` : `model: ${info.deployment}`
 }
 
 export const KNOWLEDGE_STATUS_LABEL: Record<PullRequestKnowledgeCheck['status'], string> = {

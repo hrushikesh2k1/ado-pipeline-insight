@@ -16,10 +16,11 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { api } from '../services/api'
-import type { AdoRepository, AdoPullRequest, AdoReviewer, PullRequestReviewResponse } from '../types/api'
+import type { AdoRepository, AdoPullRequest, AdoReviewer, PullRequestReviewModels, PullRequestReviewResponse, ReviewModelChoice } from '../types/api'
 import { PrReviewDrawer } from './PrReviewDrawer'
 import { PrKnowledgeBase } from './PrKnowledgeBase'
-import { knowledgeChanged, loadKnowledge, progressText, reviewIsStale, saveKnowledge } from '../utils/prReview'
+import { PrModelSwitch } from './PrModelSwitch'
+import { chosenModel, knowledgeChanged, loadKnowledge, loadModelChoice, modelChanged, progressText, reviewIsStale, saveKnowledge, saveModelChoice } from '../utils/prReview'
 import { usePlugins } from '../context/PluginContext'
 
 interface PullRequestsPageProps {
@@ -131,15 +132,31 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
   useEffect(() => { saveKnowledge(knowledge) }, [knowledge])
   const knowledgeChangedFor = (prId: number) => Boolean(reviewsCache[prId]) && knowledgeChanged(reviewKnowledge[prId], showAiPrReviewer ? knowledge : '')
 
+  // Which model reviews: the server says what it has; the choice is kept in this browser and sent with each review
+  const [models, setModels] = useState<PullRequestReviewModels | null>(null)
+  const [savedModel, setSavedModel] = useState<ReviewModelChoice | null>(loadModelChoice)
+  const [reviewModel, setReviewModel] = useState<Record<number, ReviewModelChoice>>({})  // the model each cached review was made with
+  useEffect(() => {
+    if (!showAiPrReviewer) return
+    let isCurrent = true
+    api.reviewModels().then((found) => { if (isCurrent) setModels(found) }).catch(() => { if (isCurrent) setModels(null) })
+    return () => { isCurrent = false }
+  }, [showAiPrReviewer])
+  const canChooseModel = Boolean(models?.strong && models?.standard)
+  const activeModel = chosenModel(models, savedModel)
+  const modelChangedFor = (prId: number) => canChooseModel && Boolean(reviewsCache[prId]) && modelChanged(reviewModel[prId], activeModel)
+  const chooseModel = (choice: ReviewModelChoice) => { setSavedModel(choice); saveModelChoice(choice) }
+
   const handleReviewPR = (targetPr: AdoPullRequest, force = false) => {
     // A review made at the commit that is still at the tip of the branch, with the checks written now, is shown as it is; after new commits,
     // after the knowledge base changed, or when asked, it is made again
     const cached = reviewsCache[targetPr.id]
-    if (cached && !force && !reviewIsStale(cached, targetPr) && !knowledgeChangedFor(targetPr.id)) {
+    if (cached && !force && !reviewIsStale(cached, targetPr) && !knowledgeChangedFor(targetPr.id) && !modelChangedFor(targetPr.id)) {
       setActiveReview({ pr: targetPr, review: cached })
       return
     }
     const usedKnowledge = knowledge
+    const usedModel = activeModel
 
     setReviewingPrId(targetPr.id)
     setReviewError(null)
@@ -152,12 +169,14 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
       pull_request_id: targetPr.id,
       pat,
       knowledge: usedKnowledge.trim() ? usedKnowledge : undefined,
+      model: canChooseModel ? usedModel : undefined,
     }, (job) => setReviewProgress({ prId: targetPr.id, text: progressText(job) }))
       .then((res) => {
         setReviewingPrId(null)
         setReviewProgress(null)
         setReviewsCache((prev) => ({ ...prev, [targetPr.id]: res }))
         setReviewKnowledge((prev) => ({ ...prev, [targetPr.id]: usedKnowledge }))
+        setReviewModel((prev) => ({ ...prev, [targetPr.id]: usedModel }))
         setActiveReview({ pr: targetPr, review: res })
       })
       .catch((err) => {
@@ -443,6 +462,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
           </div>
 
           {/* The user's own checks, applied to every AI review */}
+          {showAiPrReviewer && <PrModelSwitch models={models} value={activeModel} onChange={chooseModel} />}
           {showAiPrReviewer && <PrKnowledgeBase value={knowledge} onChange={setKnowledge} />}
 
           {/* Filter & Search Bar */}
@@ -648,7 +668,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
                               {reviewingPrId === pr.id
                                 ? 'Reviewing...'
                                 : reviewsCache[pr.id]
-                                ? reviewIsStale(reviewsCache[pr.id], pr) ? 'Review again (new commits)' : knowledgeChangedFor(pr.id) ? 'Review again (knowledge base changed)' : 'View AI review'
+                                ? reviewIsStale(reviewsCache[pr.id], pr) ? 'Review again (new commits)' : knowledgeChangedFor(pr.id) ? 'Review again (knowledge base changed)' : modelChangedFor(pr.id) ? 'Review again (model changed)' : 'View AI review'
                                 : 'Review with AI'}
                             </span>
                           </button>
@@ -695,6 +715,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
           onClose={() => setActiveReview(null)}
           isStale={reviewIsStale(activeReview.review, pullRequests.find(p => p.id === activeReview.pr.id) ?? activeReview.pr)}
           knowledgeChanged={knowledgeChangedFor(activeReview.pr.id)}
+          modelChanged={modelChangedFor(activeReview.pr.id)}
           isReReviewing={reviewingPrId === activeReview.pr.id}
           onReReview={() => handleReviewPR(activeReview.pr, true)}
           error={reviewError && reviewError.prId === activeReview.pr.id ? reviewError.message : null}

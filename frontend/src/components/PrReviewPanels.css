@@ -88,6 +88,16 @@
 }
 
 /* the knowledge base: the box on the pull request page, and its result in the review */
+.prModelSwitch { margin: 0 0 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.prModelTitle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 700; }
+.prModelTitle svg { color: var(--p-accent); flex: none; }
+.prModelOptions { display: inline-flex; border: 1px solid var(--p-border); border-radius: 20px; overflow: hidden; }
+.prModelOption { display: inline-flex; align-items: baseline; gap: 6px; background: transparent; color: inherit; border: 0; padding: 5px 14px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.prModelOption + .prModelOption { border-left: 1px solid var(--p-border); }
+.prModelOption.active { background: var(--p-accent); color: #ffffff; }
+.prModelOption.active .prModelName { color: inherit; opacity: 0.85; }
+.prModelName { font-size: 11px; font-weight: 500; color: var(--p-muted); }
+.prModelOption:focus-visible { outline: 2px solid var(--p-accent); outline-offset: -2px; }
 .prKnowledge { margin: 0 0 14px; }
 .prKnowledgeToggle { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; padding: 0; color: inherit; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; text-align: left; }
 .prKnowledgeToggle svg { color: var(--p-accent); flex: none; }

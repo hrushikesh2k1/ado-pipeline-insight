@@ -106,9 +106,14 @@ things up in the repository. Comments are still shown on screen only: nothing is
   list or dict that the function changes, `except Exception: pass` with no comment, a shell command built from values with
   `shell=True`, and a `requests` call with no `timeout` (the Requests documentation says leaving it out can hang the program
   indefinitely). A `# noqa` on the line turns the check off.
-- **A stronger model can be used for the review only.** Set `AZURE_OPENAI_REVIEW_DEPLOYMENT` to the name of another deployment in
-  the same Azure OpenAI resource; the review uses it and everything else keeps using `AZURE_OPENAI_DEPLOYMENT`. A model that
-  does not accept a temperature setting is asked again without it.
+- **A switch for the review model, with a fallback.** Set `AZURE_OPENAI_REVIEW_DEPLOYMENT` to the name of a stronger deployment in
+  the same Azure OpenAI resource (everything else keeps using `AZURE_OPENAI_DEPLOYMENT`). The pull request page then shows
+  **AI review model: Standard | Strong**, kept in your browser, and each review is made with the one you chose; changing it offers
+  "Review again (model changed)". The strong one is the default when it is set up. If the strong deployment cannot answer (not
+  found, access refused, busy, down or unreachable) the standard one finishes the review, and the review says so in its notes and
+  in its header; a request that is wrong in itself is not hidden by asking the other model. The header of every review names the
+  model that made it. A model that does not accept a temperature setting is asked again without it. Without a strong deployment
+  nothing changes and the switch does not show.
 
 **Your own knowledge base**
 - **A box on the pull request page for your own checks.** You write what you know goes wrong often, or must always be looked at,
@@ -209,7 +214,9 @@ things up in the repository. Comments are still shown on screen only: nothing is
   reach.
 - API: `POST /api/v1/ado/pullrequests/review` returns `method`, `source_commit`, `iterations`, `files`, `checklist`, `notes`,
   `scope_note` and `knowledge_checks`. Each comment has `end_line`, `language`, `failing_case`, `evidence`, `existing_thread`,
-  `existing_status`, `verified`, `source` (`ai` or `static`), `checked_with`, `knowledge` and `knowledge_number`. The verdict can
+  `existing_status`, `verified`, `source` (`ai` or `static`), `checked_with`, `knowledge` and `knowledge_number`. The review itself has `model` (`deployment`, and `fallback_deployment` and `fallback_reason` when the standard one finished it).
+  `GET /api/v1/ado/pullrequests/review/models` says which models are set up (`standard`, `strong`, `default`), and the requests accept
+  `model` (`standard` or `strong`; a different model is a different review). The verdict can
   be `NOT_REVIEWED`. The request, and the one that starts a background review, accept `knowledge` (the user's checks, up to 6,000
   characters, at most 40 checks are used); a different knowledge text is a different review.
   `POST /api/v1/ado/pullrequests/review/start` starts the same review in the background (202 with a job), and

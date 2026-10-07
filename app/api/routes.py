@@ -28,6 +28,7 @@ from app.schemas.connection import (
     AdoReviewer,
     AdoPullRequest,
     PullRequestReviewRequest,
+    PullRequestReviewModelsSchema,
     PullRequestReviewResponseSchema,
     PullRequestReviewJobSchema,
     AdoTeam,
@@ -465,7 +466,7 @@ def review_pull_request(payload: PullRequestReviewRequest) -> PullRequestReviewR
     token = _resolve_pat(org_clean, payload.pat)
 
     try:
-        model = pr_review.get_model_client()
+        model = pr_review.get_model_client(payload.model)
         service = pr_review.PullRequestReviewService(AzureDevOpsClient(organization=org_clean, pat=token), model)
         result = service.review(proj_clean, repo_clean, payload.pull_request_id, knowledge=payload.knowledge or "")
     except Exception as exc:
@@ -509,7 +510,7 @@ def start_pull_request_review(payload: PullRequestReviewRequest) -> PullRequestR
     repo_clean = payload.repository_id.strip()
     token = _resolve_pat(org_clean, payload.pat)
     try:
-        model = pr_review.get_model_client()
+        model = pr_review.get_model_client(payload.model)
     except pr_review.AiUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     service = pr_review.PullRequestReviewService(AzureDevOpsClient(organization=org_clean, pat=token), model)
@@ -518,13 +519,25 @@ def start_pull_request_review(payload: PullRequestReviewRequest) -> PullRequestR
         result = service.review(proj_clean, repo_clean, payload.pull_request_id, progress, pr_review.BACKGROUND_BUDGET_SECONDS, knowledge=payload.knowledge or "")
         return PullRequestReviewResponseSchema(**result).model_dump()
 
-    # the same review with other checks of the team's is another review
-    key = pr_review_jobs.ReviewJobs.fingerprint(org_clean, proj_clean, repo_clean, payload.pull_request_id, token, pr_knowledge.normalize(payload.knowledge))
+    # the same review with other checks of the team's, or by another model, is another review
+    key = pr_review_jobs.ReviewJobs.fingerprint(org_clean, proj_clean, repo_clean, payload.pull_request_id, token, pr_knowledge.normalize(payload.knowledge), pr_review.effective_choice(payload.model))
     try:
         job_id = pr_review_jobs.jobs.start(key, work, _explain_review_error)
     except pr_review_jobs.TooManyReviews as exc:
         raise HTTPException(status_code=429, detail=str(exc)) from exc
     return PullRequestReviewJobSchema(**pr_review_jobs.jobs.get(job_id))
+
+
+@router.get(
+    "/ado/pullrequests/review/models",
+    response_model=PullRequestReviewModelsSchema,
+    tags=["ado"],
+    operation_id="pull_request_review_models",
+)
+def pull_request_review_models() -> PullRequestReviewModelsSchema:
+    """The models the AI review can use: the standard one, the optional strong one, and which is used when a review does not choose.
+    If the strong one cannot answer during a review, the standard one finishes it and the review says so."""
+    return PullRequestReviewModelsSchema(**pr_review.review_models())
 
 
 @router.get(

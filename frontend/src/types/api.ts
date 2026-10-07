@@ -113,6 +113,23 @@ export type PullRequestChecklistCheck = {
   evidence: string
 }
 
+/** Which model reviews: the standard deployment or the optional strong one. */
+export type ReviewModelChoice = 'standard' | 'strong'
+
+/** The models a review can use; a name is null when it is not set up. */
+export type PullRequestReviewModels = {
+  standard: string | null
+  strong: string | null
+  default: ReviewModelChoice
+}
+
+/** Which model made a review: the deployment it asked and, when that one could not answer, the one that finished it and why. */
+export type PullRequestReviewModelInfo = {
+  deployment: string
+  fallback_deployment?: string | null
+  fallback_reason?: string | null
+}
+
 export type PullRequestReviewResponse = {
   pull_request_id: number
   verdict: 'APPROVED' | 'APPROVED_WITH_SUGGESTIONS' | 'CHANGES_REQUESTED' | 'NOT_REVIEWED'
@@ -129,6 +146,7 @@ export type PullRequestReviewResponse = {
   notes?: string[]
   scope_note?: string
   knowledge_checks?: PullRequestKnowledgeCheck[]
+  model?: PullRequestReviewModelInfo | null
 }
 
 /** A review running in the background: where it is and, when it is over, the review or why there is none. */

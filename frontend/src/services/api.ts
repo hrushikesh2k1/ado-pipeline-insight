@@ -11,6 +11,8 @@ import type {
   AdoPullRequest,
   PullRequestReviewResponse,
   PullRequestReviewJob,
+  PullRequestReviewModels,
+  ReviewModelChoice,
   AdoTeam,
   AdoIteration,
   AdoSprintBoardResponse,
@@ -99,7 +101,7 @@ export const api = {
     return request<AdoPullRequest[]>(`/api/v1/ado/pullrequests?${p.toString()}`)
   },
   /** Starts the review in the background and follows it until it is done (a review can take minutes, longer than one web request may last). */
-  reviewPullRequest:async(payload:{organization:string;project:string;repository_id:string;pull_request_id:number;pat?:string;knowledge?:string}, onProgress?:(job:PullRequestReviewJob)=>void, pollMs=REVIEW_POLL_MS):Promise<PullRequestReviewResponse>=>{
+  reviewPullRequest:async(payload:{organization:string;project:string;repository_id:string;pull_request_id:number;pat?:string;knowledge?:string;model?:ReviewModelChoice}, onProgress?:(job:PullRequestReviewJob)=>void, pollMs=REVIEW_POLL_MS):Promise<PullRequestReviewResponse>=>{
     let job = await request<PullRequestReviewJob>('/api/v1/ado/pullrequests/review/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -120,6 +122,8 @@ export const api = {
     if (job.status === 'failed' || !job.result) throw new Error(job.error?.detail || 'The review failed. Nothing was reviewed.')
     return job.result
   },
+  /** The models the AI review can use (the strong one only when the server has it set up). */
+  reviewModels:()=>request<PullRequestReviewModels>('/api/v1/ado/pullrequests/review/models'),
   teams:(organization:string,project:string,pat?:string)=>{
     const p = new URLSearchParams({ organization, project })
     if (pat) p.set('pat', pat)
