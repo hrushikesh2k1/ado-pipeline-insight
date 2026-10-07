@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../../services/api'
 import type { PullRequestReviewModels } from '../../types/api'
-import { MODEL_LABEL, MODEL_SELECT_TIP, MODEL_TIP, chosenModel, modelChanged, modelLine } from '../../utils/prReview'
+import { MODEL_LABEL, MODEL_NOT_SET_UP, MODEL_SELECT_TIP, MODEL_TIP, chosenModel, modelChanged, modelLine } from '../../utils/prReview'
 
 const both: PullRequestReviewModels = { standard: 'standard-mini', strong: 'strong-sol', default: 'strong' }
 const standardOnly: PullRequestReviewModels = { standard: 'standard-mini', strong: null, default: 'standard' }
@@ -59,6 +59,7 @@ describe('the words on the switch', () => {
     expect(MODEL_LABEL).toEqual({ standard: 'Standard', strong: 'Strong' })
     expect(MODEL_TIP.strong).toContain('standard model finishes the review')
     expect(MODEL_SELECT_TIP).toContain('this pull request')
+    expect(MODEL_NOT_SET_UP).toContain('AZURE_OPENAI_REVIEW_DEPLOYMENT')
     expect(MODEL_SELECT_TIP).toContain('the other model is offered again')
   })
 })

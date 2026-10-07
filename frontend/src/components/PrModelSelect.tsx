@@ -1,11 +1,11 @@
 import React from 'react'
 import { Cpu } from 'lucide-react'
 import type { PullRequestReviewModels, ReviewModelChoice } from '../types/api'
-import { MODEL_LABEL, MODEL_SELECT_TIP, MODEL_TIP } from '../utils/prReview'
+import { MODEL_LABEL, MODEL_NOT_SET_UP, MODEL_SELECT_TIP, MODEL_TIP } from '../utils/prReview'
 import './PrReviewPanels.css'
 
 interface PrModelSelectProps {
-  /** What the server has set up; nothing is shown unless there is a strong model next to the standard one. */
+  /** What the server has set up. Nothing is shown until the server has answered and has a standard model. */
   models: PullRequestReviewModels | null | undefined
   value: ReviewModelChoice
   onChange: (choice: ReviewModelChoice) => void
@@ -13,23 +13,26 @@ interface PrModelSelectProps {
   testId: string
 }
 
-/** Which AI model reviews this one pull request: the standard one or the strong one (which the standard one backs up if it cannot answer). */
+/**
+ * Which AI model reviews this one pull request: the standard one or the strong one (which the standard one backs up if it cannot answer).
+ * The strong choice is always listed; until the server has a strong model it is greyed out and says so, instead of the selector being missing.
+ */
 export const PrModelSelect: React.FC<PrModelSelectProps> = ({ models, value, onChange, disabled = false, testId }) => {
-  if (!models?.strong || !models.standard) return null
+  if (!models?.standard) return null
+  const strongReady = Boolean(models.strong)
   return (
-    <label className="prModelSelect" title={MODEL_SELECT_TIP}>
+    <label className="prModelSelect" title={strongReady ? MODEL_SELECT_TIP : MODEL_NOT_SET_UP}>
       <Cpu size={13} aria-hidden="true" />
       <select
-        value={value}
+        value={strongReady ? value : 'standard'}
         disabled={disabled}
         aria-label="AI review model for this pull request"
         data-testid={testId}
-        title={MODEL_TIP[value]}
+        title={strongReady ? MODEL_TIP[value] : MODEL_NOT_SET_UP}
         onChange={(event) => onChange(event.target.value === 'strong' ? 'strong' : 'standard')}
       >
-        {(['standard', 'strong'] as const).map(choice => (
-          <option key={choice} value={choice}>{MODEL_LABEL[choice]} · {models[choice]}</option>
-        ))}
+        <option value="standard">{MODEL_LABEL.standard} · {models.standard}</option>
+        <option value="strong" disabled={!strongReady}>{MODEL_LABEL.strong} · {models.strong ?? 'not set up'}</option>
       </select>
     </label>
   )

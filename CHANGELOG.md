@@ -114,7 +114,7 @@ things up in the repository. Comments are still shown on screen only: nothing is
   cannot answer (not found, access refused, busy, down or unreachable) the standard one finishes the review, and the review says
   so in its notes and in its header; a request that is wrong in itself is not hidden by asking the other model. The header of every
   review names the model that made it. A model that does not accept a temperature setting is asked again without it. Without a
-  strong deployment nothing changes and no selector shows.
+  strong deployment the selector still shows, with Strong greyed out as "not set up", and every review uses the standard model.
 
 **Your own knowledge base**
 - **A box on the pull request page for your own checks.** You write what you know goes wrong often, or must always be looked at,

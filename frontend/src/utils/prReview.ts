@@ -114,6 +114,7 @@ export const MODEL_TIP: Record<ReviewModelChoice, string> = {
   standard: 'The usual model: quicker and cheaper.',
   strong: 'A stronger model: slower and it costs more. If it cannot answer, the standard model finishes the review.',
 }
+export const MODEL_NOT_SET_UP = 'The strong model is not set up on this server yet. Set AZURE_OPENAI_REVIEW_DEPLOYMENT to a stronger deployment of the same Azure OpenAI resource to use it.'
 export const MODEL_SELECT_TIP = 'The AI model that reviews this pull request. A review made with the other model is offered again.'
 
 /** The model a review of one pull request will use: the one chosen for it, when the server has it, otherwise the server's own default. */
