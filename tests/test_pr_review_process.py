@@ -70,10 +70,45 @@ class TestTheHostileSecondLook:
         result, _, _ = self.refuted({1: ("", LINE)})
         assert len(result["comments"]) == 1
 
-    def test_the_description_and_the_project_facts_can_be_quoted_too(self):
+    def test_the_description_cannot_be_the_proof_because_it_says_what_the_author_meant(self):
         description_quote = "Regression results: https://dev.azure.com/org/proj/_build/results?buildId=100"
         result, _, _ = self.refuted({1: ("the author says it is covered", description_quote)})
+        assert len(result["comments"]) == 1
+
+    def test_a_comment_in_the_code_cannot_be_the_proof_either(self):
+        # a real review lost a true finding because a header comment said the behaviour was "deliberately kept in lockstep"
+        text = PY_NEW + "# the caller never passes an empty list, so this is deliberate\n"
+        ado = FakeAdo(changes=[change("/scripts/report.py")], blobs={"new-/scripts/report.py": text, "old-/scripts/report.py": PY_OLD})
+        comment_quote = "the caller never passes an empty list, so this is deliberate"
+        result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero")]}, refutes={REPORT: {1: ("a comment says it is deliberate", comment_quote)}}))
+        assert len(result["comments"]) == 1
+        result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero")]}, refutes={REPORT: {1: ("only non-empty lists are passed", LINE)}}))
+        assert result["comments"] == []  # code that makes the case impossible still removes it
+
+    def test_a_trailing_comment_does_not_make_the_code_before_it_unquotable(self):
+        text = PY_NEW.replace(LINE, LINE + "  # callers pass non-empty lists")
+        ado = FakeAdo(changes=[change("/scripts/report.py")], blobs={"new-/scripts/report.py": text, "old-/scripts/report.py": PY_OLD})
+        result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero", evidence=LINE)]}, refutes={REPORT: {1: ("the code guards it", LINE)}}))
         assert result["comments"] == []
+
+    def test_the_facts_worked_out_in_code_can_be_the_proof(self):
+        from test_pr_review_checks import CS_PATH, cs_finding
+        result, _, _ = run(cs_pr(), FakePrModel({CS_PATH: [cs_finding()]}, refutes={CS_PATH: {1: ("the project is C# 12", "targets net8.0 (C# 12)")}}))
+        assert result["comments"] == []
+
+    def test_in_a_document_every_line_counts_because_prose_has_no_comments(self):
+        ado = FakeAdo(changes=[change("/docs/guide.md", "add")], blobs={"new-/docs/guide.md": "# Title\n\nSome text that is wrong.\n"})
+        said = {"docs/guide.md": [finding(3, "Wrong text", evidence="Some text that is wrong.")]}
+        refuted = run(ado, FakePrModel(said, refutes={"docs/guide.md": {1: ("the heading says otherwise", "# Title")}}))[0]
+        assert refuted["comments"] == []
+
+    @pytest.mark.parametrize("line", ["-- a SQL comment", "  // a C# comment", "# a Python or PowerShell comment", "/* opens", " * inside a block", "<!-- html -->", "'''docstring", '"""docstring'])
+    def test_what_counts_as_a_comment_line(self, line):
+        assert pr_review._is_comment(line)
+
+    @pytest.mark.parametrize("line", ["x = 1  # trailing comment", "SELECT 1 -- trailing", "return a / b", "    value = 'hello'", ""])
+    def test_a_line_of_code_is_not_a_comment_line(self, line):
+        assert not pr_review._is_comment(line)
 
     def test_what_a_lookup_returned_can_be_quoted(self):
         ado = cs_pr()
@@ -107,7 +142,8 @@ class TestTheHostileSecondLook:
         assert len(result["comments"]) == 1 and model.calls_of("refute") == []
 
     def test_the_prompt_makes_the_ai_argue_from_the_code(self):
-        for part in ("assume it is WRONG", "how the rest of the file handles the same thing", "Argue from the code, never from opinion", "quote it exactly", "wrong is false"):
+        for part in ("assume it is WRONG", "how the rest of the file handles the same thing", "Argue from the code, never from opinion", "never use one of them as the reason a finding is wrong",
+                     "shows what the author INTENDED, not what the code does", "quote code (or a lookup result) that makes its concrete case impossible", "wrong is false"):
             assert part in pr_review.REFUTE_SYSTEM
 
     def test_the_second_look_is_offered_the_lookup_tools_when_there_is_a_repository_to_read(self):

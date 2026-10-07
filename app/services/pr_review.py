@@ -162,11 +162,11 @@ Answer with JSON only: {"findings": [{"number": 1, "holds": true, "reason": "one
 
 REFUTE_SYSTEM = """You are a sceptical senior engineer. Reviewers made the numbered findings below about a changed file. A first check already agreed with them. Your job is the opposite: for each finding, assume it is WRONG and try to prove that from what is in front of you.
 
-Look at how the rest of the file handles the same thing (other parts of a query or class, neighbouring rows, other branches, the same column or name elsewhere), at the author's description, at comments in the code, and at the facts you are given (today's date, the project's language version, the alert timing facts). Think about when the code runs and what ran before. If you find code or text that shows the finding is wrong, quote it exactly. Argue from the code, never from opinion.
+Look at how the rest of the file handles the same thing (other parts of a query or class, neighbouring rows, other branches, the same column or name elsewhere), at the facts you are given (today's date, the project's language version, the alert timing facts) and at what a lookup returns. Think about when the code runs and what ran before. A comment, a name or the author's description shows what the author INTENDED, not what the code does: never use one of them as the reason a finding is wrong. To show a finding is wrong, quote code (or a lookup result) that makes its concrete case impossible. Argue from the code, never from opinion.
 
 If you cannot find anything that shows it is wrong, say so: wrong is false.
 
-Answer with JSON only: {"findings": [{"number": 1, "wrong": false, "because": "one short sentence", "quote": "the exact code or text that shows the finding is wrong, or empty"}]}"""
+Answer with JSON only: {"findings": [{"number": 1, "wrong": false, "because": "one short sentence", "quote": "the exact code that makes the finding's case impossible, or empty"}]}"""
 
 KB_PR_SYSTEM = """You check a pull request against checks the team wrote about pull requests themselves (not about code). You get the numbered checks, the pull request description, the list of changed files and the comments people already made.
 
@@ -569,6 +569,14 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
     return kept, removed
 
 
+_COMMENT_START = ("--", "//", "#", "/*", "*", "<!--", "'''", '"""')
+
+
+def _is_comment(line: str) -> bool:
+    """True for a line that holds only a comment (SQL --, C-style //, /* and *, # in Python, PowerShell and YAML, HTML <!--)."""
+    return line.lstrip().startswith(_COMMENT_START)
+
+
 def refute_findings(model: Any, view: FileView, findings: list[dict[str, Any]], pr: dict[str, Any] | None = None,
                     belt: ToolBelt | None = None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
     """A last, hostile read: another call is told to assume each finding is wrong and to find code that shows it. A finding is removed only
@@ -591,7 +599,10 @@ def refute_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
     except Exception as exc:
         logger.warning("The refutation check of the findings in %s failed: %s", view.path, type(exc).__name__)
         return findings, []
-    haystack = _compact("\n".join(r.text for r in view.rows) + "\n" + view.extra + "\n" + (pr.get("description") or "") + "\n" + view.facts + "\n" + "\n".join(belt.seen if belt is not None else []))
+    # what may be quoted as proof: the code (not its comments), the facts worked out in code, and what a lookup returned. A comment or the description
+    # says what the author meant; it cannot show what the code does, so it never removes a finding.
+    proof_rows = [r.text for r in view.rows if view.language == "Markdown" or not _is_comment(r.text)]  # prose has no comments: every line of a document counts
+    haystack = _compact("\n".join(proof_rows) + "\n" + view.extra + "\n" + view.facts + "\n" + "\n".join(belt.seen if belt is not None else []))
     verdicts: dict[int, tuple[str, str]] = {}
     for entry in answer.get("findings") if isinstance(answer.get("findings"), list) else []:
         number = _int(entry.get("number")) if isinstance(entry, dict) else None

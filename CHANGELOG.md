@@ -48,8 +48,9 @@ things up in the repository. Comments are still shown on screen only: nothing is
   structure, style and missing-test findings are never more than a "suggestion". The review notes list what was removed and why.
   The AI may return no findings. A finding may also carry a replacement for the exact lines it points at.
 - **A hostile second look at every finding that is left.** Another AI call is told to assume each finding is wrong and to find code
-  that shows it: how the rest of the file or query handles the same thing, the description, the facts it was given, what a lookup
-  returned. A finding is removed only when that call quotes code or text that is really there. An opinion alone removes nothing.
+  that shows it: how the rest of the file or query handles the same thing, the facts it was given, what a lookup returned. A
+  finding is removed only when that call quotes real code, a fact or a lookup result. A comment in the code or the description never
+  counts as proof, because it shows what the author meant, not what the code does. An opinion alone removes nothing.
 - **Alert timing is worked out by plain code.** For each alert the AI is told how often it runs, how far back each run reads, and
   for every `ago()` time filter in its query whether it can skip events (shorter than the time between runs), is cut off by the
   window (longer than what a run reads), or is seen by several runs. The advice no longer says that a filter shorter than the window
@@ -120,6 +121,11 @@ things up in the repository. Comments are still shown on screen only: nothing is
 - The review says plainly that it reads code changes only and cannot judge how a result looks or behaves when run.
 
 ### Fixed
+- **A true finding was removed because a comment said the behaviour was deliberate.** A script's header comment said its 24-hour
+  cutoff was "deliberately kept in lockstep" with the test's window, and the hostile second look took that as proof. The cutoff is
+  worked out once, when the script starts, so the test's window starts minutes later: the edge the human reviewer had raised. Only
+  real code, computed facts and lookup results can now remove a finding (in a document, every line counts, since prose has no
+  comments).
 - **A finding that said it had no failing case was shown** ("No failing case, but the code is unnecessarily verbose"). It is now
   removed.
 - **The alert advice invited a wrong finding.** It told the AI to look for a time filter shorter than the window, and the AI then
