@@ -209,6 +209,112 @@ def python_unused(view: FileView) -> list[dict[str, Any]]:
     return unique
 
 
+# ---------------------------------------------------------------- Python: patterns that are wrong whatever the code around them says
+
+_NARROW_ANNOTATIONS = {"dict", "Dict", "list", "List"}
+_MUTATORS = {"append", "extend", "insert", "add", "update", "setdefault", "remove", "pop", "popitem", "clear", "discard", "sort", "reverse"}
+_SUBPROCESS_RUNNERS = {"run", "call", "Popen", "check_call", "check_output"}
+_HTTP_VERBS = {"get", "post", "put", "patch", "delete", "head", "options", "request"}
+
+
+def _call_of(node: ast.AST, module: str, names: set[str]) -> bool:
+    """True for a call written as module.name(...), such as json.load(...)."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in names
+            and isinstance(node.func.value, ast.Name) and node.func.value.id == module)
+
+
+def _annotation_name(annotation: ast.AST | None) -> str | None:
+    """dict for `dict`, `dict[str, Any]`, `Dict[str, int]` and `typing.Dict`."""
+    node = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _is_text(node: ast.AST) -> bool:
+    return isinstance(node, ast.JoinedStr) or (isinstance(node, ast.Constant) and isinstance(node.value, str))
+
+
+def _built_text(node: ast.AST) -> bool:
+    """A command assembled from values: an f-string with a value in it, text + something, text % something, or text.format(...)."""
+    if isinstance(node, ast.JoinedStr):
+        return any(isinstance(v, ast.FormattedValue) for v in node.values)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        return (_is_text(node.left) or _is_text(node.right)) and not (isinstance(node.left, ast.Constant) and isinstance(node.right, ast.Constant))
+    return isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format" and isinstance(node.func.value, ast.Constant)
+
+
+def _is_mutable_default(node: ast.AST | None) -> bool:
+    return isinstance(node, (ast.List, ast.Dict, ast.Set)) or (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"list", "dict", "set"})
+
+
+def _mutation_of(function: ast.AST, name: str) -> str | None:
+    """The first way the function changes the value held by `name` (append, a key assigned, ...), or None. A function that assigns the name afresh is not judged."""
+    way = None
+    for node in _own_nodes(function):
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            return None
+        if way is None and isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _MUTATORS and isinstance(node.func.value, ast.Name) and node.func.value.id == name:
+            way = f".{node.func.attr}()"
+        targets = node.targets if isinstance(node, (ast.Assign, ast.Delete)) else [node.target] if isinstance(node, ast.AugAssign) else []
+        if way is None and any(isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name) and t.value.id == name for t in targets):
+            way = "an item assigned"
+    return way
+
+
+def python_hazards(view: FileView) -> list[dict[str, Any]]:
+    """Code that is wrong by its shape alone, on lines this pull request added: a return annotation JSON can break, a default list that is changed, an error swallowed,
+    a shell command built from values, a web request with no timeout."""
+    lines = view.new_lines
+    try:
+        tree = ast.parse("\n".join(lines))
+    except (SyntaxError, ValueError, RecursionError):
+        return []
+    found: list[dict[str, Any]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            returned = next((r for r in _own_nodes(node) if isinstance(r, ast.Return) and _call_of(r.value, "json", {"load", "loads"})), None)
+            kind = _annotation_name(node.returns)
+            where = next((n for n in (getattr(node.returns, "lineno", None), getattr(returned, "lineno", None)) if n in view.added), None)
+            if returned is not None and kind in _NARROW_ANNOTATIONS and where and not (_silenced(lines, node.returns) or _silenced(lines, returned)):
+                found.append(_finding(view, where, f"{node.name}() is annotated -> {kind} but returns whatever the JSON holds",
+                                      f"`{node.name}` promises `{kind}` and returns `json.{returned.value.func.attr}(...)`, whose result is a list, a dict, a string or a number depending on the file. "
+                                      "Annotate it with what it really returns (for example `Any`), or check the type and raise a clear error.",
+                                      f"If the file holds {'a list' if kind.lower() == 'dict' else 'an object'}, {node.name}() returns that, and a caller that trusts `-> {kind}` fails when it uses it as one.",
+                                      lines[where - 1], category="correctness"))
+            arguments = node.args
+            pairs = list(zip(arguments.args[len(arguments.args) - len(arguments.defaults):], arguments.defaults)) + [(a, d) for a, d in zip(arguments.kwonlyargs, arguments.kw_defaults) if d is not None]
+            for argument, default in pairs:
+                way = _mutation_of(node, argument.arg) if _is_mutable_default(default) and default.lineno in view.added and not _silenced(lines, default) else None
+                if way:
+                    found.append(_finding(view, default.lineno, f"Default value of {argument.arg} is one object shared by every call",
+                                          f"The default for `{argument.arg}` is built once, when `{node.name}` is defined, and the function changes it ({way}). Use `None` as the default and create the value inside the function.",
+                                          f"Call {node.name}() twice without {argument.arg}: the change made by the first call is still there when the second starts.",
+                                          lines[default.lineno - 1], severity="warning", category="correctness"))
+        elif isinstance(node, ast.ExceptHandler) and node.lineno in view.added:
+            broad = node.type is None or (isinstance(node.type, ast.Name) and node.type.id in {"Exception", "BaseException"})
+            silent = all(isinstance(s, ast.Pass) or (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant) and s.value.value is Ellipsis) for s in node.body)
+            last = getattr(node, "end_lineno", node.lineno) or node.lineno
+            if broad and silent and "#" not in "\n".join(lines[node.lineno - 1:last]):  # a comment means the author meant it
+                found.append(_finding(view, node.lineno, "Every error is swallowed without a trace",
+                                      "This handler catches every exception and does nothing, so a real failure in the block above looks like success. Catch the error you expect, or at least log it.",
+                                      "If the code in the try block fails (a missing file, a network error), nothing is logged and the program carries on as if it had worked.",
+                                      lines[node.lineno - 1], category="correctness"))
+        elif isinstance(node, ast.Call) and node.lineno in view.added and not _silenced(lines, node):
+            shell = any(k.arg == "shell" and isinstance(k.value, ast.Constant) and k.value.value is True for k in node.keywords)
+            if (_call_of(node, "subprocess", _SUBPROCESS_RUNNERS) and shell and node.args and _built_text(node.args[0])) or (_call_of(node, "os", {"system"}) and node.args and _built_text(node.args[0])):
+                found.append(_finding(view, node.lineno, "Shell command built from values",
+                                      "The command is assembled as text and run by a shell, so a value that holds a shell character is run as part of the command. Pass the arguments as a list and leave `shell` off.",
+                                      "If one of the inserted values holds `;` or `&`, the shell runs what follows as a second command.",
+                                      lines[node.lineno - 1], severity="warning", category="security"))
+            elif _call_of(node, "requests", _HTTP_VERBS) and not any(k.arg in {"timeout", None} for k in node.keywords):
+                found.append(_finding(view, node.lineno, "Web request without a timeout",
+                                      "`requests` waits for a reply as long as it takes unless a timeout is passed, and the Requests documentation says failing to set one can hang the program indefinitely. Add `timeout=`.",
+                                      "If the server accepts the connection and never answers, this line waits forever and the pipeline step never ends.",
+                                      lines[node.lineno - 1], severity="warning", category="correctness"))
+    return found
+
+
 # ---------------------------------------------------------------- Markdown: a table row with a different number of cells than its header
 
 _SEPARATOR = re.compile(r"^\s*\|?\s*:?-{1,}:?\s*(?:\|\s*:?-{1,}:?\s*)*\|?\s*$")
@@ -278,6 +384,7 @@ def static_findings(view: FileView, old: Any = None, new: Any = None) -> list[di
         checks.append(lambda: powershell_unused(view))
     elif view.language == "Python":
         checks.append(lambda: python_unused(view))
+        checks.append(lambda: python_hazards(view))
     elif view.language == "Markdown":
         checks.append(lambda: markdown_tables(view))
     for check in checks:

@@ -44,7 +44,8 @@ def cs_view():
 
 def cs_finding(**over):
     base = {"line": 6, "end_line": None, "category": "correctness", "severity": "warning", "title": "Unsafe list default", "comment": "The list is shared between instances and mutated by callers.",
-            "failing_case": "Two Counts objects added to the same response share one list, so one caller's Add changes the other's data.", "evidence": CS_LINE, "suggestion_code": None}
+            "failing_case": "Two Counts objects added to the same response share one list, so one caller's Add changes the other's data.", "evidence": CS_LINE, "suggestion_code": None,
+            "trace": "Items is created once for each Counts object, but the caller copies the reference, so both objects point at one list and an Add shows in both."}
     base.update(over)
     return base
 
@@ -97,6 +98,42 @@ class TestGatesLearnedFromRealPullRequests:
         kept, removed = clean_findings([finding(2, evidence="first line")], gone)
         assert kept == [] and removed[0][1] == "all the code it quoted is unchanged context"
 
+    @staticmethod
+    def two_changes_far_apart():
+        """A 30-line file where the pull request adds line 3 and line 24 and nothing else."""
+        old = [f"value_{n} = {n}" for n in range(1, 29)]
+        new = old[:2] + ["first_added = compute(1)"] + old[2:22] + ["second_added = compute(2)"] + old[22:]
+        return build_view("calc.py", "Python", "edit", "\n".join(old) + "\n", "\n".join(new) + "\n")
+
+    def test_a_finding_that_quotes_changed_code_from_somewhere_else_than_it_points_at_is_removed(self):
+        view = self.two_changes_far_apart()
+        assert view.new_lines[2] == "first_added = compute(1)" and view.new_lines[23] == "second_added = compute(2)"
+        kept, removed = clean_findings([finding(3, evidence="second_added = compute(2)")], view)  # real code, changed, but 21 lines from line 3
+        assert kept == [] and removed == [("Problem", "the code it quoted is not where it pointed")]
+
+    def test_the_quoted_code_may_be_a_few_lines_from_the_line_it_points_at(self):
+        old = [f"value_{n} = {n}" for n in range(1, 21)]
+        new = old[:2] + ["first_added = compute(1)"] + old[2:6] + ["near_added = compute(2)"] + old[6:8] + ["far_added = compute(3)"] + old[8:]
+        view = build_view("calc.py", "Python", "edit", "\n".join(old) + "\n", "\n".join(new) + "\n")
+        assert [view.new_lines[i] for i in (2, 7, 10)] == ["first_added = compute(1)", "near_added = compute(2)", "far_added = compute(3)"]
+        assert clean_findings([finding(8, evidence="first_added = compute(1)")], view)[0]  # five lines from line 3: near enough
+        kept, removed = clean_findings([finding(11, evidence="first_added = compute(1)")], view)  # eight lines from line 3
+        assert kept == [] and removed == [("Problem", "the code it quoted is not where it pointed")]
+
+    def test_one_quoted_piece_near_the_line_is_enough(self):
+        kept, _ = clean_findings([finding(3, evidence="first_added = compute(1) ... second_added = compute(2)")], self.two_changes_far_apart())
+        assert len(kept) == 1
+
+    def test_removed_code_is_as_near_as_the_line_that_follows_it(self):
+        old = "".join(f"step_{n}()\n" for n in range(1, 31))
+        new = "".join(f"step_{n}()\n" for n in range(1, 31) if n not in (4, 5, 6))
+        view = build_view("flow.py", "Python", "edit", old, new)
+        assert view.removed_at == {4}
+        assert clean_findings([finding(4, evidence="step_5()")], view)[0]  # the removed code is shown just before line 4
+        far = build_view("flow.py", "Python", "edit", old, "".join(f"step_{n}()\n" for n in range(1, 31) if n not in (4, 25)))
+        kept, removed = clean_findings([finding(4, evidence="step_25()")], far)
+        assert kept == [] and removed == [("Problem", "the code it quoted is not where it pointed")]
+
     def test_the_new_reasons_are_grouped_for_the_notes(self):
         compile_reason, unchanged_reason = "it claimed a compile or syntax error, which only the build can show", "all the code it quoted is unchanged context"
         assert pr_review.removal_group(compile_reason) == "claimed a compile or syntax error, which only the build can show"
@@ -109,6 +146,17 @@ class TestGatesLearnedFromRealPullRequests:
     def test_naming_structure_style_and_missing_tests_are_never_more_than_a_suggestion(self, category, severity):
         kept, _ = clean_findings([cs_finding(category=category, severity=severity)], cs_view())
         assert kept[0]["severity"] == "suggestion" and kept[0]["category"] == category
+
+    @pytest.mark.parametrize("title", [
+        "Header comment last modified date is earlier than created date", "New function missing docstring", "Missing comment-based help for new function", "Missing return type annotation for load",
+    ])
+    def test_a_documentation_fault_is_a_suggestion_even_when_the_ai_calls_it_a_warning(self, title):
+        kept, _ = clean_findings([cs_finding(title=title, category="correctness", severity="warning")], cs_view())
+        assert (kept[0]["category"], kept[0]["severity"]) == ("maintainability", "suggestion")
+
+    def test_a_title_that_only_mentions_a_comment_in_passing_keeps_its_category(self):
+        kept, _ = clean_findings([cs_finding(title="Retry loop never ends when the comment field is empty", severity="warning")], cs_view())
+        assert (kept[0]["category"], kept[0]["severity"]) == ("correctness", "warning")
 
     @pytest.mark.parametrize("category", ["correctness", "security", "performance"])
     def test_the_other_categories_keep_their_severity(self, category):
@@ -195,6 +243,57 @@ class TestWhatTheAiIsToldAbout:
     def test_the_prompts_name_no_company_data(self):
         text = pr_review.CSHARP_GUIDE + pr_review.MARKDOWN_GUIDE + pr_review.ARM_GUIDE + pr_review.VERIFY_TOOLS
         assert "MDC" not in text and "dbo." not in text
+
+
+class TestATraceThatTheFirstAnswerLeftOut:
+    """The first answer often leaves "trace" out of a true finding. The second check then writes it; a finding nobody traced goes."""
+
+    @staticmethod
+    def untraced(**over):
+        return finding(3, "Setting has no default", failing_case="RefreshSeconds is 0 when the value is missing, so the refresh window is empty.",
+                       evidence="public int RefreshSeconds { get; set; }", trace="", **over)
+
+    def review(self, **model_options):
+        result, _, model = run(cs_pr(), FakePrModel({OPTIONS_PATH: [self.untraced()]}, **model_options))
+        return result, model
+
+    def test_the_gate_keeps_the_finding_and_says_it_needs_a_trace(self):
+        kept, removed = clean_findings([cs_finding(trace="")], cs_view())
+        assert removed == [] and kept[0]["needs_trace"] is True and kept[0]["trace"] == ""
+        kept, _ = clean_findings([cs_finding()], cs_view())
+        assert kept[0]["needs_trace"] is False
+
+    def test_a_trace_that_is_too_short_counts_as_none(self):
+        assert clean_findings([cs_finding(trace="it fails")], cs_view())[0][0]["needs_trace"] is True
+
+    def test_the_second_check_is_told_to_write_it_and_what_it_writes_is_kept(self):
+        result, model = self.review()
+        comment = result["comments"][0]
+        assert comment["verified"] is True and comment["trace"].startswith("the value is read") and "needs_trace" not in comment
+        assert "Its trace: none was given, so write it yourself" in model.calls_of("verify")[0]
+        assert 'write the trace yourself, in "trace"' in model.system_of("verify")[0]
+
+    def test_a_finding_that_came_with_a_trace_is_not_asked_for_another(self):
+        _, _, model = run(cs_pr(), FakePrModel({OPTIONS_PATH: [no_default_finding()]}))
+        assert "none was given" not in model.calls_of("verify")[0] and "Its trace: " in model.calls_of("verify")[0]
+
+    @pytest.mark.parametrize("said", [{"holds": True, "trace": ""}, {"holds": True, "trace": "short"}, SILENT])
+    def test_a_finding_that_nobody_traced_is_removed(self, said):
+        result, _ = self.review(holds=lambda path, numbers: {1: said})
+        assert result["comments"] == []
+        assert "Removed as a guess: src/Api/RefreshOptions.cs: Setting has no default (did not trace its case through the code)" in result["notes"]
+
+    def test_a_finding_the_second_check_does_not_hold_is_removed_as_before(self):
+        result, _ = self.review(holds=lambda path, numbers: {1: (False, "its steps end in the right result")})
+        assert result["comments"] == []
+        assert "Removed on a second check: src/Api/RefreshOptions.cs: Setting has no default (its steps end in the right result)" in result["notes"]
+
+    def test_when_the_second_check_cannot_run_a_finding_without_a_trace_goes_and_one_with_a_trace_stays(self):
+        traced = finding(3, "Zero refresh window", failing_case="RefreshSeconds is 0 when the value is missing, so the refresh window is empty.", evidence="public int RefreshSeconds { get; set; }")
+        model = FakePrModel({OPTIONS_PATH: [self.untraced(), traced]}, holds=lambda path, numbers: RuntimeError("down"))
+        result, _, _ = run(cs_pr(), model)
+        assert [c["title"] for c in result["comments"]] == ["Zero refresh window"] and result["comments"][0]["verified"] is None
+        assert "needs_trace" not in result["comments"][0]
 
 
 class TestSecondCheckLooksThingsUp:

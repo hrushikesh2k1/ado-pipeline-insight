@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     min_history_runs: int = 5
     azure_openai_endpoint: str = ""
     azure_openai_deployment: str = ""
+    # Optional: a stronger deployment (same Azure OpenAI resource) used only by the AI pull request review. Empty means the review uses azure_openai_deployment.
+    azure_openai_review_deployment: str = ""
     azure_openai_api_version: str = "2024-10-21"
     azure_openai_api_key: str = ""
     ingest_function_url: str = ""

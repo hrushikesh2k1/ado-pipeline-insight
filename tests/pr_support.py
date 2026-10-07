@@ -25,7 +25,7 @@ PY_NEW = """import json
 from typing import Any  # noqa: F401
 
 
-def load(path) -> dict:
+def load(path) -> dict:  # noqa: the static checks have their own tests: here the annotation is a case for the AI
     with open(path) as handle:
         return json.load(handle)
 
@@ -170,7 +170,8 @@ def finding(line: int, title: str = "Problem", severity: str = "warning", **over
     pass evidence= to say something else (or "" for none)."""
     body = {"line": line, "end_line": None, "category": "correctness", "severity": severity, "title": title,
             "comment": f"{title}: it fails for the input '10GBps' and returns the wrong value. Anchor the check.",
-            "failing_case": "For the input '10GBps' the function returns the wrong size.", "suggestion_code": None}
+            "failing_case": "For the input '10GBps' the function returns the wrong size.", "suggestion_code": None,
+            "trace": "text = '10GBps', so 'GB' in text is true and the number is cut out of the string, so the size is returned in the wrong unit."}
     body.update(over)
     return body
 
@@ -237,14 +238,25 @@ class FakePrModel:
                 raise said
             rows = {int(n): text for n, text in _ROW.findall(user)}
             ordered = sorted(rows)
-            filled = []
-            for item in said:
-                item = dict(item) if isinstance(item, dict) else item
-                if isinstance(item, dict) and "evidence" not in item:  # quote the code on the line, or the next line that has any
-                    start = int(item.get("line") or 0)
-                    item["evidence"] = next((rows[n].strip() for n in ordered if n >= start and rows[n].strip()), "")
-                filled.append(item)
-            body: Any = {"purpose": self.purposes.get(path, f"changes {path}"), "findings": filled}
+
+            def fill(entries):
+                filled = []
+                for item in entries:
+                    item = dict(item) if isinstance(item, dict) else item
+                    if isinstance(item, dict) and "evidence" not in item:  # quote the code on the line, or the next line that has any
+                        start = int(item.get("line") or 0)
+                        item["evidence"] = next((rows[n].strip() for n in ordered if n >= start and rows[n].strip()), "")
+                    filled.append(item)
+                return filled
+
+            # `said` is a list of findings, or {"checks": [...], "team": [...], "findings": [...]} as the model answers with the checklist
+            extras = said if isinstance(said, list) else said.get("findings", [])
+            checks = [] if isinstance(said, list) else said.get("checks", [])
+            team = None if isinstance(said, list) else said.get("team")
+            if team is None:  # a compliant model answers "fine" for every team check it was given
+                section = re.search(r"The team's own checks for this kind of file.*?(?=\nWhere the terms the team named|\nChecklist for this kind of file)", user, re.S)
+                team = [{"n": int(n), "result": "fine"} for n in re.findall(r"^(\d+)\. ", section.group(0), re.M)] if section else []
+            body: Any = {"purpose": self.purposes.get(path, f"changes {path}"), "checks": fill(checks), "team": fill(team), "findings": fill(extras)}
         elif system.startswith("You check findings"):
             path = re.search(r"^File: (\S+)", user, re.M).group(1)
             numbers = [int(n) for n in re.findall(r"^(\d+)\. line", user, re.M)]
@@ -260,11 +272,12 @@ class FakePrModel:
                 raise decided
             def answer(n: int) -> dict[str, Any]:
                 said = decided.get(n, True)  # True, False, (False, "why"), or {"holds": ..., "reason": ..., "duplicate_of": 1, "already_raised_by": "E2"}
+                trace = "the value is read, the condition is true, and so the wrong result is returned"  # a compliant second check writes the steps when the finding came without them
                 if isinstance(said, dict):
-                    return {"holds": said.get("holds", True), "reason": said.get("reason", "ok"), "duplicate_of": said.get("duplicate_of"), "already_raised_by": said.get("already_raised_by"),
-                            "already_found_by_code": said.get("already_found_by_code")}
+                    return {"holds": said.get("holds", True), "reason": said.get("reason", "ok"), "trace": said.get("trace", trace), "duplicate_of": said.get("duplicate_of"),
+                            "already_raised_by": said.get("already_raised_by"), "already_found_by_code": said.get("already_found_by_code")}
                 holds, reason = (said[0], said[1]) if isinstance(said, tuple) else (bool(said), "ok")
-                return {"holds": holds, "reason": reason, "duplicate_of": None, "already_raised_by": None, "already_found_by_code": None}
+                return {"holds": holds, "reason": reason, "trace": trace, "duplicate_of": None, "already_raised_by": None, "already_found_by_code": None}
 
             body = {"findings": [{"number": n, **answer(n)} for n in numbers if not (isinstance(decided, dict) and decided.get(n) is SILENT)]}  # SILENT: the check says nothing about it
         elif system.startswith(self.MARKERS["refute"]):
@@ -273,7 +286,7 @@ class FakePrModel:
             if isinstance(said, Exception):
                 raise said
             numbers = [int(n) for n in re.findall(r"^(\d+)\. line", user, re.M)]
-            body = {"findings": [{"number": n, "wrong": n in said, "because": said[n][0] if n in said else "", "quote": said[n][1] if n in said else ""} for n in numbers]}
+            body = {"findings": [{"number": n, "finding_is_false": n in said, "explanation": said[n][0] if n in said else "", "proof": said[n][1] if n in said else ""} for n in numbers]}
         elif system.startswith(self.MARKERS["team"]):
             if isinstance(self.team_checks, Exception):
                 raise self.team_checks

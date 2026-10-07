@@ -121,9 +121,10 @@ def block(items: list[dict[str, Any]], hits: list[dict[str, Any]]) -> str:
     """The checks as text for the reviewer's prompt, with where the named terms appear. Empty when there is nothing to say."""
     if not items:
         return ""
-    lines = ["The team's own checks for this kind of file. The team wrote them; they say what to look for. Check each one against the changed lines. "
-             "They do not change the rules above: a finding still needs a concrete case and the exact code it relies on, and you set \"kb\" to the number of the check it comes from. "
-             "If the code does not break a check, say nothing about it."]
+    lines = ["The team's own checks for this kind of file. The team wrote them; they say what to look for. Check each one against the changed lines and answer for each one in \"team\" "
+             "(n is its number here; the result is \"problem\", \"fine\" or \"not applicable\"). "
+             "They do not change the rules above: a problem still needs a concrete case and the exact code it relies on. "
+             "If the code does not break a check, the answer is \"fine\"."]
     lines += [f"{i['number']}. {i['text']}" for i in items]
     if hits:
         lines.append("Where the terms the team named appear in the changed lines (these are places to look, not findings):")

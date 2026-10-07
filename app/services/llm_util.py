@@ -26,10 +26,22 @@ def parse_json_object(text: str | None) -> dict[str, Any]:
     return value
 
 
+def _create(client: Any, **request: Any) -> Any:
+    """One chat completion. Some newer models only run at their own default temperature and answer 400 when one is sent: ask again without it."""
+    try:
+        return client.client.chat.completions.create(model=client.deployment, **request)
+    except Exception as exc:
+        rejected = getattr(exc, "status_code", None) == 400 and "temperature" in str(exc).lower()
+        if not rejected or "temperature" not in request:
+            raise
+        logger.info("The model does not take a temperature, asking again without it")
+        return client.client.chat.completions.create(model=client.deployment, **{k: v for k, v in request.items() if k != "temperature"})
+
+
 def chat_json(client: Any, system: str, user: str, temperature: float = 0.0) -> dict[str, Any]:
     """One chat call that must answer with a JSON object."""
-    response = client.client.chat.completions.create(
-        model=client.deployment,
+    response = _create(
+        client,
         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
         temperature=temperature,
         response_format={"type": "json_object"},
@@ -44,7 +56,7 @@ def chat_json_with_tools(client: Any, system: str, user: str, tools: list[dict[s
     for turn in range(max_turns):
         final = turn == max_turns - 1
         extra: dict[str, Any] = {"tool_choice": "none", "response_format": {"type": "json_object"}} if final else {}
-        response = client.client.chat.completions.create(model=client.deployment, messages=messages, temperature=temperature, tools=tools, **extra)
+        response = _create(client, messages=messages, temperature=temperature, tools=tools, **extra)
         message = response.choices[0].message
         calls = getattr(message, "tool_calls", None) or []
         if not calls:

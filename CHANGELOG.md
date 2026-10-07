@@ -88,6 +88,28 @@ things up in the repository. Comments are still shown on screen only: nothing is
   found", "Suggestions" or "Changes suggested" (a review of code changes does not approve a pull request). A scorecard row with no
   finding says "No findings" instead of "Excellent".
 
+**A reviewer that works through a checklist and shows its steps** (measured on real pull requests with the real model)
+- **The AI answers a checklist for each file instead of writing free comments.** Each kind of file (Python, PowerShell, C#, SQL,
+  alerts, KQL, Markdown, YAML) has its own list of things that go wrong often, for example a loop that searches a list for every
+  item, repeated status text instead of an Enum, a test like `"m" in text` that also matches `"10ms"`, an average of averages, an
+  empty `catch`, a function on a column in a SQL `WHERE`. The AI must answer every item: problem, fine or not applicable. On one
+  real pull request it found 0 of 9 problems that people had raised when it wrote free comments, and 3 or 4 of 9 with the checklist.
+  Your own checks are answered the same way.
+- **Every finding shows the steps by which the code goes wrong,** with the value of each variable. The AI often leaves the steps
+  out of a true finding, so the second check writes them; a finding that nobody can trace is removed.
+- **The second look at a finding has to quote other code.** A finding is removed only when the AI quotes code, other than the
+  code the finding is about, that makes the case impossible, and the quote is really in the file. A comment in the code, a name or
+  the description never counts as proof.
+- **The quoted code must be where the finding points.** A finding that quotes real changed code from one place and points at a
+  line 90 lines away is removed (the quoted code must be within 5 lines of the lines it points at).
+- **More exact checks in code for Python:** a return type of `dict` or `list` on a function that returns `json.load(...)`, a default
+  list or dict that the function changes, `except Exception: pass` with no comment, a shell command built from values with
+  `shell=True`, and a `requests` call with no `timeout` (the Requests documentation says leaving it out can hang the program
+  indefinitely). A `# noqa` on the line turns the check off.
+- **A stronger model can be used for the review only.** Set `AZURE_OPENAI_REVIEW_DEPLOYMENT` to the name of another deployment in
+  the same Azure OpenAI resource; the review uses it and everything else keeps using `AZURE_OPENAI_DEPLOYMENT`. A model that
+  does not accept a temperature setting is asked again without it.
+
 **Your own knowledge base**
 - **A box on the pull request page for your own checks.** You write what you know goes wrong often, or must always be looked at,
   one check per line, for example "Never use `Invoke-Expression` on input" or "Every alert has an action group". The review applies
@@ -177,7 +199,7 @@ things up in the repository. Comments are still shown on screen only: nothing is
   and folder name.
 
 ### Notes
-- No new dependency, table or setting. The token needs Code (Read), which the lookups use too. If it lacks the read scope for the
+- No new dependency or table, and one optional setting (`AZURE_OPENAI_REVIEW_DEPLOYMENT`, empty by default). The token needs Code (Read), which the lookups use too. If it lacks the read scope for the
   existing comments, the linked work items or the builds, the review still runs and says what it could not read.
 - Limits: 150 files looked at, 50 reviewed, up to 400 file reads for lookups per review (each file read once). If the repository's
   file list cannot be read, only the pull request's own files are searched, and the result says so.

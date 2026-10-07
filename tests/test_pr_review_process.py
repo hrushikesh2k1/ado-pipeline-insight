@@ -17,6 +17,7 @@ from test_pr_review_checks import OPTIONS_PATH, RENAME_CASE, cs_pr, rename_findi
 
 REPORT = "scripts/report.py"
 LINE = "return sum(values) / len(values)"  # line 17 of the report script: a line this pull request changed
+OTHER = "with open(path) as handle:"  # other code of the same file: the kind of line that can prove a finding about LINE false
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +57,7 @@ class TestTheHostileSecondLook:
         return run(model=FakePrModel({REPORT: [finding(17, "Division by zero")]}, refutes={REPORT: said}, **kw))
 
     def test_a_finding_is_removed_when_the_ai_quotes_code_that_shows_it_is_wrong(self):
-        result, _, _ = self.refuted({1: ("the caller never passes an empty list", LINE)})
+        result, _, _ = self.refuted({1: ("the caller never passes an empty list", OTHER)})
         assert result["comments"] == []
         assert "Removed on a second check: scripts/report.py: Division by zero (the caller never passes an empty list)" in result["notes"]
         assert any("1 finding(s) were contradicted by code the second check quoted" in n for n in result["notes"])
@@ -82,13 +83,13 @@ class TestTheHostileSecondLook:
         comment_quote = "the caller never passes an empty list, so this is deliberate"
         result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero")]}, refutes={REPORT: {1: ("a comment says it is deliberate", comment_quote)}}))
         assert len(result["comments"]) == 1
-        result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero")]}, refutes={REPORT: {1: ("only non-empty lists are passed", LINE)}}))
+        result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero")]}, refutes={REPORT: {1: ("only non-empty lists are passed", OTHER)}}))
         assert result["comments"] == []  # code that makes the case impossible still removes it
 
     def test_a_trailing_comment_does_not_make_the_code_before_it_unquotable(self):
         text = PY_NEW.replace(LINE, LINE + "  # callers pass non-empty lists")
         ado = FakeAdo(changes=[change("/scripts/report.py")], blobs={"new-/scripts/report.py": text, "old-/scripts/report.py": PY_OLD})
-        result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero", evidence=LINE)]}, refutes={REPORT: {1: ("the code guards it", LINE)}}))
+        result, _, _ = run(ado, FakePrModel({REPORT: [finding(17, "Division by zero", evidence=LINE)]}, refutes={REPORT: {1: ("the code guards it", OTHER)}}))
         assert result["comments"] == []
 
     def test_the_facts_worked_out_in_code_can_be_the_proof(self):
@@ -141,10 +142,27 @@ class TestTheHostileSecondLook:
         result, _, model = run(ado, FakePrModel())
         assert len(result["comments"]) == 1 and model.calls_of("refute") == []
 
-    def test_the_prompt_makes_the_ai_argue_from_the_code(self):
-        for part in ("assume it is WRONG", "how the rest of the file handles the same thing", "Argue from the code, never from opinion", "never use one of them as the reason a finding is wrong",
-                     "shows what the author INTENDED, not what the code does", "quote code (or a lookup result) that makes its concrete case impossible", "wrong is false"):
+    def test_the_prompt_makes_the_ai_look_for_other_code_that_proves_the_finding_false(self):
+        for part in ("look for code that PROVES IT FALSE", "OTHER code, not the lines the finding relies on", "how the rest of the file or query handles the same thing",
+                     "The code the finding itself quotes can never be the proof", "never use one of them as proof", "shows what was meant, not what the code does",
+                     "Do not restate the finding", "finding_is_false is false"):
             assert part in pr_review.REFUTE_SYSTEM
+
+    def test_the_code_the_finding_relies_on_cannot_be_the_proof_that_it_is_false(self):
+        # a real review lost a true finding because the AI "refuted" it by quoting the finding's own code while explaining why the finding is right
+        result, _, _ = self.refuted({1: ("the code does what the finding says", LINE)})
+        assert len(result["comments"]) == 1
+
+    def test_the_finding_is_removed_when_the_proof_has_other_code_beside_its_own(self):
+        result, _, _ = self.refuted({1: ("the guard stops the case", OTHER + " ... " + LINE)})
+        assert result["comments"] == []
+
+    @pytest.mark.parametrize("proof,evidence,own", [
+        ("return a / b", "return a / b", True), ("return a / b ... x = 1", "return a / b ... x = 1", True), ("return a/b", "  return a / b  ", True),
+        ("if n == 0: return 0\nreturn a / b", "return a / b", False), ("if n == 0: return 0", "return a / b", False), ("", "return a / b", True), ("ab", "return a / b", True),
+    ])
+    def test_what_counts_as_the_findings_own_code(self, proof, evidence, own):
+        assert pr_review._only_its_own_code(proof, evidence) is own
 
     def test_the_second_look_is_offered_the_lookup_tools_when_there_is_a_repository_to_read(self):
         seen = []
@@ -160,7 +178,7 @@ class TestTheHostileSecondLook:
         class Model(FakePrModel):
             pass
 
-        model = Model(refutes={REPORT: {2: ("not so", LINE)}})
+        model = Model(refutes={REPORT: {2: ("not so", OTHER)}})
         findings = [{"title": "a", "line_number": 17, "end_line": None, "comment": "x", "failing_case": "y" * 25, "evidence": LINE, "suggestion_code": None},
                     {"title": "b", "line_number": 17, "end_line": None, "comment": "x", "failing_case": "y" * 25, "evidence": LINE, "suggestion_code": None}]
         kept, removed = refute_findings(model, view(), findings, {"title": "t", "description": "d"})

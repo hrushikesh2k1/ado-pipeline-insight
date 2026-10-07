@@ -71,7 +71,7 @@ class TestWhichFilesAreRead:
     def test_python_files_get_python_guidance(self):
         _, _, model = run()
         system = next(s for s, u in model.calls if u.startswith(f"File: {REPORT}"))
-        assert "quadratic" in system and "json.load returns any JSON type" in system and "PowerShell:" not in system
+        assert "quadratic" in system and "found by an exact check in code: do not report annotations" in system and "PowerShell:" not in system
 
     def test_other_languages_get_the_general_guidance(self):
         ado = FakeAdo(changes=[change("/ci/pipeline.yml", "add")], blobs={"new-/ci/pipeline.yml": "steps: []\n"})
@@ -540,6 +540,20 @@ class TestModelClient:
         monkeypatch.setattr(pr_review, "PipelineRecommendationClient", lambda *args: seen.setdefault("args", args) and "client")
         assert get_model_client() == "client" and seen["args"] == ("https://x.openai.azure.com", "gpt", "2024-02-01", "k")
 
+    def test_a_stronger_review_deployment_is_used_when_one_is_set(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(pr_review, "PipelineRecommendationClient", lambda *args: seen.setdefault("args", args) and "client")
+        monkeypatch.setattr(pr_review, "get_settings", lambda: self.settings(azure_openai_review_deployment=" strong "))
+        get_model_client()
+        assert seen["args"][1] == "strong"
+
+    def test_an_empty_review_deployment_means_the_main_one(self, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(pr_review, "PipelineRecommendationClient", lambda *args: seen.setdefault("args", args) and "client")
+        monkeypatch.setattr(pr_review, "get_settings", lambda: self.settings(azure_openai_review_deployment="  "))
+        get_model_client()
+        assert seen["args"][1] == "gpt"
+
     def test_a_client_that_cannot_start_means_no_review(self, monkeypatch):
         def broken(*args):
             raise ValueError("bad endpoint")
@@ -609,7 +623,7 @@ class TestAlertTemplates:
         _, _, model = run(alert_ado(new=new, old=old))
         prompt = model.calls_of("file")[0]
         assert '"AKS - Restart": log alert (older 2018-04-16 format), severity 2 (Warning), enabled' in prompt
-        assert "Action groups: ag-oncall" in prompt and "nobody is notified" not in prompt
+        assert "Action groups: ag-oncall" in prompt and "so nobody is notified when it fires" not in prompt
         assert '- "AKS - Restart": the query changed' in prompt and '- "AKS - Crash": window size: PT10M -> PT30M.' in prompt
 
     def test_a_template_that_is_no_longer_valid_json_is_put_in_front_of_the_reviewer(self):
@@ -815,7 +829,7 @@ class TestGuessesAreEnforcedInCode:
         "return   sum(values)  /  len(values)",                    # spacing differs
         "def average(values): ... return sum(values) / len(values)",  # pieces
         ["def average(values):", "return sum(values) / len(values)"],  # a list of pieces
-        "-       | def load(path):",                               # code the change removed is in the view too
+        "-       | def load(path): ... return sum(values) / len(values)",  # code the change removed is in the view too (one piece has to be near the cited line)
     ])
     def test_quotes_that_are_in_the_file_are_accepted(self, evidence):
         kept, reasons = self.removed(evidence=evidence)
@@ -898,7 +912,7 @@ class TestWhatTheReviewerSeesOfTheGuesses:
         verify = model.calls_of("verify")[0]
         assert "Its case: average([]) divides by zero and raises ZeroDivisionError." in verify
         assert "The code it relies on: return sum(values) / len(values)" in verify
-        assert "Trace the case through the code yourself" in pr_review.VERIFY_SYSTEM
+        assert "Also trace the case through the code yourself before you agree" in pr_review.VERIFY_SYSTEM
 
 
 class TestNothingIsMadeUp:

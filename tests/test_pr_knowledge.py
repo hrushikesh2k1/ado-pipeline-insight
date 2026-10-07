@@ -132,7 +132,7 @@ class TestWhatTheReviewerIsTold:
     def test_the_checks_are_numbered_and_do_not_change_the_rules(self):
         text = block(parse("[PowerShell] first check\nsecond check"), [])
         assert "1. first check" in text and "2. second check" in text
-        assert "They do not change the rules above" in text and 'you set "kb"' in text and "If the code does not break a check, say nothing about it" in text
+        assert "They do not change the rules above" in text and 'answer for each one in "team"' in text and 'If the code does not break a check, the answer is "fine"' in text
 
     def test_where_the_named_terms_appear_is_listed_as_places_to_look(self):
         items = parse("avoid `Write-Host`")
