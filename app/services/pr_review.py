@@ -18,6 +18,7 @@ from app.core.config import get_settings
 from app.services.llm_util import chat_json, chat_json_with_tools, with_retry
 from app.services.pr_arm import ARM_LANGUAGE, ARM_LINE_WIDTH, arm_context, is_arm_template
 from app.services.pr_checklist import evaluate_checklist, linked_build_ids, parse_checklist, placeholder_checks
+from app.services import pr_knowledge
 from app.services.pr_diff import LINE_WIDTH, FileView, build_view, classify, priority, suggestable
 from app.services.pr_lookup import TOOLS, RepoReader, ToolBelt, csharp_facts
 from app.services.pr_static import static_findings
@@ -25,8 +26,9 @@ from core.openai_client import PipelineRecommendationClient
 
 logger = logging.getLogger(__name__)
 
-MAX_FILES = 30
+MAX_FILES = 50
 MAX_FINDINGS_PER_FILE = 8
+EVIDENCE_SHOWN_CHARS = 360  # of the quoted code shown with a finding (the whole quote is checked against the file first)
 MAX_SPAN = 40
 WORKERS = 5
 MAX_FILE_BYTES = 1_000_000
@@ -86,7 +88,10 @@ ARM_GUIDE = (
     "Azure Monitor alerts in an ARM template: you are also given each alert in plain words and what changed in it. Look for these when the changed lines touch them, "
     "and say what now fires or stops firing for a concrete case. A changed threshold, operator, windowSize, evaluationFrequency, failingPeriods or query that changes when the alert fires. "
     "minFailingPeriodsToAlert larger than numberOfEvaluationPeriods (it must be smaller or equal). overrideQueryTimeRange, which replaces the default query time range "
-    "(windowSize times numberOfEvaluationPeriods), and a time filter inside the query that is shorter or longer than the window it is evaluated over. "
+    "(windowSize times numberOfEvaluationPeriods). An alert runs again and again: every evaluationFrequency it reads the last windowSize of data. "
+    "A time filter inside the query that is shorter than the time between runs can skip events that fall between two runs. A window that is shorter than what the query looks back over hides the part beyond the window. "
+    "A time filter that is shorter than the window is normal: it reports each event on the runs where the event passes the filter, and an event that is outside the filter on a later run was already seen by an earlier run, so that is not a missed alert. "
+    "Use the timing facts you are given for each alert; do not work the timing out yourself. "
     "A log alert meant to detect a lack of data: Microsoft says logs are more latent than metrics and recommends a metric alert for that. "
     "A severity that does not match what the alert is for (0 is the most severe, 4 the least). enabled set to false, no action group (nobody is notified), "
     "muteActionsDuration that hides repeats, autoMitigate set to false so the alert never resolves by itself, skipQueryValidation set to true. "
@@ -101,7 +106,13 @@ KQL_GUIDE = (
     "KQL: look for a missing or misplaced time filter, a join that multiplies rows, a column or table the query does not have, a filter that can never match, "
     "results that are not bounded, and a summarize or threshold that does not measure what its name says."
 )
-GUIDES = {"Python": PYTHON_GUIDE, "PowerShell": POWERSHELL_GUIDE, ARM_LANGUAGE: ARM_GUIDE, "KQL": KQL_GUIDE, "C#": CSHARP_GUIDE, "Markdown": MARKDOWN_GUIDE}
+SQL_GUIDE = (
+    "SQL: look for these when the changed code has them. A column or alias that is labeled differently from the same column in other parts of the same query (the other branches of a UNION, the other rows or buckets): "
+    "before you say a value is mislabeled, find how the rest of the query labels the same thing and follow that convention. UPDATE or DELETE without a WHERE. A function applied to a column in a WHERE clause, "
+    "which stops an index from being used. Dynamic SQL built by joining strings instead of parameters. Local time (GETDATE) where UTC is meant, or the reverse. "
+    "A header comment that contradicts the code beside it (a name, a parameter, or a last-modified date earlier than the created date). Do not report formatting."
+)
+GUIDES = {"Python": PYTHON_GUIDE, "PowerShell": POWERSHELL_GUIDE, ARM_LANGUAGE: ARM_GUIDE, "KQL": KQL_GUIDE, "C#": CSHARP_GUIDE, "Markdown": MARKDOWN_GUIDE, "SQL": SQL_GUIDE}
 
 FILE_SYSTEM = """You review one changed file of an Azure DevOps pull request. The file is shown as a diff: every line has its line number in the new version, a "+" marks a line this pull request added or changed, a "-" marks a line it removed, and unmarked lines are unchanged context.
 
@@ -121,11 +132,15 @@ Rules:
 - Report each problem once. If the same problem appears on several lines, write one finding (use end_line, or name the other lines in the text), not one per line.
 - You see this one file only. Do not report what might be wrong in other files, a name you cannot see defined, or code you cannot see: the other files of this pull request are listed only so you know they exist.
 - Do not report that code will not compile or has a syntax error: the build checks that. Believe the project facts and today's date you are given: a date on or before today is not in the future, and syntax that the project's language version supports is valid.
+- Before you say a name, label, order or value is wrong, find how the rest of the file does the same thing, and follow the file's own convention. Do not report a difference from your own preference.
+- If the description says some code was only moved, renamed or brought into the repository and its logic is unchanged, do not report problems in that logic; report only what the move or rename broke.
+- Never write that there is no failing case: a finding without one is left out.
 - Returning no findings is fine, and often right. Do not invent findings to fill space.
 
 {guide}
 
-Answer with JSON only: {{"purpose": "one sentence: what this change does in this file", "findings": [{{"line": 12, "end_line": null, "category": "correctness", "severity": "warning", "title": "short title", "comment": "the finding", "failing_case": "the concrete input or situation and the wrong result", "evidence": "the exact code it relies on", "suggestion_code": null}}]}}"""
+Answer with JSON only: {{"purpose": "one sentence: what this change does in this file", "findings": [{{"line": 12, "end_line": null, "category": "correctness", "severity": "warning", "title": "short title", "comment": "the finding", "failing_case": "the concrete input or situation and the wrong result", "evidence": "the exact code it relies on", "suggestion_code": null, "kb": null}}]}}
+("kb" is the number of the team's check a finding comes from, only when the message lists the team's checks; otherwise null.)"""
 
 VERIFY_SYSTEM = """You check findings that another reviewer made about a changed file. The file is shown as a diff with line numbers ("+" = added or changed, "-" = removed). For each numbered finding decide whether it is really true of the code shown.
 
@@ -139,7 +154,25 @@ Also set duplicate_of to the number of an EARLIER finding that describes the sam
 
 Believe the project facts and today's date you are given. A finding that says code will not compile or has a syntax error does not hold unless the project facts show the syntax is newer than the project's language version.
 
-Answer with JSON only: {"findings": [{"number": 1, "holds": true, "reason": "one short sentence", "duplicate_of": null, "already_raised_by": null}]}"""
+Some findings come from "Team check" lines: a check the team wrote because it matters to them. Such a finding holds when the changed code really breaks the stated check and the case shows where; it does not hold when the code does not break it. The team's check does not excuse a finding that the code contradicts.
+
+You may also be given findings already made by exact checks in code (S1, S2, ...). Set already_found_by_code to the S-number when a finding describes the same defect as one of them, otherwise null.
+
+Answer with JSON only: {"findings": [{"number": 1, "holds": true, "reason": "one short sentence", "duplicate_of": null, "already_raised_by": null, "already_found_by_code": null}]}"""
+
+REFUTE_SYSTEM = """You are a sceptical senior engineer. Reviewers made the numbered findings below about a changed file. A first check already agreed with them. Your job is the opposite: for each finding, assume it is WRONG and try to prove that from what is in front of you.
+
+Look at how the rest of the file handles the same thing (other parts of a query or class, neighbouring rows, other branches, the same column or name elsewhere), at the author's description, at comments in the code, and at the facts you are given (today's date, the project's language version, the alert timing facts). Think about when the code runs and what ran before. If you find code or text that shows the finding is wrong, quote it exactly. Argue from the code, never from opinion.
+
+If you cannot find anything that shows it is wrong, say so: wrong is false.
+
+Answer with JSON only: {"findings": [{"number": 1, "wrong": false, "because": "one short sentence", "quote": "the exact code or text that shows the finding is wrong, or empty"}]}"""
+
+KB_PR_SYSTEM = """You check a pull request against checks the team wrote about pull requests themselves (not about code). You get the numbered checks, the pull request description, the list of changed files and the comments people already made.
+
+For each check decide whether this pull request breaks it, using only what you are given. If it cannot be judged from that, breaks is null. If it breaks the check, quote the exact words of the description, or the exact path of a changed file, that show it. Do not guess and do not ask the author to confirm anything.
+
+Answer with JSON only: {"checks": [{"number": 1, "breaks": false, "because": "one short sentence", "quote": "exact words or path, or empty"}]}"""
 
 VERIFY_TOOLS = """
 
@@ -149,9 +182,11 @@ A finding that depends on code you cannot see, and that your lookups did not con
 
 DESCRIPTION_SYSTEM = """You compare the description of a pull request with what the pull request changes. You get the description and, for each changed file, one sentence about what changed in it.
 
-List the substantial changes that the description does not mention at all. Leave a change out if the description covers it in any form, even briefly. Do not list formatting or small changes. If the description covers everything, or you are not sure, return an empty list. At most 3 items, each one sentence.
+List the substantial changes that the description does not mention at all. Leave a change out if the description covers it in any form, even briefly (a rename of a file also covers the references that were updated for it). Do not list formatting or small changes. If the description covers everything, or you are not sure, return an empty list. At most 3 items, each one sentence.
 
-Answer with JSON only: {"missing_from_description": ["..."]}"""
+For each change, look for the sentence of the description that covers it. If there is one, copy it exactly into "description_mentions"; if there is none, write null.
+
+Answer with JSON only: {"missing_from_description": [{"change": "one sentence", "description_mentions": null}]}"""
 
 
 class AiUnavailable(Exception):
@@ -293,6 +328,8 @@ _COMPILE = re.compile(r"\b(?:will|would|does|do|did|can|could)(?:\s+not|n't)\s+c
                       r"\bCS\d{4}\b|\bfails? to (?:compile|build|parse)\b", re.IGNORECASE)
 # A case that only exists if code in another file is wrong ("if X is not defined elsewhere") cannot be shown from this file: a lookup has to confirm it.
 # (A dot inside a name, as in appsettings.json, does not end the sentence.)
+# A finding whose own "case" says it has none (it was written to fill space).
+_NO_CASE = re.compile(r"^\s*(?:none|n/?a|not applicable)\b|\bno (?:failing|concrete|specific|real|actual) (?:case|input|scenario|example)\b|\bthere is no (?:failing|concrete|specific|real|actual)\b", re.IGNORECASE)
 _CONDITIONAL = re.compile(r"\bif\b(?:[^.;]|\.(?=\w)){0,120}?\b(?:not (?:been )?(?:defined|declared|imported|registered|updated|renamed)|still (?:uses?|used|refers?|references?|calls?|expects?)|elsewhere|differs?|differing|mismatch\w*|"
                           r"(?:other|another|different) (?:files?|places?|projects?|modules?|classes|usages?))\b", re.IGNORECASE)
 
@@ -323,7 +360,7 @@ def unfounded(title: str, body: str, case: str, evidence: str, haystack: str, ch
     """Why a finding is only a guess, or None. A finding must show a concrete case, quote the code it relies on, and state a defect rather than
     ask the author to confirm something. This is enforced here because asking the model to do it in a prompt was not enough. `changed` is the
     compact text of the lines this pull request changed: a finding has to rest on at least one of them."""
-    if len(case) < MIN_CASE_CHARS:
+    if len(case) < MIN_CASE_CHARS or _NO_CASE.search(case):
         return "it showed no concrete case"
     guess = _HEDGE.search(case)
     if guess:
@@ -342,8 +379,14 @@ def unfounded(title: str, body: str, case: str, evidence: str, haystack: str, ch
     return None
 
 
-def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
-    """Keep the findings that point at lines this pull request changed and are not guesses. Returns (kept, [(title, why a finding was removed)])."""
+def _shorten(text: str, limit: int = EVIDENCE_SHOWN_CHARS) -> str:
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
+def clean_findings(raw: Any, view: FileView, kb: dict[int, dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """Keep the findings that point at lines this pull request changed and are not guesses. Returns (kept, [(title, why a finding was removed)]).
+    `kb` maps the number of each team check given to the reviewer to the check; a finding may name the one it comes from."""
+    kb = kb or {}
     kept: list[dict[str, Any]] = []
     removed: list[tuple[str, str]] = []
     allowed = view.added | view.removed_at
@@ -387,12 +430,14 @@ def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list
         severity = severity if severity in SEVERITIES else "suggestion"
         if category in SOFT_CATEGORIES:  # naming, structure, style and missing tests are suggestions, never warnings or blockers
             severity = "suggestion"
+        team = kb.get(_int(item.get("kb")) or 0)  # a number the reviewer was not given is ignored
         kept.append({
             "category": category, "severity": severity,
             "title": title, "comment": body, "file_path": view.path, "language": view.language,
             "line_number": line, "end_line": end if end > line else None, "suggestion_code": suggestion,
-            "failing_case": case, "evidence": evidence,
+            "failing_case": case, "evidence": _shorten(evidence),
             "existing_thread": None, "existing_status": None, "verified": None, "source": "ai", "checked_with": [],
+            "knowledge": team["text"] if team else None, "knowledge_number": team["number"] if team else None,
             "needs_lookup": bool(_CONDITIONAL.search(case)),
         })
     kept.sort(key=lambda f: SEVERITIES.index(f["severity"]))
@@ -401,6 +446,8 @@ def clean_findings(raw: Any, view: FileView) -> tuple[list[dict[str, Any]], list
 
 REMOVAL_GROUPS = (
     ("did not change", "pointed at lines this pull request did not change"),
+    ("contradicts it", "were contradicted by code the second check quoted"),
+    ("exact check", "repeated a finding made by an exact check in code"),
     ("second check", "did not hold on a second check"),
     ("repeats", "repeated another finding"),
     ("no concrete case", "showed no concrete case"),
@@ -439,25 +486,33 @@ def facts_block(view: FileView) -> str:
     return f"Today's date: {today()}" + (f"\n{view.facts}" if view.facts else "")
 
 
-def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], pr: dict[str, Any] | None = None,
-                    existing: list[dict[str, Any]] | None = None, belt: ToolBelt | None = None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
-    """A second, sceptical read of each finding against the code, the author's description and the comments already made. With a `belt` the
-    check may also look things up in the repository. Findings it cannot confirm, and findings that repeat an earlier one, are removed; one that an
-    existing comment already makes is marked as such. A finding that depends on code outside the file stays only if a lookup was made. If the
-    check cannot run the findings stay, marked unchecked (except those that need a lookup)."""
-    if not findings:
-        return findings, []
-    pr, existing = pr or {}, existing or []
+def _finding_lines(findings: list[dict[str, Any]]) -> str:
     lines = []
     for number, f in enumerate(findings, 1):
         where = f"line {f['line_number']}" + (f"-{f['end_line']}" if f["end_line"] else "")
         lines.append(f"{number}. {where}: {f['title']}. {f['comment']}\n   Its case: {f['failing_case']}\n   The code it relies on: {f['evidence']}"
+                     + (f"\n   Team check: {f['knowledge']}" if f.get("knowledge") else "")
                      + (f"\n   Suggested replacement:\n{f['suggestion_code']}" if f["suggestion_code"] else ""))
+    return "\n".join(lines)
+
+
+def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], pr: dict[str, Any] | None = None,
+                    existing: list[dict[str, Any]] | None = None, belt: ToolBelt | None = None,
+                    exact: list[dict[str, Any]] | None = None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """A second, sceptical read of each finding against the code, the author's description and the comments already made. With a `belt` the
+    check may also look things up in the repository. Findings it cannot confirm, and findings that repeat an earlier one, are removed; one that an
+    existing comment already makes is marked as such, and one that repeats a finding the exact checks in code already made (`exact`) is dropped.
+    A finding that depends on code outside the file stays only if a lookup was made. If the check cannot run the findings stay, marked unchecked
+    (except those that need a lookup)."""
+    if not findings:
+        return findings, []
+    pr, existing, exact = pr or {}, existing or [], exact or []
     alerts = f"\n\nThe alert rules, read from the template:\n{view.extra}" if view.extra else ""
     why = f"Why the author made this change (the pull request title and description):\n{pr.get('title', '')}\n{pr.get('description') or '(no description)'}\n\n"
     others = f"Other files changed in this pull request: {', '.join(pr['others'])}\n\n" if pr.get("others") else ""
-    user = (f"File: {view.path} ({view.language})\n{facts_block(view)}\n\n{why}{others}Comments people already made:\n{comments_block(existing)}\n\n"
-            "Findings to check:\n" + "\n".join(lines) + alerts + f"\n\nThe file:\n\n{view.shown}")
+    by_code = ("Findings already made by exact checks in code:\n" + "\n".join(f"S{n}: line {s['line_number']}: {s['title']}" for n, s in enumerate(exact, 1)) + "\n\n") if exact else ""
+    user = (f"File: {view.path} ({view.language})\n{facts_block(view)}\n\n{why}{others}Comments people already made:\n{comments_block(existing)}\n\n{by_code}"
+            "Findings to check:\n" + _finding_lines(findings) + alerts + f"\n\nThe file:\n\n{view.shown}")
 
     def ask() -> dict[str, Any]:
         if belt is not None:
@@ -475,7 +530,8 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
     for entry in answer.get("findings") if isinstance(answer.get("findings"), list) else []:
         if isinstance(entry, dict) and _int(entry.get("number")) is not None:
             verdicts[_int(entry["number"])] = {"holds": _holds(entry.get("holds")), "reason": _text(entry.get("reason"), 200),
-                                              "duplicate_of": _number(entry.get("duplicate_of")), "raised": _number(entry.get("already_raised_by"))}
+                                              "duplicate_of": _number(entry.get("duplicate_of")), "raised": _number(entry.get("already_raised_by")),
+                                              "by_code": _number(entry.get("already_found_by_code"))}
     kept: list[dict[str, Any]] = []
     removed: list[tuple[str, str]] = []
     kept_by_number: dict[int, dict[str, Any]] = {}
@@ -498,6 +554,9 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
             if where not in original["comment"]:
                 original["comment"] += f" The same applies at {where}."
             continue
+        if verdict["by_code"] and 1 <= verdict["by_code"] <= len(exact):
+            removed.append((f["title"], "it repeats a finding made by an exact check in code"))
+            continue
         if f.get("needs_lookup") and not looked:
             removed.append((f["title"], NEEDS_LOOKUP))
             continue
@@ -510,7 +569,46 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
     return kept, removed
 
 
-def file_prompt(view: FileView, pr: dict[str, Any], existing: list[dict[str, Any]]) -> str:
+def refute_findings(model: Any, view: FileView, findings: list[dict[str, Any]], pr: dict[str, Any] | None = None,
+                    belt: ToolBelt | None = None) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """A last, hostile read: another call is told to assume each finding is wrong and to find code that shows it. A finding is removed only
+    when that code is quoted and the quote is really in the file (or in what a lookup returned): an opinion alone removes nothing. If the call
+    fails the findings stay."""
+    if not findings:
+        return findings, []
+    pr = pr or {}
+    why = f"The author's description of the change:\n{pr.get('title', '')}\n{pr.get('description') or '(no description)'}\n\n"
+    alerts = f"\n\nThe alert rules, read from the template:\n{view.extra}" if view.extra else ""
+    user = f"File: {view.path} ({view.language})\n{facts_block(view)}\n\n{why}Findings to try to prove wrong:\n{_finding_lines(findings)}{alerts}\n\nThe file:\n\n{view.shown}"
+
+    def ask() -> dict[str, Any]:
+        if belt is not None:
+            return chat_json_with_tools(model, REFUTE_SYSTEM + VERIFY_TOOLS, user, TOOLS, belt.run, max_turns=MAX_VERIFY_TURNS)
+        return chat_json(model, REFUTE_SYSTEM, user, temperature=0)
+
+    try:
+        answer = with_retry(ask)
+    except Exception as exc:
+        logger.warning("The refutation check of the findings in %s failed: %s", view.path, type(exc).__name__)
+        return findings, []
+    haystack = _compact("\n".join(r.text for r in view.rows) + "\n" + view.extra + "\n" + (pr.get("description") or "") + "\n" + view.facts + "\n" + "\n".join(belt.seen if belt is not None else []))
+    verdicts: dict[int, tuple[str, str]] = {}
+    for entry in answer.get("findings") if isinstance(answer.get("findings"), list) else []:
+        number = _int(entry.get("number")) if isinstance(entry, dict) else None
+        if number is not None and _holds(entry.get("wrong")) and _text(entry.get("because"), 200) and _grounded(_quoted(entry.get("quote")), haystack):
+            verdicts[number] = (_text(entry.get("because"), 200), _quoted(entry.get("quote")))
+    kept: list[dict[str, Any]] = []
+    removed: list[tuple[str, str]] = []
+    for number, f in enumerate(findings, 1):
+        if number in verdicts:
+            removed.append((f["title"], f"the code it was checked against contradicts it: {verdicts[number][0]}"))
+        else:
+            kept.append(f)
+    return kept, removed
+
+
+def file_prompt(view: FileView, pr: dict[str, Any], existing: list[dict[str, Any]], team: list[dict[str, Any]] | None = None,
+                team_hits: list[dict[str, Any]] | None = None) -> str:
     if view.whole_file:
         shown = "the whole file"
     else:
@@ -519,9 +617,11 @@ def file_prompt(view: FileView, pr: dict[str, Any], existing: list[dict[str, Any
     alerts = f"What the alert rules in this template are, and what changed in them:\n{view.extra}\n\n" if view.extra else ""
     others = [p for p in pr.get("others") or [] if p != view.path]
     listed = f"Other files changed in this pull request (you cannot see them here): {', '.join(others)}\n\n" if others else ""
+    checks = pr_knowledge.block(team or [], team_hits or [])
+    checks = f"{checks}\n\n" if checks else ""
     return (f"File: {view.path}\nLanguage: {view.language}\nChange: {view.change_type} (+{view.added_count} -{view.removed_count})\n{facts_block(view)}\n"
             f"Pull request title: {pr['title']}\nPull request description (the author's explanation of the change):\n{pr['description'] or '(none)'}\n\n{listed}"
-            f"Comments people already made on this file and on the pull request (do not repeat them):\n{comments}\n\n{alerts}The file is shown as {shown}:\n\n{view.shown}")
+            f"Comments people already made on this file and on the pull request (do not repeat them):\n{comments}\n\n{alerts}{checks}The file is shown as {shown}:\n\n{view.shown}")
 
 
 def review_file(model: Any, view: FileView, pr: dict[str, Any], threads: list[dict[str, Any]], belt: ToolBelt | None = None) -> dict[str, Any]:
@@ -529,19 +629,25 @@ def review_file(model: Any, view: FileView, pr: dict[str, Any], threads: list[di
     find, and note what people already said."""
     existing = context_threads(threads, view.path)
     system = FILE_SYSTEM.format(guide=GUIDES.get(view.language, COMMON_GUIDE))
-    answer = with_retry(lambda: chat_json(model, system, file_prompt(view, pr, existing), temperature=0.1))
-    findings, removed = clean_findings(answer.get("findings"), view)
+    team = pr_knowledge.for_language(pr.get("knowledge") or [], view.language)  # the team's own checks that are about this kind of file
+    hits = pr_knowledge.literal_hits(team, view.new_lines, view.added)
+    answer = with_retry(lambda: chat_json(model, system, file_prompt(view, pr, existing, team, hits), temperature=0.1))
+    proposed = len(answer.get("findings")) if isinstance(answer.get("findings"), list) else 0
+    findings, removed = clean_findings(answer.get("findings"), view, {i["number"]: i for i in team})
     overflow = max(0, len(findings) - MAX_FINDINGS_PER_FILE)
     findings = findings[:MAX_FINDINGS_PER_FILE]
-    findings, rejected = verify_findings(model, view, findings, pr, existing, belt)
     exact = static_findings(view, view.old_text, view.new_text)
+    findings, rejected = verify_findings(model, view, findings, pr, existing, belt, exact)
+    findings, contradicted = refute_findings(model, view, findings, pr, belt)
+    rejected = rejected + contradicted
     findings = sorted(findings + exact, key=lambda f: SEVERITIES.index(f["severity"]))
     for finding in findings:
         thread = _existing_for(finding, existing)  # a comment on the same lines is a match whatever the second check said
         if thread:
             _mark_existing(finding, thread)
     return {"purpose": _text(answer.get("purpose"), 200), "findings": findings, "removed": removed, "rejected": rejected, "overflow": overflow,
-            "looked": list(belt.looked) if belt is not None else [], "static": len(exact)}
+            "looked": list(belt.looked) if belt is not None else [], "static": len(exact), "proposed": proposed,
+            "team_applied": [i["number"] for i in team], "team_hits": [{**h, "path": view.path} for h in hits]}
 
 
 # ---------------------------------------------------------------- verdict, scorecard, summary
@@ -581,6 +687,26 @@ def summarize(files: list[dict[str, Any]], comments: list[dict[str, Any]], commi
     if skipped:
         text += f" {skipped} file{'s were' if skipped != 1 else ' was'} not reviewed."
     return text
+
+
+def team_report(team: list[dict[str, Any]], files: list[dict[str, Any]], results: dict[str, dict[str, Any]], comments: list[dict[str, Any]],
+                pr_notes: dict[int, str], pr_checked: bool) -> list[dict[str, Any]]:
+    """For each of the team's own checks, what happened to it in this review: raised (a finding came from it), nothing reported (the AI was given it for
+    that many files and reported no problem), not applicable (no reviewed file is of the kind the check names) or could not check. `hits` are the places
+    in the changed lines where a term the team put in backticks appears."""
+    report: list[dict[str, Any]] = []
+    for item in team:
+        number = item["number"]
+        if item["pr_level"]:
+            status = "raised" if number in pr_notes else "nothing_reported" if pr_checked else "could_not_check"
+            checked, raised, hits = 0, int(number in pr_notes), []
+        else:
+            checked = sum(1 for r in results.values() if number in r.get("team_applied", []))
+            raised = sum(1 for c in comments if c.get("knowledge_number") == number)
+            hits = [h for r in results.values() for h in r.get("team_hits", []) if h["item"] == number][:pr_knowledge.MAX_HITS_PER_ITEM * 2]
+            status = "raised" if raised else "nothing_reported" if checked else "not_applicable"
+        report.append({"number": number, "text": item["text"], "scope": pr_knowledge.scope_label(item), "status": status, "files": checked, "findings": raised, "hits": hits})
+    return report
 
 
 # ---------------------------------------------------------------- the service
@@ -623,8 +749,9 @@ class PullRequestReviewService:
         return old, new, None
 
     def review(self, project: str, repository_id: str, pull_request_id: int, progress: Callable[[int, int, str], None] | None = None,
-               budget: float = REVIEW_BUDGET_SECONDS) -> dict[str, Any]:
-        """The review of one pull request. `progress(done, total, message)` is told how far it has got; `budget` is the seconds the model calls may take."""
+               budget: float = REVIEW_BUDGET_SECONDS, knowledge: str = "") -> dict[str, Any]:
+        """The review of one pull request. `progress(done, total, message)` is told how far it has got; `budget` is the seconds the model calls may take;
+        `knowledge` is the team's own checks, as the user wrote them (see pr_knowledge)."""
         tell = progress or (lambda done, total, message: None)
         notes: list[str] = []
         tell(0, 0, "Reading the pull request")
@@ -640,7 +767,8 @@ class PullRequestReviewService:
             raise ReviewFailed("This pull request has no file changes to review.", 422)
 
         description = pr.get("description") or ""
-        context = {"title": pr.get("title") or f"Pull request {pull_request_id}", "description": clean_description(description)}
+        team = pr_knowledge.parse(knowledge)
+        context = {"title": pr.get("title") or f"Pull request {pull_request_id}", "description": clean_description(description), "knowledge": team}
         threads = thread_summaries(self._optional(notes, "The existing comments", lambda: self.ado.get_pull_request_threads(project, repository_id, pull_request_id)))
         work_items = self._optional(notes, "The linked work items", lambda: [str(w.get("id")) for w in self.ado.get_pull_request_work_items(project, repository_id, pull_request_id)])
         build_check = self._build_check(project, pr, description)
@@ -700,6 +828,15 @@ class PullRequestReviewService:
 
         tell(1, 1, "Writing the summary")
         clarifications = self._description_gaps(files, description)
+        pr_notes, pr_checked = self._team_checks_about_the_pull_request(team, context, threads, files)
+        clarifications += [f"Your knowledge base, check {number}: {why}" for number, why in sorted(pr_notes.items())]
+        knowledge_checks = team_report(team, files, results, comments, pr_notes, pr_checked)
+        proposed = sum(r["proposed"] for r in results.values())
+        dropped = sum(len(r["removed"]) + len(r["rejected"]) for r in results.values())
+        if proposed or dropped or comments:
+            notes.insert(0, f"The AI proposed {proposed} finding{'' if proposed == 1 else 's'} in {len(results)} file{'' if len(results) == 1 else 's'}; "
+                            f"{dropped} {'was' if dropped == 1 else 'were'} removed by the rules or the checks; "
+                            f"{len(comments) - exact} from the AI and {exact} from exact checks in code {'is' if len(comments) == 1 else 'are'} shown.")
         evidence = {"changed_paths": [f["path"] for f in files], "work_items": work_items, "build_check": build_check}
         checklist = evaluate_checklist(parse_checklist(description), evidence) + placeholder_checks(description)
         notes = list(dict.fromkeys(notes))  # the same note, for example "could not be read", is not said twice
@@ -710,10 +847,38 @@ class PullRequestReviewService:
             "pull_request_id": pull_request_id, "verdict": verdict, "summary": summarize(files, comments, refs["source"], int(last.get("id") or len(iterations)), len(iterations)),
             "scorecard": scorecard, "comments": comments, "clarifications": clarifications, "posted_to_ado": False,
             "method": "diff-per-file", "source_commit": refs["source"] or None, "iterations": len(iterations),
-            "files": files, "checklist": checklist, "notes": notes, "scope_note": SCOPE_NOTE,
+            "files": files, "checklist": checklist, "notes": notes, "scope_note": SCOPE_NOTE, "knowledge_checks": knowledge_checks,
         }
 
     # ------------------------------------------------------------ steps
+
+    def _team_checks_about_the_pull_request(self, team: list[dict[str, Any]], context: dict[str, Any], threads: list[dict[str, Any]],
+                                            files: list[dict[str, Any]]) -> tuple[dict[int, str], bool]:
+        """The team's checks that are about the pull request itself (its description, its files): ({check number: why it is broken}, whether the check ran).
+        A check counts as broken only when the AI quotes words of the description, a file path or a comment that show it."""
+        items = [i for i in team if i["pr_level"]]
+        if not items:
+            return {}, True
+        paths = [f["path"] for f in files]
+        general = [t for t in threads if not t["path"]]
+        comments = comments_block([{**t, "general": True} for t in general[:MAX_GENERAL_COMMENTS]])
+        user = ("Checks about this pull request:\n" + "\n".join(f"{i['number']}. {i['text']}" for i in items)
+                + f"\n\nPull request title: {context['title']}\nPull request description:\n{context['description'] or '(none)'}\n\nChanged files:\n" + "\n".join(paths[:200])
+                + f"\n\nComments people already made on the pull request as a whole:\n{comments}")
+        try:
+            answer = with_retry(lambda: chat_json(self.model, KB_PR_SYSTEM, user, temperature=0))
+        except Exception as exc:
+            logger.info("PR review: the team's checks about the pull request failed (%s)", type(exc).__name__)
+            return {}, False
+        haystack = _compact(f"{context['title']}\n{context['description']}\n" + "\n".join(paths) + "\n" + comments)
+        wanted = {i["number"] for i in items}
+        broken: dict[int, str] = {}
+        for entry in answer.get("checks") if isinstance(answer.get("checks"), list) else []:
+            number = _int(entry.get("number")) if isinstance(entry, dict) else None
+            why = _text(entry.get("because"), 240) if isinstance(entry, dict) else ""
+            if number in wanted and entry.get("breaks") is True and why and _grounded(_quoted(entry.get("quote")), haystack) and not _ASK.search(why) and not _HEDGE.search(why):
+                broken[number] = why
+        return broken, True
 
     def _build_check(self, project: str, pr: dict[str, Any], description: str) -> dict[str, Any] | None:
         linked = linked_build_ids(description)
@@ -825,7 +990,15 @@ class PullRequestReviewService:
             logger.info("PR review: the description check failed (%s)", type(exc).__name__)
             return []
         gaps = answer.get("missing_from_description")
-        return [f"The description does not mention: {_text(g, 200)}" for g in (gaps if isinstance(gaps, list) else [])[:3] if _text(g, 200) and not covered_by(_text(g, 200), body)]
+        haystack = _compact(body)
+        notes: list[str] = []
+        for gap in (gaps if isinstance(gaps, list) else [])[:3]:
+            change = _text(gap.get("change") if isinstance(gap, dict) else gap, 200)
+            mention = _quoted(gap.get("description_mentions")) if isinstance(gap, dict) else ""
+            if not change or covered_by(change, body) or (mention and _grounded(mention, haystack)):
+                continue  # the description already says it: the sentence the AI quoted is really there
+            notes.append(f"The description does not mention: {change}")
+        return notes
 
 
 _STOP_WORDS = {"this", "that", "with", "from", "have", "been", "were", "will", "into", "also", "than", "then", "when", "which", "while", "their", "there", "these", "those",

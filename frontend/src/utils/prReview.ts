@@ -1,4 +1,4 @@
-import type { AdoPullRequest, PullRequestChecklistCheck, PullRequestReviewComment, PullRequestReviewJob, PullRequestReviewResponse, PullRequestReviewedFile } from '../types/api'
+import type { AdoPullRequest, PullRequestChecklistCheck, PullRequestKnowledgeCheck, PullRequestReviewComment, PullRequestReviewJob, PullRequestReviewResponse, PullRequestReviewedFile } from '../types/api'
 
 /** The tool reads code changes; it does not approve a pull request. The wording says what it found, not what to decide. */
 const VERDICT_LABEL: Record<string, string> = {
@@ -60,6 +60,70 @@ export function lookedAtLine(items?: string[] | null): string {
 export function progressText(job: Pick<PullRequestReviewJob, 'message' | 'elapsed_seconds'>): string {
   const seconds = job.elapsed_seconds >= 5 ? ` (${job.elapsed_seconds} s)` : ''
   return `${job.message || 'Working'}${seconds}`
+}
+
+// ---------------------------------------------------------------- the user's own checks (the knowledge base)
+
+export const KNOWLEDGE_STORAGE_KEY = 'ado_pr_knowledge_base'
+export const KNOWLEDGE_OPEN_KEY = 'ado_pr_knowledge_open'
+export const KNOWLEDGE_MAX_CHARS = 6000
+export const KNOWLEDGE_MAX_CHECKS = 40
+export const KNOWLEDGE_EXAMPLE = [
+  '[PowerShell] Never use `Invoke-Expression` on anything a user can influence',
+  '[PowerShell] Scripts that change state need `-WhatIf` support',
+  '[Python] Every `requests` call has a timeout',
+  '[alerts] Every alert has an action group',
+  '[SQL] Dates are compared in UTC, not local time',
+  '[PR] The description links the regression run',
+].join('\n')
+export const KNOWLEDGE_HELP = 'Write one check per line. Start a line with [PowerShell], [Python], [C#], [SQL], [alerts], [Markdown] or [PR] to limit it; a line with no scope is used for every file. '
+  + 'Put terms in `backticks` and the review shows where they appear in the changed lines. Lines starting with # are notes.'
+
+/** Mirrors what the backend reads: spacing alone is not a change, and blank lines do not count. */
+export function normalizeKnowledge(text: string | null | undefined): string {
+  return (text ?? '').slice(0, KNOWLEDGE_MAX_CHARS).replace(/\r\n?/g, '\n').split('\n').map(l => l.split(/\s+/).filter(Boolean).join(' ')).filter(Boolean).join('\n')
+}
+
+/** The checks in the text: a line that is empty, a note (#), a lone bullet or a lone [scope] is not one. */
+export function knowledgeCount(text: string | null | undefined): number {
+  const lines = (text ?? '').slice(0, KNOWLEDGE_MAX_CHARS).replace(/\r\n?/g, '\n').split('\n').map(l => l.trim())
+  const checks = lines.filter(l => l && !l.startsWith('#')).map(l => l.replace(/^(?:[-*•]|\d{1,2}[.)])(?:\s+|$)/, '').replace(/^\[[^\]\n]{1,60}\]\s*$/, '').trim()).filter(Boolean)
+  return Math.min(checks.length, KNOWLEDGE_MAX_CHECKS)
+}
+
+/** True when the checks used for a review are not the ones written now. A review made without any is compared with the empty text. */
+export function knowledgeChanged(used: string | null | undefined, current: string | null | undefined): boolean {
+  return normalizeKnowledge(used) !== normalizeKnowledge(current)
+}
+
+export function loadKnowledge(): string {
+  try { return localStorage.getItem(KNOWLEDGE_STORAGE_KEY) ?? '' } catch { return '' }
+}
+
+export function saveKnowledge(text: string): void {
+  try {
+    if (text.trim()) localStorage.setItem(KNOWLEDGE_STORAGE_KEY, text)
+    else localStorage.removeItem(KNOWLEDGE_STORAGE_KEY)
+  } catch { /* storage blocked: the text stays on the page for this visit */ }
+}
+
+export const KNOWLEDGE_STATUS_LABEL: Record<PullRequestKnowledgeCheck['status'], string> = {
+  raised: 'Problem reported',
+  nothing_reported: 'No problem reported',
+  not_applicable: 'Not applicable here',
+  could_not_check: 'Could not check',
+}
+export const KNOWLEDGE_STATUS_TIP: Record<PullRequestKnowledgeCheck['status'], string> = {
+  raised: 'A finding in this review comes from this check.',
+  nothing_reported: 'An AI read the changed code with this check in mind and reported no problem. Nothing was run.',
+  not_applicable: 'No file in this pull request is of the kind this check names.',
+  could_not_check: 'The AI call for this check failed.',
+}
+
+export function knowledgeCounts(checks: PullRequestKnowledgeCheck[]): Record<PullRequestKnowledgeCheck['status'], number> {
+  const counts = { raised: 0, nothing_reported: 0, not_applicable: 0, could_not_check: 0 }
+  for (const check of checks) counts[check.status] += 1
+  return counts
 }
 
 /** '24' or '24-26'; empty when the comment has no line. */

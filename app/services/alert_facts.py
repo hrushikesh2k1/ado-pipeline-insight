@@ -317,6 +317,15 @@ def human_duration(iso: Any) -> str:
     return " ".join(f"{int(n)} {unit}{'' if int(n) == 1 else 's'}" for n, unit in parts if n)
 
 
+def duration_minutes(iso: Any) -> float | None:
+    """'PT5M' -> 5.0, 'PT1H30M' -> 90.0; None for anything that is not an ISO 8601 duration."""
+    match = _DURATION.match(str(iso or "").strip())
+    if not match or not any(match.groups()):
+        return None
+    days, hours, minutes, seconds = (int(g) if g else 0 for g in match.groups())
+    return days * 1440 + hours * 60 + minutes + seconds / 60
+
+
 _OPERATORS = {
     "greaterthan": "greater than", "greaterthanorequal": "at least", "lessthan": "less than", "lessthanorequal": "at most",
     "equals": "equal to", "equal": "equal to", "greaterorlessthan": "outside the learned range",

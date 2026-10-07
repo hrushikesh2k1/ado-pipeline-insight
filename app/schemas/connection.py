@@ -89,6 +89,7 @@ class PullRequestReviewRequest(BaseModel):
     repository_id: str = Field(min_length=1, max_length=256)
     pull_request_id: int = Field(ge=1, le=2**31 - 1)
     pat: str | None = Field(default=None, max_length=512)
+    knowledge: str | None = Field(default=None, max_length=6000)  # the team's own checks, as the user wrote them (see pr_knowledge)
 
 
 class PullRequestReviewCommentSchema(BaseModel):
@@ -109,6 +110,8 @@ class PullRequestReviewCommentSchema(BaseModel):
     verified: bool | None = None  # True = confirmed by a second check; None = the second check did not run (or, for a static check, was not needed)
     source: str | None = None  # "ai" = found by the AI and checked; "static" = found by an exact check made in code, without the AI
     checked_with: list[str] = Field(default_factory=list)  # what the second check looked up in the repository, for example "read src/Api/Api.csproj"
+    knowledge: str | None = None  # the team's own check this finding comes from, as the user wrote it
+    knowledge_number: int | None = None
 
 
 class PullRequestReviewedFile(BaseModel):
@@ -128,6 +131,25 @@ class PullRequestChecklistCheck(BaseModel):
     evidence: str = ""
 
 
+class PullRequestKnowledgeHit(BaseModel):
+    item: int
+    term: str
+    path: str
+    line: int
+    text: str
+
+
+class PullRequestKnowledgeCheck(BaseModel):
+    """What happened to one of the team's own checks in this review."""
+    number: int
+    text: str
+    scope: str  # "all files", the languages it names, or "the pull request"
+    status: str  # raised | nothing_reported | not_applicable | could_not_check
+    files: int = 0  # reviewed files the check was given for
+    findings: int = 0
+    hits: list[PullRequestKnowledgeHit] = Field(default_factory=list)  # where a term the team put in `backticks` appears in the changed lines
+
+
 class PullRequestReviewResponseSchema(BaseModel):
     pull_request_id: int
     verdict: str
@@ -143,6 +165,7 @@ class PullRequestReviewResponseSchema(BaseModel):
     checklist: list[PullRequestChecklistCheck] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     scope_note: str = ""
+    knowledge_checks: list[PullRequestKnowledgeCheck] = Field(default_factory=list)
 
 
 class PullRequestReviewJobError(BaseModel):

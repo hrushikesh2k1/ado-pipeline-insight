@@ -86,3 +86,24 @@
   .prReviewDrawer .prScorecardGrid { grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
   .prReviewDrawer .prScoreValue { width: auto; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 }
+
+/* the knowledge base: the box on the pull request page, and its result in the review */
+.prKnowledge { margin: 0 0 14px; }
+.prKnowledgeToggle { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; padding: 0; color: inherit; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; text-align: left; }
+.prKnowledgeToggle svg { color: var(--p-accent); flex: none; }
+.prKnowledgeTitle { min-width: 0; overflow-wrap: anywhere; }
+.prKnowledgeBadge { margin-left: auto; font-size: 11px; font-weight: 600; padding: 1px 9px; border: 1px solid var(--p-border); border-radius: 20px; color: var(--p-muted); white-space: nowrap; }
+.prKnowledgeBody { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.prKnowledgeInput { width: 100%; box-sizing: border-box; resize: vertical; min-height: 110px; background: rgba(0, 0, 0, 0.25); color: var(--p-text); border: 1px solid var(--p-border); border-radius: 8px; padding: 9px 11px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; }
+[data-theme="light"] .prKnowledgeInput { background: #ffffff; }
+.prKnowledgeInput:focus-visible, .prKnowledgeToggle:focus-visible, .prKnowledgeBtn:focus-visible { outline: 2px solid var(--p-accent); outline-offset: 2px; }
+.prKnowledgeFoot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.prKnowledgeButtons { display: inline-flex; gap: 8px; }
+.prKnowledgeBtn { background: transparent; color: inherit; border: 1px solid var(--p-border); border-radius: 20px; padding: 4px 12px; font-size: 11.5px; font-weight: 600; font-family: inherit; cursor: pointer; }
+.prpCheck.kb.raised .prpCheckIcon { color: var(--p-warn); }
+.prpCheck.kb.nothing_reported .prpCheckIcon { color: var(--p-pass); }
+.prpCheck.kb.not_applicable .prpCheckIcon, .prpCheck.kb.could_not_check .prpCheckIcon { color: var(--p-muted); }
+.prpHits { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.prpHits li { overflow-wrap: anywhere; }
+.prChip.kb { color: #818cf8; border-color: rgba(129, 140, 248, 0.5); }
+[data-theme="light"] .prChip.kb { color: #4f46e5; }

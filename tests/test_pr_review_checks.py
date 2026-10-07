@@ -345,7 +345,7 @@ class TestMarkdownIsReviewed:
 
     def test_a_table_row_with_the_wrong_number_of_cells_is_reported_by_the_code(self):
         result, _, _ = run(self.ado(self.GUIDE + "| b |\n"))
-        assert [(c["title"], c["line_number"], c["source"]) for c in result["comments"]] == [("Table row has 1 cells, the header has 2", 4, "static")]
+        assert [(c["title"], c["line_number"], c["source"]) for c in result["comments"]] == [("Table row has 1 cell, the header has 2 cells", 4, "static")]
 
     def test_a_changelog_is_still_not_reviewed(self):
         ado = FakeAdo(changes=[change("/CHANGELOG.md"), change("/docs/guide.md")],

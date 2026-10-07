@@ -18,6 +18,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 MAX_READ_LINES = 150
+MAX_LINE_CHARS = 1500  # a line longer than this is cut, and the result says so (an alert's query is one long line of JSON)
 MAX_RESULT_CHARS = 6000
 MAX_FILE_BYTES = 150_000
 MAX_SEARCH_FILES = 60  # files fetched by one search
@@ -123,7 +124,7 @@ class RepoReader:
         chunk = lines[start - 1:start - 1 + MAX_READ_LINES]
         if not chunk:
             return f"{_clean_path(path)} has {len(lines)} line(s); nothing from line {start}."
-        body = "\n".join(f"{n:>5} | {t[:400]}" for n, t in enumerate(chunk, start))
+        body = "\n".join(f"{n:>5} | {t[:MAX_LINE_CHARS]}" + (f" ...(line cut at {MAX_LINE_CHARS} characters)" if len(t) > MAX_LINE_CHARS else "") for n, t in enumerate(chunk, start))
         end = start + len(chunk) - 1
         more = f"\n(lines {start}-{end} of {len(lines)}; call again with from_line={end + 1} to read on)" if end < len(lines) else f"\n(lines {start}-{end} of {len(lines)})"
         return f"{_clean_path(path)}:\n{body}{more}"
@@ -179,6 +180,7 @@ class ToolBelt:
     def __init__(self, reader: RepoReader, near: str = "", deadline: float | None = None):
         self.reader, self.near, self.deadline = reader, near, deadline  # deadline: a time.monotonic() value after which no lookup is made
         self.looked: list[str] = []
+        self.seen: list[str] = []  # what the lookups returned: the checker may quote it as evidence
 
     def _note(self, text: str) -> None:
         if text not in self.looked:
@@ -203,7 +205,9 @@ class ToolBelt:
         except Exception as exc:  # noqa: BLE001
             logger.info("PR review lookup %s failed (%s)", name, type(exc).__name__)
             return "That lookup failed."
-        return result if len(result) <= MAX_RESULT_CHARS else result[:MAX_RESULT_CHARS] + "\n... (cut)"
+        result = result if len(result) <= MAX_RESULT_CHARS else result[:MAX_RESULT_CHARS] + "\n... (cut)"
+        self.seen.append(result)
+        return result
 
 
 # ---------------------------------------------------------------- project facts: the C# language version

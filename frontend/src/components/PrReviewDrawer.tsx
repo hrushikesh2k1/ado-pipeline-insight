@@ -16,7 +16,7 @@ import {
 } from 'lucide-react'
 import type { AdoPullRequest, PullRequestReviewResponse, PullRequestReviewComment } from '../types/api'
 import { QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, STATIC_CHECK, STATIC_CHECK_TIP, allCommentsAsMarkdown, commentAsMarkdown, isAboutQueries, lineLabel, lookedAtLine, scoreLabel, shortCommit, verdictLabel } from '../utils/prReview'
-import { ChecklistCard, FilesCard, NotesCard } from './PrReviewPanels'
+import { ChecklistCard, FilesCard, KnowledgeCard, NotesCard } from './PrReviewPanels'
 
 interface PrReviewDrawerProps {
   reviewData: {
@@ -26,6 +26,8 @@ interface PrReviewDrawerProps {
   onClose: () => void
   /** The branch has new commits since this review was made. */
   isStale?: boolean
+  /** The knowledge base was changed after this review was made. */
+  knowledgeChanged?: boolean
   isReReviewing?: boolean
   onReReview?: () => void
   /** Why the last attempt to review again failed. */
@@ -96,7 +98,7 @@ function getScoreBadgeClass(score: string) {
   }
 }
 
-export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onClose, isStale = false, isReReviewing = false, onReReview, error = null }) => {
+export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onClose, isStale = false, knowledgeChanged = false, isReReviewing = false, onReReview, error = null }) => {
   const { pr, review } = reviewData
   const [severityFilter, setSeverityFilter] = useState<string>('all')
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -192,6 +194,13 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
           </div>
         )}
 
+        {knowledgeChanged && (
+          <div className="prStaleNote" data-testid="pr-review-kb-stale">
+            <AlertTriangle size={14} />
+            <span>Your knowledge base has changed since this review. Review again to apply it.</span>
+          </div>
+        )}
+
         {/* Local Review Notice Banner (Crucial Requirement: Comments Not Posted to PR) */}
         <div className="prLocalNoticeBanner">
           <ShieldCheck size={18} className="prNoticeIcon" />
@@ -234,6 +243,9 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
 
         {/* The checklist in the description, against what the pull request contains */}
         <ChecklistCard checks={review.checklist ?? []} />
+
+        {/* What happened to the user's own checks (the knowledge base) */}
+        <KnowledgeCard checks={review.knowledge_checks ?? []} />
 
         {/* Which files were read */}
         <FilesCard files={review.files ?? []} />
@@ -357,6 +369,9 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                           {comment.existing_thread}
                         </span>
                       )}
+                      {comment.knowledge && (
+                        <span className="prChip kb" data-testid="pr-comment-kb" title="This finding comes from a check in your knowledge base">knowledge base</span>
+                      )}
                       {comment.source === 'static' && (
                         <span className="prChip checked" data-testid="pr-comment-static" title={STATIC_CHECK_TIP}>{STATIC_CHECK}</span>
                       )}
@@ -389,6 +404,9 @@ export const PrReviewDrawer: React.FC<PrReviewDrawerProps> = ({ reviewData, onCl
                   )}
                   {comment.evidence && (
                     <div className="prCaseLine"><b>Code it relies on:</b> <code className="prEvidence">{comment.evidence}</code></div>
+                  )}
+                  {comment.knowledge && (
+                    <div className="prCaseLine" data-testid="pr-comment-kb-text"><b>From your knowledge base:</b> {comment.knowledge}</div>
                   )}
                   {lookedAtLine(comment.checked_with) && (
                     <div className="prCaseLine" data-testid="pr-comment-looked"><b>Second check looked at:</b> {lookedAtLine(comment.checked_with)}</div>

@@ -56,7 +56,7 @@ from app.schemas.connection import (
 from app.repositories.release_repository import ReleaseRepository
 from app.services.release_service import ReleaseService
 from app.services.irp_service import IrpService
-from app.services import pr_review, pr_review_jobs
+from app.services import pr_knowledge, pr_review, pr_review_jobs
 from app.schemas.insights import AlertInventoryUpload, InsightsRefreshRequest
 from app.services.work_item_insights import WorkItemInsightsService
 from app.repositories import work_item_insights_repository as insights_store
@@ -467,7 +467,7 @@ def review_pull_request(payload: PullRequestReviewRequest) -> PullRequestReviewR
     try:
         model = pr_review.get_model_client()
         service = pr_review.PullRequestReviewService(AzureDevOpsClient(organization=org_clean, pat=token), model)
-        result = service.review(proj_clean, repo_clean, payload.pull_request_id)
+        result = service.review(proj_clean, repo_clean, payload.pull_request_id, knowledge=payload.knowledge or "")
     except Exception as exc:
         status, detail = _explain_review_error(exc)
         raise HTTPException(status_code=status, detail=detail) from exc
@@ -515,10 +515,11 @@ def start_pull_request_review(payload: PullRequestReviewRequest) -> PullRequestR
     service = pr_review.PullRequestReviewService(AzureDevOpsClient(organization=org_clean, pat=token), model)
 
     def work(progress):
-        result = service.review(proj_clean, repo_clean, payload.pull_request_id, progress, pr_review.BACKGROUND_BUDGET_SECONDS)
+        result = service.review(proj_clean, repo_clean, payload.pull_request_id, progress, pr_review.BACKGROUND_BUDGET_SECONDS, knowledge=payload.knowledge or "")
         return PullRequestReviewResponseSchema(**result).model_dump()
 
-    key = pr_review_jobs.ReviewJobs.fingerprint(org_clean, proj_clean, repo_clean, payload.pull_request_id, token)
+    # the same review with other checks of the team's is another review
+    key = pr_review_jobs.ReviewJobs.fingerprint(org_clean, proj_clean, repo_clean, payload.pull_request_id, token, pr_knowledge.normalize(payload.knowledge))
     try:
         job_id = pr_review_jobs.jobs.start(key, work, _explain_review_error)
     except pr_review_jobs.TooManyReviews as exc:

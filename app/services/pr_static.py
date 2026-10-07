@@ -249,8 +249,9 @@ def markdown_tables(view: FileView) -> list[dict[str, Any]]:
                 got = _cell_count(row)
                 if number in view.added and got != expected:
                     what = "an empty cell is added to the row" if got < expected else "the extra cell is dropped"
-                    found.append(_finding(view, number, f"Table row has {got} cells, the header has {expected}",
-                                          f"The row on line {number} has {got} cell(s) and the table's header has {expected}. In GitHub-flavored Markdown {what}, so the table shows wrongly. Add or remove the missing `|`.",
+                    cells = lambda n: f"{n} cell{'' if n == 1 else 's'}"  # noqa: E731
+                    found.append(_finding(view, number, f"Table row has {cells(got)}, the header has {cells(expected)}",
+                                          f"The row on line {number} has {cells(got)} and the table's header has {cells(expected)}. In GitHub-flavored Markdown {what}, so the table shows wrongly. Add or remove the missing `|`.",
                                           f"In the rendered table {what}.", row, "warning", "correctness"))
         run.clear()
 

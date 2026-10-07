@@ -77,6 +77,23 @@ export type PullRequestReviewComment = {
   source?: 'ai' | 'static' | null
   /** What the second check looked up in the repository, for example "read src/Api/Api.csproj" */
   checked_with?: string[]
+  /** The team's own check (from the knowledge base) this finding comes from, as the user wrote it */
+  knowledge?: string | null
+  knowledge_number?: number | null
+}
+
+/** Where a term the user put in `backticks` appears in the changed lines. */
+export type PullRequestKnowledgeHit = { item: number; term: string; path: string; line: number; text: string }
+
+/** What happened to one of the user's own checks in a review. */
+export type PullRequestKnowledgeCheck = {
+  number: number
+  text: string
+  scope: string
+  status: 'raised' | 'nothing_reported' | 'not_applicable' | 'could_not_check'
+  files: number
+  findings: number
+  hits: PullRequestKnowledgeHit[]
 }
 
 export type PullRequestReviewedFile = {
@@ -111,6 +128,7 @@ export type PullRequestReviewResponse = {
   checklist?: PullRequestChecklistCheck[]
   notes?: string[]
   scope_note?: string
+  knowledge_checks?: PullRequestKnowledgeCheck[]
 }
 
 /** A review running in the background: where it is and, when it is over, the review or why there is none. */

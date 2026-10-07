@@ -1,7 +1,7 @@
 import React from 'react'
-import { CircleAlert, CircleCheck, CircleHelp, CircleX, FileCode, ListChecks, Info } from 'lucide-react'
-import type { PullRequestChecklistCheck, PullRequestReviewedFile } from '../types/api'
-import { CHECK_LABEL, checklistCounts, filesCounts } from '../utils/prReview'
+import { BookOpen, CircleAlert, CircleCheck, CircleHelp, CircleX, FileCode, ListChecks, Info } from 'lucide-react'
+import type { PullRequestChecklistCheck, PullRequestKnowledgeCheck, PullRequestReviewedFile } from '../types/api'
+import { CHECK_LABEL, KNOWLEDGE_STATUS_LABEL, KNOWLEDGE_STATUS_TIP, checklistCounts, filesCounts, knowledgeCounts } from '../utils/prReview'
 import './PrReviewPanels.css'
 
 const CHECK_ICON: Record<PullRequestChecklistCheck['status'], React.ReactNode> = {
@@ -54,6 +54,56 @@ export const ChecklistCard: React.FC<{ checks: PullRequestChecklistCheck[] }> = 
           </ul>
         </details>
       )}
+    </section>
+  )
+}
+
+const KNOWLEDGE_ICON: Record<PullRequestKnowledgeCheck['status'], React.ReactNode> = {
+  raised: <CircleAlert size={15} />,
+  nothing_reported: <CircleCheck size={15} />,
+  not_applicable: <CircleHelp size={15} />,
+  could_not_check: <CircleX size={15} />,
+}
+const KNOWLEDGE_ORDER: Record<PullRequestKnowledgeCheck['status'], number> = { raised: 0, could_not_check: 1, nothing_reported: 2, not_applicable: 3 }
+
+/** The user's own checks (knowledge base): what the review did with each one, and where the terms they named appear in the changed lines. */
+export const KnowledgeCard: React.FC<{ checks: PullRequestKnowledgeCheck[] }> = ({ checks }) => {
+  if (checks.length === 0) return null
+  const counts = knowledgeCounts(checks)
+  const ordered = [...checks].sort((a, b) => KNOWLEDGE_ORDER[a.status] - KNOWLEDGE_ORDER[b.status] || a.number - b.number)
+  return (
+    <section className="prp prpCard" data-testid="pr-knowledge-checks">
+      <div className="prpHead">
+        <div className="prpTitle"><BookOpen size={15} /> <span>Your knowledge base in this review</span></div>
+        <span className="prpMuted">
+          {checks.length} check{checks.length === 1 ? '' : 's'}: {counts.raised} raised a finding, {counts.nothing_reported} no problem reported, {counts.not_applicable} not applicable
+          {counts.could_not_check ? `, ${counts.could_not_check} could not be checked` : ''}
+        </span>
+      </div>
+      <ul className="prpChecks">
+        {ordered.map(check => (
+          <li key={check.number} className={`prpCheck kb ${check.status}`} data-testid={`pr-knowledge-${check.status}`} title={KNOWLEDGE_STATUS_TIP[check.status]}>
+            <span className="prpCheckIcon">{KNOWLEDGE_ICON[check.status]}</span>
+            <div>
+              <div className="prpCheckTitle">{check.text}</div>
+              <div className="prpMuted">
+                <b>{KNOWLEDGE_STATUS_LABEL[check.status]}</b> <span className="prpChip">{check.scope}</span>
+                {check.status !== 'not_applicable' && check.scope !== 'the pull request' && <span> · given for {check.files} file{check.files === 1 ? '' : 's'}</span>}
+                {check.findings > 0 && <span> · {check.findings} finding{check.findings === 1 ? '' : 's'}</span>}
+              </div>
+              {check.hits.length > 0 && (
+                <ul className="prpHits" data-testid="pr-knowledge-hits">
+                  {check.hits.map(hit => (
+                    <li key={`${hit.path}:${hit.line}:${hit.term}`} className="prpMuted">
+                      <code className="prEvidence">{hit.term}</code> in <code className="prpPath">{hit.path}:{hit.line}</code> <code className="prEvidence">{hit.text}</code>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
     </section>
   )
 }

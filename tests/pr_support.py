@@ -192,9 +192,14 @@ class FakePrModel:
     Exception to raise); `holds` says which finding numbers survive the second check (default: all)."""
 
     def __init__(self, findings: dict[str, Any] | None = None, holds: Callable[[str, list[int]], dict[int, Any]] | None = None, gaps: Any = None, purposes: dict[str, str] | None = None,
-                 lookups: dict[str, list[tuple[str, dict[str, Any]]]] | None = None, decide: Callable[[str, list[int], list[str]], dict[int, Any]] | None = None):
+                 lookups: dict[str, list[tuple[str, dict[str, Any]]]] | None = None, decide: Callable[[str, list[int], list[str]], dict[int, Any]] | None = None,
+                 refutes: dict[str, Any] | None = None, team_checks: Any = None):
         """`lookups` maps a file path to the tool calls the second check makes before it answers (a list of (tool name, arguments)); `decide(path, numbers,
-        tool results)` then says which findings hold, in place of `holds`."""
+        tool results)` then says which findings hold, in place of `holds`. `refutes` maps a file path to {finding number: (why it is wrong, code that shows it)}
+        for the refutation call (or to an Exception to raise); `team_checks` is {check number: (breaks, why, quote)} for the team's checks about the pull request
+        (or an Exception)."""
+        self.refutes = refutes or {}
+        self.team_checks = team_checks if team_checks is not None else {}
         self.deployment = "fake"
         self.findings = findings if findings is not None else {}
         self.holds = holds
@@ -208,13 +213,14 @@ class FakePrModel:
         self._lock = threading.Lock()
         self.client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=self._create)))
 
+    MARKERS = {"file": "You review one changed file", "verify": "You check findings", "description": "You compare the description",
+               "refute": "You are a sceptical senior engineer", "team": "You check a pull request against checks"}
+
     def calls_of(self, kind: str) -> list[str]:
-        marker = {"file": "You review one changed file", "verify": "You check findings", "description": "You compare the description"}[kind]
-        return [user for system, user in self.calls if system.startswith(marker)]
+        return [user for system, user in self.calls if system.startswith(self.MARKERS[kind])]
 
     def system_of(self, kind: str) -> list[str]:
-        marker = {"file": "You review one changed file", "verify": "You check findings", "description": "You compare the description"}[kind]
-        return [system for system, user in self.calls if system.startswith(marker)]
+        return [system for system, user in self.calls if system.startswith(self.MARKERS[kind])]
 
     def _create(self, model, messages, temperature=0, response_format=None, tools=None, tool_choice=None):
         system, user = messages[0]["content"], messages[1]["content"]
@@ -255,11 +261,23 @@ class FakePrModel:
             def answer(n: int) -> dict[str, Any]:
                 said = decided.get(n, True)  # True, False, (False, "why"), or {"holds": ..., "reason": ..., "duplicate_of": 1, "already_raised_by": "E2"}
                 if isinstance(said, dict):
-                    return {"holds": said.get("holds", True), "reason": said.get("reason", "ok"), "duplicate_of": said.get("duplicate_of"), "already_raised_by": said.get("already_raised_by")}
+                    return {"holds": said.get("holds", True), "reason": said.get("reason", "ok"), "duplicate_of": said.get("duplicate_of"), "already_raised_by": said.get("already_raised_by"),
+                            "already_found_by_code": said.get("already_found_by_code")}
                 holds, reason = (said[0], said[1]) if isinstance(said, tuple) else (bool(said), "ok")
-                return {"holds": holds, "reason": reason, "duplicate_of": None, "already_raised_by": None}
+                return {"holds": holds, "reason": reason, "duplicate_of": None, "already_raised_by": None, "already_found_by_code": None}
 
             body = {"findings": [{"number": n, **answer(n)} for n in numbers if not (isinstance(decided, dict) and decided.get(n) is SILENT)]}  # SILENT: the check says nothing about it
+        elif system.startswith(self.MARKERS["refute"]):
+            path = re.search(r"^File: (\S+)", user, re.M).group(1)
+            said = self.refutes.get(path, {})
+            if isinstance(said, Exception):
+                raise said
+            numbers = [int(n) for n in re.findall(r"^(\d+)\. line", user, re.M)]
+            body = {"findings": [{"number": n, "wrong": n in said, "because": said[n][0] if n in said else "", "quote": said[n][1] if n in said else ""} for n in numbers]}
+        elif system.startswith(self.MARKERS["team"]):
+            if isinstance(self.team_checks, Exception):
+                raise self.team_checks
+            body = {"checks": [{"number": n, "breaks": v[0], "because": v[1], "quote": v[2]} for n, v in self.team_checks.items()]}
         else:
             if isinstance(self.gaps, Exception):
                 raise self.gaps

@@ -14,7 +14,7 @@ things up in the repository. Comments are still shown on screen only: nothing is
 **What the review reads**
 - **It reads what really changed, file by file.** Each file is compared with its earlier version, and the AI sees which lines were
   added, changed or removed. Before, it read only the first 4 source files, 200 lines each, as whole files.
-- **More files, bigger files.** Up to 30 files per pull request are reviewed (150 are looked at). Files up to 1 MB and 12,000 lines
+- **More files, bigger files.** Up to 50 files per pull request are reviewed (150 are looked at). Files up to 1 MB and 12,000 lines
   are read. For a large file the AI sees the changed parts and the lines around them. Python, PowerShell and alert templates come
   first, other languages next, Markdown last. Every file that is skipped is listed with the reason (changelog, deleted, lock or
   generated file, too large, over the limit).
@@ -47,6 +47,18 @@ things up in the repository. Comments are still shown on screen only: nothing is
   quotes only code that was not changed, or when it says the code "will not compile" (only the build can show that). Naming,
   structure, style and missing-test findings are never more than a "suggestion". The review notes list what was removed and why.
   The AI may return no findings. A finding may also carry a replacement for the exact lines it points at.
+- **A hostile second look at every finding that is left.** Another AI call is told to assume each finding is wrong and to find code
+  that shows it: how the rest of the file or query handles the same thing, the description, the facts it was given, what a lookup
+  returned. A finding is removed only when that call quotes code or text that is really there. An opinion alone removes nothing.
+- **Alert timing is worked out by plain code.** For each alert the AI is told how often it runs, how far back each run reads, and
+  for every `ago()` time filter in its query whether it can skip events (shorter than the time between runs), is cut off by the
+  window (longer than what a run reads), or is seen by several runs. The advice no longer says that a filter shorter than the window
+  is a problem: it is normal, because an event outside the filter on a later run was already seen by an earlier run.
+- **SQL has its own advice,** and every language is told to follow the file's own convention before calling a name, label or value
+  wrong (the labels of the other branches of the same query, for example), and not to review logic that the description says was
+  only moved, renamed or brought into the repository unchanged.
+- **A repeat of a code finding is merged.** When an exact check in code and the AI find the same defect, only the code's finding is
+  shown. The second check is told what the code already found.
 - **The code checks the position.** The file must be in the pull request, the line must be one that was changed, and a suggested
   replacement is kept only when every line it replaces was changed.
 - **A second AI check reads each finding again.** It sees the code, the description and the existing comments. It removes what it
@@ -65,12 +77,31 @@ things up in the repository. Comments are still shown on screen only: nothing is
   - a PowerShell script that lost its UTF-8 byte order mark while it has non-ASCII text (Microsoft documents that Windows
     PowerShell then reads it in the wrong code page);
   - a Markdown table row with a different number of cells than its header.
-- **Less noise.** A "the description does not mention ..." note is dropped when the description already uses at least half of its
-  words. Template text left in the description, such as `[Insert Pipeline Link]`, is listed in the checklist. The same note is
+- **Less noise.** A "the description does not mention ..." note is dropped when the AI can quote the sentence of the description
+  that covers the change (and the quote is really there), or when the description already uses at least half of its words. Template text left in the description, such as `[Insert Pipeline Link]`, is listed in the checklist. The same note is
   never shown twice.
+- **The notes say what the AI proposed and what survived.** For example "The AI proposed 21 findings in 30 files; 18 were removed by
+  the rules or the checks; 2 from the AI and 1 from exact checks in code are shown." A line cut in a lookup says it was cut, and the
+  quote shown with a finding is shortened (the whole quote is still checked against the file).
 - **The verdict, the scorecard and the summary are worked out by code,** not written by the AI. The verdict reads "No issues
   found", "Suggestions" or "Changes suggested" (a review of code changes does not approve a pull request). A scorecard row with no
   finding says "No findings" instead of "Excellent".
+
+**Your own knowledge base**
+- **A box on the pull request page for your own checks.** You write what you know goes wrong often, or must always be looked at,
+  one check per line, for example "Never use `Invoke-Expression` on input" or "Every alert has an action group". The review applies
+  your checks to every pull request. The text stays in your browser and is sent with each review (it is not stored on the server;
+  it goes to Azure OpenAI with the review, like the code does). A line can start with a scope to limit it: `[PowerShell]`,
+  `[Python]`, `[C#]`, `[SQL]`, `[alerts]`, `[Markdown]` and more, or `[PR]` for a check about the pull request itself (its
+  description and its files). Words in `backticks` are searched for in the changed lines, and the review lists where they appear.
+  Lines starting with `#` are notes.
+- **Your checks follow the same rules as every finding.** A finding that comes from one of your checks still needs a concrete case
+  and the exact code it relies on, and the second check still has to agree. It is marked "knowledge base" and shows the check it
+  comes from. Your checks are only instructions about what to look for: they cannot switch the rules off.
+- **The review says what became of each check.** A card lists every check: raised a finding, no problem reported (an AI read the
+  changed code with that check and reported nothing; nothing was run), not applicable (no file of that kind in this pull request),
+  or could not be checked. A check about the pull request needs a quoted sentence of the description, a file path or a comment to
+  count as broken. If you change the knowledge base after a review, the page says so and offers **Review again**.
 
 **Checklist and page**
 - **The PR checklist is checked against the pull request.** Ticked boxes about the changelog, tests and a linked work item are
@@ -89,6 +120,17 @@ things up in the repository. Comments are still shown on screen only: nothing is
 - The review says plainly that it reads code changes only and cannot judge how a result looks or behaves when run.
 
 ### Fixed
+- **A finding that said it had no failing case was shown** ("No failing case, but the code is unnecessarily verbose"). It is now
+  removed.
+- **The alert advice invited a wrong finding.** It told the AI to look for a time filter shorter than the window, and the AI then
+  said an alert "misses" a crash from 20 minutes ago, although the alert runs every 5 minutes and had reported that crash when it
+  was new. The advice and the timing facts above replace it.
+- **A SQL label was misread.** The AI said a bucket should be labeled with its start time, although every other bucket of the same
+  procedure is labeled with its end time. The AI is now told to follow the file's own convention, and the hostile second look
+  looks for the convention.
+- **A "the description does not mention" note was wrong** although the description said the file was renamed and its references
+  updated: the words of the note and of the description hardly overlapped. The AI must now quote the covering sentence.
+- **"Table row has 1 cells"** is now "1 cell".
 - **Valid new syntax was reported as a critical error.** In a `net8.0` project, an empty collection (`= [];`, C# 12) was reported
   twice as invalid C#, because the AI's training data ends before that syntax existed (Microsoft lists October 2023 for
   `gpt-4o-mini`). The AI is now told the project's C# version, and "will not compile" claims are removed.
@@ -99,7 +141,7 @@ things up in the repository. Comments are still shown on screen only: nothing is
 - **An unused variable was missed** while the AI reported a long list of other things. Code now finds it.
 - **Large files were skipped** (over 200 KB or 4,000 lines). The limits are now 1 MB and 12,000 lines, and the comparison is fast
   for a long file with a few changes.
-- **Only 20 files were reviewed** in a pull request of 40. The limit is now 30, and 150 files are looked at (it was 100).
+- **Only 20 files were reviewed** in a pull request of 40, and then only 30. The limit is now 50, and 150 files are looked at (it was 100).
 - **Guesses were shown as warnings.** One review of an alert change gave four warnings that said "may", "could" or "confirm that".
   All four were wrong, and the second check agreed with all of them. Asking the AI not to guess did not work, so it is now
   enforced by code (see above).
@@ -131,15 +173,17 @@ things up in the repository. Comments are still shown on screen only: nothing is
 ### Notes
 - No new dependency, table or setting. The token needs Code (Read), which the lookups use too. If it lacks the read scope for the
   existing comments, the linked work items or the builds, the review still runs and says what it could not read.
-- Limits: 150 files looked at, 30 reviewed, up to 400 file reads for lookups per review (each file read once). If the repository's
+- Limits: 150 files looked at, 50 reviewed, up to 400 file reads for lookups per review (each file read once). If the repository's
   file list cannot be read, only the pull request's own files are searched, and the result says so.
 - How a review runs: one AI call per file, a second check for each file that has findings (up to six calls when it looks things
   up), and one for the description, five files at a time. It stops starting new files when its time is up (10 minutes in the
   background, 170 seconds inside one request, because Azure App Service ends a request after 230) and lists the files it did not
   reach.
-- API: `POST /api/v1/ado/pullrequests/review` returns `method`, `source_commit`, `iterations`, `files`, `checklist`, `notes` and
-  `scope_note`. Each comment has `end_line`, `language`, `failing_case`, `evidence`, `existing_thread`, `existing_status`,
-  `verified`, `source` (`ai` or `static`) and `checked_with`. The verdict can be `NOT_REVIEWED`.
+- API: `POST /api/v1/ado/pullrequests/review` returns `method`, `source_commit`, `iterations`, `files`, `checklist`, `notes`,
+  `scope_note` and `knowledge_checks`. Each comment has `end_line`, `language`, `failing_case`, `evidence`, `existing_thread`,
+  `existing_status`, `verified`, `source` (`ai` or `static`), `checked_with`, `knowledge` and `knowledge_number`. The verdict can
+  be `NOT_REVIEWED`. The request, and the one that starts a background review, accept `knowledge` (the user's checks, up to 6,000
+  characters, at most 40 checks are used); a different knowledge text is a different review.
   `POST /api/v1/ado/pullrequests/review/start` starts the same review in the background (202 with a job), and
   `GET /api/v1/ado/pullrequests/review/status/{job_id}` gives its progress and result.
   `GET /api/v1/ado/pullrequests` returns `last_source_commit`.

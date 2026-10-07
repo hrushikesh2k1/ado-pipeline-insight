@@ -18,7 +18,8 @@ import {
 import { api } from '../services/api'
 import type { AdoRepository, AdoPullRequest, AdoReviewer, PullRequestReviewResponse } from '../types/api'
 import { PrReviewDrawer } from './PrReviewDrawer'
-import { progressText, reviewIsStale } from '../utils/prReview'
+import { PrKnowledgeBase } from './PrKnowledgeBase'
+import { knowledgeChanged, loadKnowledge, progressText, reviewIsStale, saveKnowledge } from '../utils/prReview'
 import { usePlugins } from '../context/PluginContext'
 
 interface PullRequestsPageProps {
@@ -124,13 +125,21 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
   const [reviewError, setReviewError] = useState<{ prId: number; message: string } | null>(null)
   const [reviewProgress, setReviewProgress] = useState<{ prId: number; text: string } | null>(null)
 
+  // The user's own checks for every review (kept in this browser, sent with each review)
+  const [knowledge, setKnowledge] = useState<string>(loadKnowledge)
+  const [reviewKnowledge, setReviewKnowledge] = useState<Record<number, string>>({})  // the checks each cached review was made with
+  useEffect(() => { saveKnowledge(knowledge) }, [knowledge])
+  const knowledgeChangedFor = (prId: number) => Boolean(reviewsCache[prId]) && knowledgeChanged(reviewKnowledge[prId], showAiPrReviewer ? knowledge : '')
+
   const handleReviewPR = (targetPr: AdoPullRequest, force = false) => {
-    // A review made at the commit that is still at the tip of the branch is shown as it is; after new commits, or when asked, it is made again
+    // A review made at the commit that is still at the tip of the branch, with the checks written now, is shown as it is; after new commits,
+    // after the knowledge base changed, or when asked, it is made again
     const cached = reviewsCache[targetPr.id]
-    if (cached && !force && !reviewIsStale(cached, targetPr)) {
+    if (cached && !force && !reviewIsStale(cached, targetPr) && !knowledgeChangedFor(targetPr.id)) {
       setActiveReview({ pr: targetPr, review: cached })
       return
     }
+    const usedKnowledge = knowledge
 
     setReviewingPrId(targetPr.id)
     setReviewError(null)
@@ -142,11 +151,13 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
       repository_id: selectedRepoId,
       pull_request_id: targetPr.id,
       pat,
+      knowledge: usedKnowledge.trim() ? usedKnowledge : undefined,
     }, (job) => setReviewProgress({ prId: targetPr.id, text: progressText(job) }))
       .then((res) => {
         setReviewingPrId(null)
         setReviewProgress(null)
         setReviewsCache((prev) => ({ ...prev, [targetPr.id]: res }))
+        setReviewKnowledge((prev) => ({ ...prev, [targetPr.id]: usedKnowledge }))
         setActiveReview({ pr: targetPr, review: res })
       })
       .catch((err) => {
@@ -431,6 +442,9 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
             </div>
           </div>
 
+          {/* The user's own checks, applied to every AI review */}
+          {showAiPrReviewer && <PrKnowledgeBase value={knowledge} onChange={setKnowledge} />}
+
           {/* Filter & Search Bar */}
           <div className="prFilterBar">
             <div className="prSearchBox">
@@ -634,7 +648,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
                               {reviewingPrId === pr.id
                                 ? 'Reviewing...'
                                 : reviewsCache[pr.id]
-                                ? reviewIsStale(reviewsCache[pr.id], pr) ? 'Review again (new commits)' : 'View AI review'
+                                ? reviewIsStale(reviewsCache[pr.id], pr) ? 'Review again (new commits)' : knowledgeChangedFor(pr.id) ? 'Review again (knowledge base changed)' : 'View AI review'
                                 : 'Review with AI'}
                             </span>
                           </button>
@@ -680,6 +694,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
           reviewData={activeReview}
           onClose={() => setActiveReview(null)}
           isStale={reviewIsStale(activeReview.review, pullRequests.find(p => p.id === activeReview.pr.id) ?? activeReview.pr)}
+          knowledgeChanged={knowledgeChangedFor(activeReview.pr.id)}
           isReReviewing={reviewingPrId === activeReview.pr.id}
           onReReview={() => handleReviewPR(activeReview.pr, true)}
           error={reviewError && reviewError.prId === activeReview.pr.id ? reviewError.message : null}

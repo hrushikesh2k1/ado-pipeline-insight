@@ -218,7 +218,7 @@ class TestMarkdownTables:
 
     def test_a_row_with_a_cell_missing(self):
         found = markdown_tables(md_view(self.TABLE + "| 4 | 5 |\n"))
-        assert [(f["title"], f["line_number"], f["severity"]) for f in found] == [("Table row has 2 cells, the header has 3", 4, "warning")]
+        assert [(f["title"], f["line_number"], f["severity"]) for f in found] == [("Table row has 2 cells, the header has 3 cells", 4, "warning")]
         assert "empty cell" in found[0]["comment"] and found[0]["source"] == "static"
 
     def test_a_row_with_a_cell_too_many(self):
@@ -249,7 +249,7 @@ class TestAllTheChecks:
     def test_each_language_gets_its_own_checks(self):
         assert [f["title"] for f in static_findings(ps_view("$x = 1\n"))] == ["$x is assigned and never used"]
         assert [f["title"] for f in static_findings(py_view("import os\n"))] == ["os is imported and never used"]
-        assert [f["title"] for f in static_findings(md_view("| a |\n|--|\n| 1 | 2 |\n"))] == ["Table row has 2 cells, the header has 1"]
+        assert [f["title"] for f in static_findings(md_view("| a |\n|--|\n| 1 | 2 |\n"))] == ["Table row has 2 cells, the header has 1 cell"]
         assert static_findings(build_view("a.yml", "YAML", "add", "", "a: 1\n")) == []
 
     def test_a_check_that_fails_never_breaks_the_review(self, monkeypatch):

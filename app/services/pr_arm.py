@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.services.alert_facts import SEVERITY_NAMES, alerts_in, human_duration
+from app.services.alert_facts import SEVERITY_NAMES, alerts_in, duration_minutes, human_duration
 
 ARM_LANGUAGE = "ARM template"
 ARM_LINE_WIDTH = 20000  # an alert's query is one long line in the JSON (a shared query variable can pass 4,000 characters); the reviewer must see all of it
@@ -66,6 +66,46 @@ def _severity(alert: dict[str, Any]) -> str:
     return f"severity {value} ({SEVERITY_NAMES.get(value, 'unknown')})" if alert.get("legacy") else f"severity {value} ({SEVERITY_NAMES.get(value, 'unknown')}; 0 is the most severe)"
 
 
+_AGO = re.compile(r"\bago\(\s*(\d+(?:\.\d+)?)\s*(s|m|h|d)\s*\)", re.IGNORECASE)
+_UNIT_MINUTES = {"s": 1 / 60, "m": 1.0, "h": 60.0, "d": 1440.0}
+
+
+def _minutes_text(minutes: float) -> str:
+    if minutes >= 1440 and minutes % 1440 == 0:
+        return f"{minutes / 1440:g} day{'s' if minutes != 1440 else ''}"
+    if minutes >= 60 and minutes % 60 == 0:
+        return f"{minutes / 60:g} hour{'s' if minutes != 60 else ''}"
+    if minutes < 1:
+        return f"{minutes * 60:g} seconds"
+    return f"{minutes:g} minute{'s' if minutes != 1 else ''}"
+
+
+def timing_facts(alert: dict[str, Any]) -> list[str]:
+    """What the alert's timing means for the time filters in its query, worked out here so that the reviewer does not have to: how often it runs, how
+    far back each run reads, and for each `ago()` filter in the query whether it can skip events, is cut off by the window, or is seen by several runs."""
+    frequency, window = duration_minutes(alert.get("evaluation_frequency")), duration_minutes(alert.get("window_size"))
+    if not frequency or not window:
+        return []
+    filters = sorted({round(float(n) * _UNIT_MINUTES[u.lower()], 4) for n, u in _AGO.findall(_query(alert))})
+    if not filters:
+        return []
+    periods = ((alert.get("condition") or {}).get("failing_periods") or {}).get("evaluation_periods") or 1
+    override = duration_minutes(alert.get("override_query_time_range"))
+    reach = override or window * max(int(periods), 1)  # Microsoft: the query time range is windowSize x numberOfEvaluationPeriods unless overrideQueryTimeRange is set
+    lines = [f"   Timing facts (worked out from the template, not guesses): the alert runs every {_minutes_text(frequency)} and each run reads the last {_minutes_text(reach)} of data"
+             + (" (the rule sets overrideQueryTimeRange)." if override else ".")
+             + " The query has time filters " + ", ".join(f"ago({_minutes_text(f)})" for f in filters) + "."]
+    for f in filters:
+        if f > reach:
+            lines.append(f"   - ago({_minutes_text(f)}) is longer than what a run reads: a run never sees further back than {_minutes_text(reach)}.")
+        elif f < frequency:
+            lines.append(f"   - ago({_minutes_text(f)}) is shorter than the {_minutes_text(frequency)} between runs: an event can fall between two runs and never pass this filter.")
+        else:
+            lines.append(f"   - ago({_minutes_text(f)}) is not shorter than the time between runs: an event passes it on about {f / frequency:.1f} runs, so at least one run sees it. "
+                         "An event that is outside this filter on a later run was already seen by an earlier run.")
+    return lines
+
+
 def describe(alert: dict[str, Any], number: int) -> str:
     """One alert in plain words, with its query over several lines."""
     lines = [f"{number}. \"{alert.get('name')}\": {_kind(alert)}, {_severity(alert)}, {'disabled' if alert.get('enabled') is False else 'enabled'}"]
@@ -79,6 +119,7 @@ def describe(alert: dict[str, Any], number: int) -> str:
     extras = [f"{label}: {_show(alert.get(key))}" for label, key in (("autoMitigate", "auto_mitigate"), ("muteActionsDuration", "mute_actions_duration"), ("overrideQueryTimeRange", "override_query_time_range"), ("throttlingInMin", "throttle_minutes")) if alert.get(key) is not None]
     if extras:
         lines.append("   " + "; ".join(extras))
+    lines += timing_facts(alert)
     if _query(alert):
         lines += ["   Query:", _laid_out(_query(alert))]
     return "\n".join(lines)
