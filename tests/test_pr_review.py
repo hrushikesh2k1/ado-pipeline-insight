@@ -534,25 +534,28 @@ class TestModelClient:
             with pytest.raises(AiUnavailable, match="Nothing was reviewed"):
                 get_model_client()
 
+    @staticmethod
+    def made(monkeypatch):
+        """Replace the Azure OpenAI client with one that records what it was made with; returns that list."""
+        made = []
+        monkeypatch.setattr(pr_review, "PipelineRecommendationClient", lambda *args: made.append(args) or SimpleNamespace(deployment=args[1], client=None))
+        return made
+
     def test_a_configured_model_is_used(self, monkeypatch):
-        seen = {}
+        made = self.made(monkeypatch)
         monkeypatch.setattr(pr_review, "get_settings", lambda: self.settings())
-        monkeypatch.setattr(pr_review, "PipelineRecommendationClient", lambda *args: seen.setdefault("args", args) and "client")
-        assert get_model_client() == "client" and seen["args"] == ("https://x.openai.azure.com", "gpt", "2024-02-01", "k")
+        model = get_model_client()
+        assert model.deployment == "gpt" and made == [("https://x.openai.azure.com", "gpt", "2024-02-01", "k")]
 
     def test_a_stronger_review_deployment_is_used_when_one_is_set(self, monkeypatch):
-        seen = {}
-        monkeypatch.setattr(pr_review, "PipelineRecommendationClient", lambda *args: seen.setdefault("args", args) and "client")
+        made = self.made(monkeypatch)
         monkeypatch.setattr(pr_review, "get_settings", lambda: self.settings(azure_openai_review_deployment=" strong "))
-        get_model_client()
-        assert seen["args"][1] == "strong"
+        assert get_model_client().deployment == "strong" and made[0][1] == "strong"
 
     def test_an_empty_review_deployment_means_the_main_one(self, monkeypatch):
-        seen = {}
-        monkeypatch.setattr(pr_review, "PipelineRecommendationClient", lambda *args: seen.setdefault("args", args) and "client")
+        made = self.made(monkeypatch)
         monkeypatch.setattr(pr_review, "get_settings", lambda: self.settings(azure_openai_review_deployment="  "))
-        get_model_client()
-        assert seen["args"][1] == "gpt"
+        assert get_model_client().deployment == "gpt" and [m[1] for m in made] == ["gpt"]
 
     def test_a_client_that_cannot_start_means_no_review(self, monkeypatch):
         def broken(*args):

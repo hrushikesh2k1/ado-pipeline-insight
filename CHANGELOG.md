@@ -113,8 +113,11 @@ things up in the repository. Comments are still shown on screen only: nothing is
   offers "Review again (model changed)". Pull requests start on the strong model when it is set up. If the strong deployment
   cannot answer (not found, access refused, busy, down or unreachable) the standard one finishes the review, and the review says
   so in its notes and in its header; a request that is wrong in itself is not hidden by asking the other model. The header of every
-  review names the model that made it. A model that does not accept a temperature setting is asked again without it. Without a
-  strong deployment the selector still shows, with Strong greyed out as "not set up", and every review uses the standard model.
+  review names the model that made it. A model that refuses a temperature setting, or refuses function tools unless reasoning is turned off
+  (`gpt-6-sol` does both: the first read of a file runs with the model's own reasoning, the lookups of the second check and the hostile
+  look run with reasoning off, as Microsoft documents), is asked again without that setting and remembered, so it costs one failed
+  call at most. Without a strong deployment the selector still shows, with Strong greyed out as "not set up", and every review uses
+  the standard model.
 
 **Your own knowledge base**
 - **A box on the pull request page for your own checks.** You write what you know goes wrong often, or must always be looked at,

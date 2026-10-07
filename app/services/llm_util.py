@@ -26,6 +26,45 @@ def model_unavailable(exc: Exception) -> str | None:
     return "it could not be reached" if "Timeout" in name or "Connection" in name else None
 
 
+class DeploymentClient:
+    """One deployment as a model client that learns what the model does not accept and stops sending it. Some newer models answer 400 to a temperature other
+    than their own default, and to function tools unless reasoning is turned off (Microsoft's documented workaround is reasoning_effort "none" for the requests
+    that send tools). The request is sent again without the setting, and every later request is made that way from the start, so there is one failed call at most."""
+
+    def __init__(self, inner: Any):
+        self.inner, self.deployment = inner, inner.deployment
+        self.no_temperature = False
+        self.tools_without_reasoning = False
+        outer = self
+
+        class Completions:
+            @staticmethod
+            def create(**request: Any) -> Any:
+                request = dict(request)
+                for _ in range(3):
+                    if outer.no_temperature:
+                        request.pop("temperature", None)
+                    if request.get("tools") and outer.tools_without_reasoning:
+                        request.setdefault("reasoning_effort", "none")
+                    try:
+                        return outer.inner.client.chat.completions.create(**request)
+                    except Exception as exc:
+                        said = str(exc).lower()
+                        if getattr(exc, "status_code", None) != 400:
+                            raise
+                        # a request that was already in flight when another one learned the same thing is asked again too: it is the request that was refused
+                        if "temperature" in said and "temperature" in request:
+                            outer.no_temperature = True
+                        elif "function tools" in said and "reasoning_effort" in said and request.get("tools") and request.get("reasoning_effort") != "none":
+                            outer.tools_without_reasoning = True
+                        else:
+                            raise
+                        logger.info("The deployment %s does not take that setting: asking again without it", outer.deployment)
+                return outer.inner.client.chat.completions.create(**request)
+
+        self.client = SimpleNamespace(chat=SimpleNamespace(completions=Completions()))
+
+
 class WithBackup:
     """A model client that asks `primary` and, once its deployment cannot answer, carries on with `backup` for the rest of the review.
     The switch is for good (a review is never half one model and half the other by chance after a single slow answer) and `fell_back_because` says why."""

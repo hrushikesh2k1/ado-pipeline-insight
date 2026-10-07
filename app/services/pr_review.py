@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from app.core.config import get_settings
-from app.services.llm_util import WithBackup, chat_json, chat_json_with_tools, with_retry
+from app.services.llm_util import DeploymentClient, WithBackup, chat_json, chat_json_with_tools, with_retry
 from app.services.pr_arm import ARM_LANGUAGE, ARM_LINE_WIDTH, arm_context, is_arm_template
 from app.services.pr_checklist import evaluate_checklist, linked_build_ids, parse_checklist, placeholder_checks
 from app.services import pr_checks, pr_knowledge
@@ -241,11 +241,11 @@ def get_model_client(choice: str | None = None) -> Any:
     version, key = getattr(settings, "azure_openai_api_version", "2024-02-01"), getattr(settings, "azure_openai_api_key", None) or None
     try:
         if effective_choice(choice) == "strong":
-            strong = PipelineRecommendationClient(endpoint, models["strong"], version, key)
+            strong = DeploymentClient(PipelineRecommendationClient(endpoint, models["strong"], version, key))
             if models["standard"] and models["standard"] != models["strong"]:
-                return WithBackup(strong, PipelineRecommendationClient(endpoint, models["standard"], version, key))
+                return WithBackup(strong, DeploymentClient(PipelineRecommendationClient(endpoint, models["standard"], version, key)))
             return strong
-        return PipelineRecommendationClient(endpoint, models["standard"], version, key)
+        return DeploymentClient(PipelineRecommendationClient(endpoint, models["standard"], version, key))
     except Exception as exc:
         logger.warning("Could not start the Azure OpenAI client for the PR review: %s", exc)
         raise AiUnavailable("The Azure OpenAI client could not be started, so the AI review is unavailable. Nothing was reviewed.") from exc
