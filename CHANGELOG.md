@@ -4,10 +4,11 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
-## [1.9.0] - 2026-10-06
+## [1.9.0] - 2026-10-08
 
-The AI pull request review was rebuilt. It now reads what really changed, checks every finding before showing it, and can look
-things up in the repository. Comments are still shown on screen only: nothing is posted to Azure DevOps.
+The AI pull request review was rebuilt. It now reads what really changed, works through a checklist for each kind of file (JSON
+included), checks every finding before showing it, can look things up in the repository, and can use a stronger model that you
+choose for each pull request. Comments are still shown on screen only: nothing is posted to Azure DevOps.
 
 ### Changed
 
@@ -22,8 +23,8 @@ things up in the repository. Comments are still shown on screen only: nothing is
   PSScriptAnalyzer rule names and the slow patterns Microsoft documents (`+=` in loops, `Where-Object` instead of a lookup table,
   `Write-Host`). The Python advice covers slow loops, statuses that should be an Enum, wrong return types, missing timeouts and
   more. C# and Markdown have their own advice too. Other languages get a general review.
-- **Alerts written as ARM templates are reviewed as alerts.** A `.json` file is reviewed when it is an ARM template (other JSON,
-  such as `package.json`, is skipped). `.kql` files are read too. For an alert, the AI is also given the alert in plain words (when
+- **Alerts written as ARM templates are reviewed as alerts.** A `.json` file that is an ARM template is reviewed as alerts (other
+  JSON is reviewed as plain JSON, see below). `.kql` files are read too. For an alert, the AI is also given the alert in plain words (when
   it fires, how often, over what time window, who is told, the query on several lines) and a list of what changed: threshold,
   window, frequency, severity, action groups, the query before and after, new and removed alerts. The alert advice follows
   Microsoft's documentation: changes to when an alert fires, a time filter that does not match the alert's window, a disabled
@@ -90,7 +91,7 @@ things up in the repository. Comments are still shown on screen only: nothing is
 
 **A reviewer that works through a checklist and shows its steps** (measured on real pull requests with the real model)
 - **The AI answers a checklist for each file instead of writing free comments.** Each kind of file (Python, PowerShell, C#, SQL,
-  alerts, KQL, Markdown, YAML) has its own list of things that go wrong often, for example a loop that searches a list for every
+  JSON, alerts, KQL, Markdown, YAML) has its own list of things that go wrong often, for example a loop that searches a list for every
   item, repeated status text instead of an Enum, a test like `"m" in text` that also matches `"10ms"`, an average of averages, an
   empty `catch`, a function on a column in a SQL `WHERE`. The AI must answer every item: problem, fine or not applicable. On one
   real pull request it found 0 of 9 problems that people had raised when it wrote free comments, and 3 or 4 of 9 with the checklist.
@@ -120,7 +121,6 @@ things up in the repository. Comments are still shown on screen only: nothing is
   answers. That is how a note in a test collection ("the service returns null, so expect 204") can be checked against the service.
   What was looked up is shown on the finding (**Looked at:**, which used to say "Second check looked at") and in the notes.
   With `gpt-6-sol` the lookups run with reasoning turned off, as Microsoft documents for tool calls on that model.
-- A check in your knowledge base can be limited to JSON files with `[JSON]` (or `[Postman]`).
 - **A model selector on every pull request, with a fallback.** Set `AZURE_OPENAI_REVIEW_DEPLOYMENT` to the name of a stronger
   deployment in the same Azure OpenAI resource (everything else keeps using `AZURE_OPENAI_DEPLOYMENT`). Each pull request card
   then has its own selector, **Standard** or **Strong**, next to **Review with AI**, and the review drawer has the same selector
@@ -139,7 +139,7 @@ things up in the repository. Comments are still shown on screen only: nothing is
   one check per line, for example "Never use `Invoke-Expression` on input" or "Every alert has an action group". The review applies
   your checks to every pull request. The text stays in your browser and is sent with each review (it is not stored on the server;
   it goes to Azure OpenAI with the review, like the code does). A line can start with a scope to limit it: `[PowerShell]`,
-  `[Python]`, `[C#]`, `[SQL]`, `[alerts]`, `[Markdown]` and more, or `[PR]` for a check about the pull request itself (its
+  `[Python]`, `[C#]`, `[SQL]`, `[JSON]` (or `[Postman]`), `[alerts]`, `[Markdown]` and more, or `[PR]` for a check about the pull request itself (its
   description and its files). Words in `backticks` are searched for in the changed lines, and the review lists where they appear.
   Lines starting with `#` are notes.
 - **Your checks follow the same rules as every finding.** A finding that comes from one of your checks still needs a concrete case
@@ -184,8 +184,8 @@ things up in the repository. Comments are still shown on screen only: nothing is
   updated: the words of the note and of the description hardly overlapped. The AI must now quote the covering sentence.
 - **"Table row has 1 cells"** is now "1 cell".
 - **Valid new syntax was reported as a critical error.** In a `net8.0` project, an empty collection (`= [];`, C# 12) was reported
-  twice as invalid C#, because the AI's training data ends before that syntax existed (Microsoft lists October 2023 for
-  `gpt-4o-mini`). The AI is now told the project's C# version, and "will not compile" claims are removed.
+  twice as invalid C#, because the AI does not reliably know newer syntax. The AI is now told the project's C# version, and
+  "will not compile" claims are removed.
 - **The AI guessed about other files.** It said a namespace "may not exist" and a renamed setting "may break binding", although the
   same pull request added the namespace and updated the setting. Such findings now need a lookup that confirms them.
 - **A change of file encoding went unnoticed.** A file saved again as Windows-1252 reached the AI as text full of replacement
@@ -223,12 +223,14 @@ things up in the repository. Comments are still shown on screen only: nothing is
   and folder name.
 
 ### Notes
-- No new dependency or table, and one optional setting (`AZURE_OPENAI_REVIEW_DEPLOYMENT`, empty by default). The token needs Code (Read), which the lookups use too. If it lacks the read scope for the
-  existing comments, the linked work items or the builds, the review still runs and says what it could not read.
+- No new dependency or table, and one optional setting: `AZURE_OPENAI_REVIEW_DEPLOYMENT`, empty by default. To use a stronger model,
+  create a deployment of it in the same Azure OpenAI resource (for example `gpt-6-sol`) and put its name there; the endpoint and the
+  key are the same, so nothing new goes into Key Vault. The token needs Code (Read), which the lookups use too. If it lacks the
+  read scope for the existing comments, the linked work items or the builds, the review still runs and says what it could not read.
 - Limits: 150 files looked at, 50 reviewed, up to 400 file reads for lookups per review (each file read once). If the repository's
   file list cannot be read, only the pull request's own files are searched, and the result says so.
-- How a review runs: one AI call per file, a second check for each file that has findings (up to six calls when it looks things
-  up), and one for the description, five files at a time. It stops starting new files when its time is up (10 minutes in the
+- How a review runs: one AI call per file (up to six more when the first read of a JSON file looks things up), a second check for
+  each file that has findings (up to six calls when it looks things up), and one for the description, five files at a time. It stops starting new files when its time is up (10 minutes in the
   background, 170 seconds inside one request, because Azure App Service ends a request after 230) and lists the files it did not
   reach.
 - API: `POST /api/v1/ado/pullrequests/review` returns `method`, `source_commit`, `iterations`, `files`, `checklist`, `notes`,

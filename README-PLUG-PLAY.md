@@ -10,6 +10,7 @@ Required local `.env` values:
 - AZURE_OPENAI_DEPLOYMENT
 - AZURE_OPENAI_API_VERSION (optional)
 - AZURE_OPENAI_API_KEY
+- AZURE_OPENAI_REVIEW_DEPLOYMENT (optional: a stronger deployment of the same resource for the AI pull request review, chosen per pull request on the page)
 
 The AI endpoint now loads Azure OpenAI settings from the same `.env` used by the FastAPI application. The recommendation query is disabled until a pipeline is selected. If completed run history is below `MIN_HISTORY_RUNS`, the UI reports the exact history requirement instead of returning a misleading empty panel.
 
