@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
+from app.api.sprint_planning_routes import router as sprint_planning_router
 from app.core.config import get_settings
 from app.core.security import EasyAuthGate, RequestSizeLimit, SecurityHeaders
 from app.core.session_auth import SessionAuthGate
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(SecurityHeaders, csp=not docs)
     app.include_router(router)
+    app.include_router(sprint_planning_router)
 
     if frontend_dist.exists():
         app.mount("/assets", StaticFiles(directory=frontend_dist / "assets"), name="assets")

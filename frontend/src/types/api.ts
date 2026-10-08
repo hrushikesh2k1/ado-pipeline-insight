@@ -570,3 +570,115 @@ export type AlertInventoryUploadRequest = InsightScope & {
   name_column?: string | null
   category_column?: string | null
 }
+
+// ---------------------------------------------------------------- sprint planning (display only: nothing is written to Azure DevOps)
+
+export type PlanSprint = {
+  id: string
+  name: string
+  path: string
+  start?: string | null
+  finish?: string | null
+  time_frame: string
+}
+
+export type TeamMemberChoice = { name: string; unique_name: string }
+
+export type SprintPlanningSetup = {
+  team: string
+  sprints: PlanSprint[]
+  default_from_id: string | null
+  default_to_id: string | null
+  members: TeamMemberChoice[]
+  areas: string[]
+  work_item_types: string[]
+  default_types: string[]
+  per_person: number
+  active_days: number
+  notes: string[]
+}
+
+/** A person to plan for; areas are area paths (or "*" for any area). */
+export type PlanPerson = { name: string; unique_name: string; areas: string[] }
+
+export type SprintPlanRequest = {
+  organization: string
+  project: string
+  team: string
+  pat?: string
+  from_iteration_id: string
+  to_iteration_id: string
+  people: PlanPerson[]
+  per_person: number
+  active_days: number
+  work_item_types?: string[]
+}
+
+export type StoryFlag = { code: 'blocked' | 'active_too_long' | string; reason: string }
+export type StoryComment = { author: string; date: string; text: string }
+
+export type PlanStory = {
+  id: number
+  title: string
+  type: string
+  state: string
+  state_category: string
+  area_path: string
+  iteration_path: string
+  assigned_to: string
+  assigned_unique: string
+  tags: string[]
+  points: number | null
+  days_in_state: number | null
+  state_since: string | null
+  state_since_exact: boolean
+  flags: StoryFlag[]
+  url: string
+  comments: StoryComment[] | null
+  matched_area: string | null
+}
+
+export type PlannedPerson = {
+  name: string
+  unique_name: string
+  areas: string[]
+  capacity: number
+  carried: PlanStory[]
+  already_planned: PlanStory[]
+  new: PlanStory[]
+  total: number
+  open_places: number
+  over_by: number
+  warnings: string[]
+}
+
+export type SprintPlan = {
+  team: string
+  project: string
+  from_sprint: PlanSprint
+  to_sprint: PlanSprint
+  per_person: number
+  active_days: number
+  work_item_types: string[]
+  people: PlannedPerson[]
+  flagged: PlanStory[]
+  unplaced: Array<{ story: PlanStory; reason: string }>
+  unplaced_total: number
+  outside_plan: PlanStory[]
+  backlog_left: number
+  summary: {
+    people: number
+    stories_planned: number
+    carried: number
+    new: number
+    already_planned: number
+    flagged: number
+    blocked: number
+    long_active: number
+    unplaced: number
+    open_places: number
+  }
+  notes: string[]
+  generated_at: string
+  posted_to_ado: boolean
+}

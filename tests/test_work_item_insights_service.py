@@ -121,6 +121,94 @@ class TestOnlyWhatChangedGoesToTheModel:
         assert 4 not in areas_by_id(snap(svc))
 
 
+def silent_for(*silent_ids):
+    """A model that answers for every item except the ones named."""
+    def responder(system, user):
+        if system.startswith("You place Azure DevOps work items"):
+            items = json.loads(user)["items"]
+            return json.dumps({"items": [{"id": i["id"], "area": smart_responder_area(i["title"])} for i in items if i["id"] not in silent_ids]})
+        return smart_responder(system, user)
+    return responder
+
+
+def smart_responder_area(title):
+    from wi_support import keyword_area
+    return keyword_area(title)
+
+
+class TestAChangedItemKeepsItsGroup:
+    """A work item edited in Azure DevOps is asked about again. If the model does not answer, the group it already had is still the best one."""
+
+    def edited(self, ado):
+        ado.raws[1] = raw_item(1, title="VPN tunnel drops again", state="Active", rev=2)
+
+    def test_an_item_the_model_does_not_answer_for_keeps_its_earlier_group(self):
+        ado = FakeAdo(make_raws())
+        refresh(service(ado, FakeAI()))
+        self.edited(ado)
+        svc = service(ado, FakeAI(silent_for(1)))
+        refresh(svc)
+        s = snap(svc)
+        assert areas_by_id(s)[1] == "VPN issues"
+        assert any("1 changed work item(s) could not be checked again" in n and "keep their earlier group" in n for n in s["notes"])
+        assert not any("could not be processed" in n for n in s["notes"])
+
+    def test_it_is_asked_again_at_the_next_refresh_and_only_it(self):
+        ado = FakeAdo(make_raws())
+        refresh(service(ado, FakeAI()))
+        self.edited(ado)
+        refresh(service(ado, FakeAI(silent_for(1))))
+        ai = FakeAI()
+        svc = service(ado, ai)
+        refresh(svc)
+        assert ai.assigned_ids() == [1] and areas_by_id(snap(svc))[1] == "VPN issues" and snap(svc)["notes"] == []
+
+    def test_the_new_answer_replaces_the_old_group(self):
+        ado = FakeAdo(make_raws())
+        refresh(service(ado, FakeAI()))
+        ado.raws[1] = raw_item(1, title="Login page is slow", state="Active", rev=2)
+        svc = service(ado, FakeAI())
+        refresh(svc)
+        assert areas_by_id(snap(svc))[1] == "Login and authentication"
+
+    def test_when_the_model_is_not_available_a_changed_item_keeps_its_group_and_is_checked_when_it_comes_back(self):
+        ado = FakeAdo(make_raws())
+        refresh(service(ado, FakeAI()))
+        ado.raws[1] = raw_item(1, title="Login page is slow", state="Active", rev=2)
+        gone = service(ado, None)
+        refresh(gone)
+        assert areas_by_id(snap(gone))[1] == "VPN issues"
+        back = FakeAI()
+        svc = service(ado, back)
+        refresh(svc)
+        assert back.assigned_ids() == [1] and areas_by_id(snap(svc))[1] == "Login and authentication"
+
+    def test_a_new_item_the_model_does_not_answer_for_is_still_not_grouped(self):
+        ado = FakeAdo(make_raws())
+        refresh(service(ado, FakeAI()))
+        ado.raws[6] = raw_item(6, title="Brand new item")
+        svc = service(ado, FakeAI(silent_for(6)))
+        refresh(svc)
+        assert areas_by_id(snap(svc))[6] == "Not grouped" and any("1 work item(s) could not be processed" in n for n in snap(svc)["notes"])
+
+    def test_after_a_regroup_the_old_group_does_not_apply_to_the_new_areas(self):
+        ado = FakeAdo(make_raws())
+        refresh(service(ado, FakeAI()))
+        svc = service(ado, FakeAI(silent_for(1)))
+        refresh(svc, regroup=True)
+        assert areas_by_id(snap(svc))[1] == "Not grouped"
+
+    def test_the_alert_flag_of_a_changed_item_is_kept_too(self):
+        ado = FakeAdo(make_raws())
+        svc0 = service(ado, FakeAI())
+        svc0.save_inventory(ORG, PROJECT, "", TAG, "alerts.csv", b"Alert\nVPN tunnel down\n")
+        refresh(svc0)
+        ado.raws[3] = raw_item(3, type="Task", title="Create new alert for AKS pod restarts", state="Done", closed="2026-09-01T09:00:00Z", rev=2)
+        svc = service(ado, FakeAI(silent_for(3)))
+        refresh(svc)
+        assert {i["id"]: i["alert_work"] for i in snap(svc)["items"]}[3] is True
+
+
 class TestAlertWork:
     def inventory(self, svc):
         svc.save_inventory(ORG, PROJECT, "", TAG, "alerts.csv", b"Alert\nVPN tunnel down\nPod restarts\n")

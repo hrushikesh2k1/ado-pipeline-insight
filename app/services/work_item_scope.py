@@ -59,10 +59,12 @@ class StateMap:
     def __init__(self, by_type: dict[str, dict[str, str]] | None = None):
         self._by_type: dict[str, dict[str, str]] = {}
         self._spelling: dict[str, str] = {}
+        self._display: dict[str, str] = {}  # every state in its own spelling, whatever its category
         for type_name, states in (by_type or {}).items():
             table = self._by_type.setdefault(type_name.lower(), {})
             for state, category in states.items():
                 table[state.lower()] = category.lower()
+                self._display.setdefault(state.lower(), state)
                 if category.lower() in ("completed", "removed"):
                     self._spelling.setdefault(state.lower(), state)
 
@@ -72,6 +74,18 @@ class StateMap:
         if known:
             return known
         return _FALLBACK_CATEGORY.get(key, "inprogress")
+
+    def names(self, category: str, type_names: list[str] | tuple[str, ...] | None = None) -> list[str]:
+        """The states, in their own spelling, that Azure DevOps puts in a category for the given work item types (every type when none is given)."""
+        wanted = {t.lower() for t in type_names} if type_names else None
+        found = {
+            self._display.get(state, state)
+            for type_name, table in self._by_type.items()
+            if wanted is None or type_name in wanted
+            for state, state_category in table.items()
+            if state_category == category.lower()
+        }
+        return sorted(found)
 
     def finished_state_names(self) -> list[str]:
         """Every state, of any type, that means closed or removed; they are not part of the open backlog."""

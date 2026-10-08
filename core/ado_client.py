@@ -466,6 +466,27 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response)
 
+    def list_team_members(self, project: str, team: str, top: int = 200) -> list[dict[str, Any]]:
+        """The members of a team: [{"isTeamAdmin": bool, "identity": {"id", "displayName", "uniqueName"}}] (Teams - Get Team Members With Extended Properties, 7.1)."""
+        url = f"https://dev.azure.com/{quote(self.organization, safe='')}/_apis/projects/{quote(project, safe='')}/teams/{quote(team, safe='')}/members"
+        response = self.session.get(url, params={"$top": int(top), "api-version": self.api_version}, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
+    def get_work_item_comments(self, project: str, work_item_id: int, top: int = 3) -> list[dict[str, Any]]:
+        """The newest `top` comments of a work item, newest first (Comments - Get Comments, 7.1-preview.4: order=desc)."""
+        url = self._url(project, f"_apis/wit/workItems/{int(work_item_id)}/comments")
+        response = self.session.get(url, params={"$top": int(top), "order": "desc", "api-version": "7.1-preview.4"}, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response).get("comments", [])
+
+    def get_area_tree(self, project: str, depth: int = 6) -> dict[str, Any]:
+        """The project's area tree (Project settings > Areas): the root node with `children`, `depth` levels down."""
+        url = self._url(project, "_apis/wit/classificationnodes/areas")
+        response = self.session.get(url, params={"$depth": int(depth), "api-version": self.api_version}, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response)
+
     def get_team_field_values(self, project: str, team: str) -> dict[str, Any]:
         """The team's backlog scope: its default area path and the area paths it owns (with child inclusion)."""
         url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/teamfieldvalues"

@@ -4,6 +4,32 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [Unreleased]
+
+### Added
+- **A Sprint Planning page.** Pick a team and two sprints (the current sprint and the one after it are proposed) and the page plans the next sprint:
+  - **Six stories for everyone.** Every person is planned for the same number of stories (6 by default; you can change it). The stories a person still has
+    open in the current sprint move to the next sprint with that person and count towards that number.
+  - **Blocked or active too long is flagged.** A carried-over story is flagged when it is blocked (a `Blocked` tag, a `Blocked` state or the Blocked field) or
+    has been in an active state for more than 10 days (you can change the 10). Each flagged story shows its last 3 comments, so you can see where it stands.
+    A flagged story still moves to the next sprint.
+  - **Areas of choice.** Every person has one or more areas (Azure DevOps area paths, or "Any area"); several people can share an area. The free places are
+    filled with unassigned stories, in backlog order, whose Area Path is one of the person's areas or under it. Stories open in the current sprint with nobody
+    on them are taken first. A story that nobody can take is listed with the reason (nobody chose its area, or everyone who did is full). Open stories of people
+    who are not in the plan are listed apart.
+  - The team's members are listed for you; you can leave people out or add someone by name or email. The areas of choice are saved in your browser for each team.
+    **Copy plan** gives the plan as text for a meeting note.
+  - The plan is shown on screen only: nothing is written to Azure DevOps. The token needs Work Items (read) and Project and Team (read).
+  - API: `GET /api/v1/ado/sprint-planning/setup` (sprints, members, areas, story types) and `POST /api/v1/ado/sprint-planning/plan`. Work item states come from
+    Azure DevOps itself (the state categories of each type), so the page also fits processes that do not use `Active` and `Closed`.
+
+### Fixed
+- **Work Item Insights: some work items lost their group after a refresh.** When a work item was edited in Azure DevOps, the refresh dropped its group and
+  asked the AI again; if the AI did not answer for it, the item fell to "Not grouped" although it had a good group before. It now keeps its earlier group
+  until the AI answers, says so in the notes, and is checked again at the next refresh.
+- **Work Item Insights: one failed AI call left 25 work items ungrouped.** The AI is asked about 25 work items at a time; when an answer was cut off or rate
+  limited, all 25 stayed ungrouped for that refresh. A failed or partly answered batch is now asked again in smaller groups (10, then 5, then one at a time).
+
 ## [1.9.0] - 2026-10-08
 
 The AI pull request review was rebuilt. It now reads what really changed, works through a checklist for each kind of file (JSON

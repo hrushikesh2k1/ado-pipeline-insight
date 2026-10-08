@@ -124,16 +124,41 @@ class TestAssign:
         results, _ = assign_areas(ai, AREAS, [item(n, "VPN") for n in range(1, 61)], with_alert=False)
         assert len(results) == 60 and sorted(len(json.loads(u)["items"]) for _s, u in ai.calls) == [10, 25, 25]
 
-    def test_ids_the_model_left_out_are_asked_for_again_then_reported(self):
-        answers = iter([{1: "VPN issues"}, {}, {}])
+    def test_ids_the_model_left_out_are_asked_for_again_in_smaller_groups_then_reported(self):
+        sizes = []
 
         def stingy(system, user):
             ids = [i["id"] for i in json.loads(user)["items"]]
-            got = next(answers)
-            return json.dumps({"items": [{"id": i, "area": got[i]} for i in ids if i in got]})
+            sizes.append(len(ids))
+            return json.dumps({"items": [{"id": i, "area": "VPN issues"} for i in ids if i == 1]})
 
         results, failed = assign_areas(FakeAI(stingy), AREAS, [item(1, "a"), item(2, "b")], with_alert=False)
         assert list(results) == [1] and failed == [2]
+        assert sizes == [2, 1, 1, 1]  # all together, then only what is left, one pass of each size
+
+    def test_a_left_out_item_that_the_second_try_answers_is_not_reported(self):
+        answered = []
+
+        def moody(system, user):
+            ids = [i["id"] for i in json.loads(user)["items"]]
+            answered.append(ids)
+            return json.dumps({"items": [{"id": i, "area": "VPN issues"} for i in ids if len(answered) > 1 or i != 2]})
+
+        results, failed = assign_areas(FakeAI(moody), AREAS, [item(1, "a"), item(2, "b")], with_alert=False)
+        assert sorted(results) == [1, 2] and failed == [] and answered == [[1, 2], [2]]
+
+    def test_a_big_batch_that_fails_is_retried_in_smaller_ones(self):
+        sizes = []
+
+        def picky(system, user):
+            ids = [i["id"] for i in json.loads(user)["items"]]
+            sizes.append(len(ids))
+            if len(ids) > 10:
+                raise RuntimeError("the answer was cut off")
+            return json.dumps({"items": [{"id": i, "area": "VPN issues"} for i in ids]})
+
+        results, failed = assign_areas(FakeAI(picky), AREAS, [item(n, "VPN") for n in range(1, 31)], with_alert=False)
+        assert len(results) == 30 and failed == [] and max(sizes[2:]) <= 10
 
     def test_a_batch_that_keeps_failing_is_reported_not_guessed(self):
         def broken(system, user):

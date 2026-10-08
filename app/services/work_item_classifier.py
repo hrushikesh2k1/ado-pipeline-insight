@@ -27,6 +27,7 @@ MAX_AREAS = 20
 MAX_AREA_NAME = 40
 SAMPLE = 250
 BATCH = 25
+RETRY_BATCHES = (10, 5, 1)  # an item the model left out, or a whole batch that failed, is asked for again in smaller groups
 WORKERS = 4
 DISCOVERY_DESCRIPTION = 200
 ASSIGN_DESCRIPTION = 400
@@ -160,7 +161,8 @@ def _run_batch(client: Any, system: str, batch: list[dict[str, Any]], names: dic
 
 def _run_all(client: Any, system: str, items: list[dict[str, Any]], names: dict[str, str] | None, with_alert: bool,
              progress: Progress | None) -> tuple[dict[int, dict[str, Any]], list[int]]:
-    """Runs the batches in parallel; ids the model left out are asked for once more, then reported as failed."""
+    """Runs the batches in parallel. Ids the model left out, and every id of a batch that failed (a long answer is cut off, a rate limit), are asked for
+    again in smaller groups (10, then 5, then one at a time); what is still missing after that is reported as failed."""
     results: dict[int, dict[str, Any]] = {}
     total = len(items)
 
@@ -171,11 +173,13 @@ def _run_all(client: Any, system: str, items: list[dict[str, Any]], names: dict[
             logger.warning("A batch of %d work items could not be processed: %s", len(batch), exc)
             return {}
 
-    for _pass in range(2):
+    for number, size in enumerate((BATCH, *RETRY_BATCHES)):
         pending = [i for i in items if i["id"] not in results]
         if not pending:
             break
-        batches = [pending[n:n + BATCH] for n in range(0, len(pending), BATCH)]
+        if number:
+            time.sleep(0.5 * number)  # a rate limit needs a moment before the same service is asked again
+        batches = [pending[n:n + size] for n in range(0, len(pending), size)]
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             for answer in pool.map(run, batches):
                 results.update(answer)

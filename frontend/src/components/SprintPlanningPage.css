@@ -1,0 +1,168 @@
+/* Sprint Planning. Colours come from variables on .sppPage so the page follows the app's dark and light themes. */
+
+.sppPage {
+  --spp-card: #1f1f26;
+  --spp-card-2: #18181f;
+  --spp-border: #2e2f38;
+  --spp-text: #f4f4f5;
+  --spp-muted: #9ca3af;
+  --spp-field: #141419;
+  --spp-accent: #818cf8;
+  --spp-accent-bg: rgba(99, 102, 241, 0.16);
+  --spp-warn: #f59e0b;
+  --spp-warn-bg: rgba(245, 158, 11, 0.12);
+  --spp-bad: #f87171;
+  --spp-bad-bg: rgba(248, 113, 113, 0.12);
+  --spp-good: #34d399;
+  --spp-hover: #272733;
+  max-width: 1500px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 24px 28px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  color: var(--spp-text);
+}
+
+[data-theme="light"] .sppPage {
+  --spp-card: #ffffff;
+  --spp-card-2: #f8fafc;
+  --spp-border: #e2e8f0;
+  --spp-text: #0f172a;
+  --spp-muted: #64748b;
+  --spp-field: #f8fafc;
+  --spp-accent: #4f46e5;
+  --spp-accent-bg: rgba(79, 70, 229, 0.1);
+  --spp-warn: #b45309;
+  --spp-warn-bg: rgba(245, 158, 11, 0.14);
+  --spp-bad: #b91c1c;
+  --spp-bad-bg: rgba(220, 38, 38, 0.08);
+  --spp-good: #047857;
+  --spp-hover: #eef2ff;
+}
+
+.sppBanner { display: flex; align-items: center; gap: 14px; background: var(--spp-card); border: 1px solid var(--spp-border); border-radius: 12px; padding: 16px 20px; }
+.sppBannerIcon { width: 44px; height: 44px; border-radius: 10px; background: var(--spp-accent-bg); color: var(--spp-accent); display: grid; place-items: center; flex-shrink: 0; }
+.sppBanner h2 { margin: 0; font-size: 17px; font-weight: 700; }
+.sppBanner p { margin: 3px 0 0; font-size: 12px; color: var(--spp-muted); line-height: 1.5; }
+.sppToolbar { margin-bottom: 0; }
+
+.sppNotice { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; padding: 9px 13px; border-radius: 9px; background: var(--spp-card); border: 1px solid var(--spp-border); color: var(--spp-muted); }
+.sppNotice svg { flex: none; margin-top: 1px; }
+.sppNotice.warn { color: var(--spp-warn); background: var(--spp-warn-bg); border-color: rgba(245, 158, 11, 0.35); }
+.sppNotice.error { color: var(--spp-bad); background: var(--spp-bad-bg); border-color: rgba(248, 113, 113, 0.4); }
+
+.sppCard { background: var(--spp-card); border: 1px solid var(--spp-border); border-radius: 12px; padding: 16px 18px; }
+.sppCard.attention { border-color: rgba(245, 158, 11, 0.45); }
+.sppCardHead h3, .sppH { margin: 0; font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+.sppCardHead p { margin: 3px 0 12px; font-size: 12px; color: var(--spp-muted); line-height: 1.45; }
+.sppH { margin-bottom: 10px; }
+.sppMuted { color: var(--spp-muted); font-size: 12px; }
+
+/* settings */
+.sppSettings { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px 16px; align-items: end; }
+.sppSettings label { display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; font-weight: 600; color: var(--spp-muted); }
+.sppSettings select, .sppSettings input[type="number"], .sppAddPerson input {
+  background: var(--spp-field); color: var(--spp-text); border: 1px solid var(--spp-border); border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 12.5px; min-width: 0;
+}
+.sppSettings select:focus-visible, .sppSettings input:focus-visible, .sppAddPerson input:focus-visible { outline: 2px solid var(--spp-accent); outline-offset: 1px; }
+.sppTypes { border: 1px solid var(--spp-border); border-radius: 8px; padding: 6px 10px 8px; margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.sppTypes legend { font-size: 11.5px; font-weight: 600; color: var(--spp-muted); padding: 0 4px; }
+.sppCheck { flex-direction: row !important; align-items: center; gap: 6px !important; font-weight: 500 !important; color: var(--spp-text) !important; }
+
+/* people table */
+.sppTableWrap { overflow-x: auto; }
+.sppTable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.sppTable th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--spp-muted); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--spp-border); }
+.sppTable td { padding: 8px 10px; border-bottom: 1px solid var(--spp-border); vertical-align: middle; }
+.sppTable td small { display: block; color: var(--spp-muted); font-size: 11px; }
+.sppTable tr.off { opacity: 0.5; }
+.sppAddPerson { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.sppAddPerson input { flex: 1 1 240px; }
+.sppAddPerson button, .sppGhost, .sppPrimary, .sppIconBtn {
+  display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12.5px; font-weight: 600; border-radius: 8px; cursor: pointer; border: 1px solid var(--spp-border); background: transparent; color: var(--spp-text); padding: 7px 12px;
+}
+.sppIconBtn { padding: 4px 6px; }
+.sppPrimary { background: #4f46e5; color: #fff; border-color: #4f46e5; padding: 9px 16px; }
+.sppPrimary:hover:not(:disabled) { background: #4338ca; border-color: #4338ca; }
+.sppPrimary:disabled, .sppAddPerson button:disabled { opacity: 0.5; cursor: not-allowed; }
+.sppAddPerson button:hover:not(:disabled), .sppGhost:hover, .sppIconBtn:hover { background: var(--spp-hover); }
+.sppAddPerson button:focus-visible, .sppGhost:focus-visible, .sppPrimary:focus-visible, .sppIconBtn:focus-visible { outline: 2px solid var(--spp-accent); outline-offset: 2px; }
+.sppActions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sppHints { display: flex; flex-direction: column; gap: 2px; }
+.sppWarn { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--spp-warn); margin: 0; }
+
+/* the area picker */
+.sppPicker { position: relative; }
+.sppPickerBtn { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 220px; max-width: 340px; background: var(--spp-field); color: var(--spp-text); border: 1px solid var(--spp-border); border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 12.5px; cursor: pointer; }
+.sppPickerBtn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sppPickerBtn.needsAreas { border-color: rgba(245, 158, 11, 0.55); color: var(--spp-warn); }
+.sppPickerBtn:focus-visible { outline: 2px solid var(--spp-accent); outline-offset: 1px; }
+.sppPickerMenu { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; width: 340px; max-width: 80vw; background: var(--spp-card); border: 1px solid var(--spp-border); border-radius: 10px; box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35); padding: 8px; }
+.sppPickerList { max-height: 240px; overflow: auto; display: flex; flex-direction: column; }
+.sppPickerOption { display: flex; align-items: center; gap: 8px; padding: 5px 6px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+.sppPickerOption:hover { background: var(--spp-hover); }
+.sppPickerAdd { display: flex; gap: 6px; margin-top: 8px; }
+.sppPickerAdd input { flex: 1; min-width: 0; background: var(--spp-field); color: var(--spp-text); border: 1px solid var(--spp-border); border-radius: 7px; padding: 6px 8px; font: inherit; font-size: 12px; }
+.sppPickerAdd button, .sppPickerFoot button { background: transparent; color: var(--spp-text); border: 1px solid var(--spp-border); border-radius: 7px; padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+.sppPickerFoot { display: flex; justify-content: space-between; margin-top: 8px; }
+.sppPickerAdd button:disabled, .sppPickerFoot button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* results */
+.sppResult { display: flex; flex-direction: column; gap: 16px; }
+.sppKpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.sppKpi { background: var(--spp-card); border: 1px solid var(--spp-border); border-radius: 10px; padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; }
+.sppKpi span { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--spp-muted); }
+.sppKpi b { font-size: 22px; }
+.sppKpi small { font-size: 11px; color: var(--spp-muted); }
+.sppKpi.warn { border-color: rgba(245, 158, 11, 0.5); }
+.sppKpi.warn b { color: var(--spp-warn); }
+
+.sppFlaggedList { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 12px; }
+.sppFlagged { background: var(--spp-card-2); border: 1px solid var(--spp-border); border-left: 3px solid var(--spp-warn); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.sppReasons { margin: 6px 0 0; padding-left: 16px; font-size: 12px; color: var(--spp-warn); }
+.sppComments h5, .sppPerson h5 { margin: 0 0 6px; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--spp-muted); font-weight: 600; }
+.sppComments h5 span, .sppPerson h5 span { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.sppComments blockquote { margin: 0 0 8px; padding: 7px 10px; background: var(--spp-card); border: 1px solid var(--spp-border); border-radius: 8px; }
+.sppCommentHead { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--spp-muted); }
+.sppCommentHead b { color: var(--spp-text); }
+.sppComments blockquote p { margin: 3px 0 0; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.sppPeople { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; align-items: start; }
+.sppPerson { background: var(--spp-card); border: 1px solid var(--spp-border); border-radius: 12px; padding: 14px 16px; }
+.sppPerson.short { border-color: rgba(245, 158, 11, 0.45); }
+.sppPerson.over { border-color: rgba(248, 113, 113, 0.5); }
+.sppPersonHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.sppPerson h4 { margin: 0; font-size: 14px; }
+.sppFill { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 90px; }
+.sppFill b { font-size: 13px; }
+.sppMeter { display: block; width: 90px; height: 6px; background: var(--spp-field); border: 1px solid var(--spp-border); border-radius: 4px; overflow: hidden; }
+.sppMeter > span { display: block; height: 100%; background: var(--spp-good); }
+.sppPerson.short .sppMeter > span { background: var(--spp-warn); }
+.sppPerson.over .sppMeter > span { background: var(--spp-bad); }
+.sppPerson ul, .sppCard ul { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+
+.sppStory { padding: 6px 8px; border: 1px solid var(--spp-border); border-radius: 8px; background: var(--spp-card-2); }
+.sppStoryTitle { color: var(--spp-text); text-decoration: none; font-size: 12.5px; font-weight: 600; display: inline-flex; gap: 6px; align-items: baseline; overflow-wrap: anywhere; }
+.sppStoryTitle:hover { text-decoration: underline; }
+.sppId { color: var(--spp-accent); font-variant-numeric: tabular-nums; }
+.sppStoryMeta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; font-size: 11.5px; }
+.sppChip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--spp-border); border-radius: 20px; padding: 1px 8px; color: var(--spp-muted); font-size: 11px; white-space: nowrap; }
+.sppChip.flag { color: var(--spp-warn); border-color: rgba(245, 158, 11, 0.5); background: var(--spp-warn-bg); }
+.sppChip.flag.blocked { color: var(--spp-bad); border-color: rgba(248, 113, 113, 0.5); background: var(--spp-bad-bg); }
+.sppArea, .sppNote, .sppOwner { color: var(--spp-muted); }
+.sppOwner { font-weight: 600; color: var(--spp-text); }
+.sppFoot { font-size: 11.5px; color: var(--spp-muted); margin: 0; }
+
+@media (max-width: 720px) {
+  .sppPage { padding: 16px 14px 36px; }
+  .sppFlaggedList, .sppPeople { grid-template-columns: 1fr; }
+  .sppPickerBtn { min-width: 0; width: 100%; max-width: none; }
+  /* the people table becomes one card per person: checkbox, name, remove, then the areas on a row of their own */
+  .sppTable, .sppTable tbody, .sppTable tr, .sppTable td { display: block; }
+  .sppTable thead { display: none; }
+  .sppTable tr { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--spp-border); }
+  .sppTable td { border: 0; padding: 0; }
+  .sppTable td:nth-child(3) { grid-column: 1 / -1; }
+}

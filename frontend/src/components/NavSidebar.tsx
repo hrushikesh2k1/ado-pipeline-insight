@@ -1,8 +1,8 @@
 import React from 'react'
-import { Activity, ChartColumn, GitPullRequest, FolderKanban, Puzzle, Rocket, ShieldAlert } from 'lucide-react'
+import { Activity, CalendarCheck, ChartColumn, GitPullRequest, FolderKanban, Puzzle, Rocket, ShieldAlert } from 'lucide-react'
 import { usePlugins } from '../context/PluginContext'
 
-export type NavPage = 'pipelines' | 'pull-requests' | 'sprints' | 'releases' | 'irp' | 'insights'
+export type NavPage = 'pipelines' | 'pull-requests' | 'sprints' | 'sprint-planning' | 'releases' | 'irp' | 'insights'
 
 interface NavSidebarProps {
   activePage: NavPage
@@ -52,6 +52,19 @@ export const NavSidebar: React.FC<NavSidebarProps> = ({ activePage, onSelectPage
             <FolderKanban size={20} strokeWidth={2.2} />
           </div>
           <span className="navTooltip">Sprint Boards</span>
+        </button>
+
+        <button
+          type="button"
+          className={`navSidebarBtn ${activePage === 'sprint-planning' ? 'active' : ''}`}
+          onClick={() => onSelectPage('sprint-planning')}
+          aria-label="Sprint Planning"
+        >
+          <div className="navSidebarActiveIndicator" />
+          <div className="navIconWrapper">
+            <CalendarCheck size={20} strokeWidth={2.2} />
+          </div>
+          <span className="navTooltip">Sprint Planning</span>
         </button>
 
         <button

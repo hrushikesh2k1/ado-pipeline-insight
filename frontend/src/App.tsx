@@ -11,6 +11,7 @@ import { NavSidebar } from './components/NavSidebar'
 import type { NavPage } from './components/NavSidebar'
 import { PullRequestsPage } from './components/PullRequestsPage'
 import { SprintBoardPage } from './components/SprintBoardPage'
+import { SprintPlanningPage } from './components/SprintPlanningPage'
 import { ReleaseReadinessPage } from './components/ReleaseReadinessPage'
 import { IncidentResponsePage } from './components/IncidentResponsePage'
 import { WorkItemInsightsPage } from './components/WorkItemInsightsPage'
@@ -1280,6 +1281,24 @@ function App() {
           />
         ) : activePage === 'irp' ? (
           <IncidentResponsePage
+            organization={adoOrg || org}
+            project={project}
+            pat={adoPat}
+            projects={adoProjects.length > 0 ? adoProjects : projects.map(p => ({ id: p, name: p }))}
+            onOrganizationChange={v => {
+              updateOrg(v)
+              setAdoOrg(v)
+              localStorage.setItem('ado_connected_org', v)
+            }}
+            onProjectChange={updateProject}
+            onPatChange={v => {
+              setAdoPat(v)
+              sessionStorage.setItem('ado_session_pat', v)
+            }}
+            theme={theme}
+          />
+        ) : activePage === 'sprint-planning' ? (
+          <SprintPlanningPage
             organization={adoOrg || org}
             project={project}
             pat={adoPat}

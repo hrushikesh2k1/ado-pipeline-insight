@@ -35,6 +35,9 @@ import type {
   InsightScope,
   AlertInventoryUploadRequest,
   WorkItemInsights,
+  SprintPlan,
+  SprintPlanRequest,
+  SprintPlanningSetup,
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
@@ -140,6 +143,18 @@ export const api = {
     if (pat) p.set('pat', pat)
     return request<AdoSprintBoardResponse>(`/api/v1/ado/sprints/board?${p.toString()}`)
   },
+  /** The sprints, members and areas the planning page starts from. */
+  sprintPlanningSetup:(organization:string,project:string,team:string,pat?:string)=>{
+    const p = new URLSearchParams({ organization, project, team })
+    if (pat) p.set('pat', pat)
+    return request<SprintPlanningSetup>(`/api/v1/ado/sprint-planning/setup?${p.toString()}`)
+  },
+  /** The plan for the next sprint. It is only shown: nothing is written to Azure DevOps. */
+  sprintPlan:(payload:SprintPlanRequest)=>request<SprintPlan>('/api/v1/ado/sprint-planning/plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
   milestoneAiSummary:(payload:{sprint_name?:string;team_name?:string;achieved_items:any[];total_stories:number;closed_stories_count:number;total_delivered_hours:number})=>{
     return request<MilestoneAiSummaryResponse>('/api/v1/sprint-board/milestone-ai-summary', {
       method: 'POST',

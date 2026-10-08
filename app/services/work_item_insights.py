@@ -165,12 +165,16 @@ class WorkItemInsightsService:
             old = prior.get(item["id"])
             if mode == "path":
                 record_item.update(area=area_from_path(item["area_path"]), alert_work=None, areas_version=0)
-            elif old and old.get("rev") == item["rev"] and old.get("areas_version") == version and old.get("area"):
-                record_item.update(area=old["area"], alert_work=old.get("alert_work"), areas_version=version)
+            elif old and old.get("rev") == item["rev"] and old.get("areas_version") == version and old.get("area") and not old.get("recheck"):
+                record_item.update(area=old["area"], alert_work=old.get("alert_work"), areas_version=version, recheck=False)
                 if mode == "ai" and with_alert and old.get("alert_work") is None:
                     to_flag.append(item)
             else:
-                record_item.update(area=None, alert_work=None, areas_version=version)
+                # An item that was grouped before and has been edited keeps its group until the model answers again: if it does not (or is not
+                # available), the earlier group is still the best one and the item is checked again at the next refresh.
+                earlier = old if old and old.get("area") and old.get("areas_version") == version else None
+                record_item.update(area=earlier["area"] if earlier else None, alert_work=earlier.get("alert_work") if earlier else None,
+                                   areas_version=version, recheck=bool(earlier))
                 if mode == "ai":
                     to_assign.append(item)
             final[item["id"]] = record_item
@@ -179,8 +183,8 @@ class WorkItemInsightsService:
         if to_assign:
             results, missing = assign_areas(ai, areas, to_assign, with_alert=with_alert, progress=progress)
             for item_id, answer in results.items():
-                final[item_id].update(area=answer["area"], alert_work=answer["alert_work"])
-            failed += len(missing)
+                final[item_id].update(area=answer["area"], alert_work=answer["alert_work"], recheck=False)
+            failed += len([i for i in missing if not final[i].get("recheck")])
         if to_flag:
             flags, missing = flag_alert_work(ai, to_flag, progress)
             for item_id, flag in flags.items():
@@ -188,6 +192,9 @@ class WorkItemInsightsService:
             failed += len(missing)
         if failed:
             notes.append(f"{failed} work item(s) could not be processed because the AI did not answer for them. Refresh again to retry them.")
+        kept = sum(1 for r in final.values() if r.get("recheck"))
+        if kept:
+            notes.append(f"{kept} changed work item(s) could not be checked again by the AI and keep their earlier group. Refresh again to check them.")
 
         store.save(
             key, organization=organization, project=project, team=team, tag=tag, months=months,
