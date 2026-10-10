@@ -38,9 +38,10 @@ import type {
 } from '../types/api'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
+import type { DeliverablesReport } from '../utils/deliverablesReport'
 const REVIEW_POLL_MS = 1500
 const REVIEW_POLL_RETRIES = 3
-async function request<T>(path:string, init?:RequestInit):Promise<T>{
+export async function request<T>(path:string, init?:RequestInit):Promise<T>{
   const response = await fetch(`${API_BASE}${path}`, {
     credentials: 'same-origin',
     headers: {'Accept':'application/json', ...(init?.headers||{})},
@@ -74,6 +75,12 @@ function insightQuery(scope: InsightScope): string {
 }
 
 export const api = {
+  deliverables:(organization:string, project:string, team:string, iterationId:string, pat?:string, regenerate=false)=>{
+    const params = new URLSearchParams({ organization, project, team, iteration_id: iterationId, regenerate: String(regenerate) })
+    return request<DeliverablesReport>(`/api/v1/ado/sprints/deliverables?${params}`, {
+      headers: pat ? { 'X-ADO-PAT': pat } : {},
+    })
+  },
   options:()=>request<Options>('/api/v1/options'),
   summary:(pipelineId:number|null,days:number)=>request<Summary>(`/api/v1/summary?days=${days}${pipelineId?`&pipeline_id=${pipelineId}`:''}`),
   trends:(pipelineId:number|null,days:number)=>request<Trends>(`/api/v1/trends?days=${days}${pipelineId?`&pipeline_id=${pipelineId}`:''}`),

@@ -84,6 +84,57 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 router = APIRouter(prefix="/api/v1")
 
+
+@router.get("/ado/sprints/deliverables", tags=["ado"])
+def get_sprint_deliverables(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    team: str = Query(..., min_length=1, max_length=256),
+    iteration_id: str = Query(..., min_length=1, max_length=256),
+    regenerate: bool = Query(False),
+    x_ado_pat: str | None = Header(default=None, alias="X-ADO-PAT"),
+) -> dict:
+    from app.services.deliverables import build_report
+    from app.services.snapshot_store import SnapshotStore
+    org = validate_organization(organization)
+    proj = validate_project(project)
+    token = _resolve_pat(org, x_ado_pat)
+    try:
+        ado = AzureDevOpsClient(org, token)
+        # Always authorize against the selected team before accessing a saved snapshot.
+        ado.get_team_iteration(proj, team, iteration_id)
+        store = SnapshotStore()
+        scope = [org, proj, team, iteration_id, "v2"]
+        with store.lock("deliverables", scope):
+            saved = None if regenerate else store.read("deliverables", scope)
+            report = saved or build_report(ado, proj, team, iteration_id)
+            if not saved:
+                try:
+                    store.write("deliverables", scope, report)
+                    report["snapshot_saved"] = True
+                except ValueError as exc:
+                    report["snapshot_saved"] = False
+                    report["warnings"].append(str(exc))
+            else:
+                report["snapshot_saved"] = True
+        report["from_snapshot"] = bool(saved)
+        # Membership must remain current even when delivery history is frozen.
+        from app.services.team_people import team_people
+        try:
+            members = team_people(ado, proj, team)
+            report["recipients"] = sorted({m["email"] for m in members if m["email"]})
+            report["missing_recipient_names"] = [m["name"] for m in members if not m["email"]]
+            report["recipients_verified"] = True
+        except Exception:
+            report["recipients"] = []
+            report["recipients_verified"] = False
+            report["warnings"].append("Team group membership could not be verified. Check Azure DevOps identity read access; the report is available but drafting is disabled.")
+        return report
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _unavailable(exc, "Deliverables could not be fully verified in Azure DevOps. No partial report was generated.") from exc
+
 MAX_ID = 2**31 - 1
 RunId = Annotated[int, ApiPath(ge=1, le=MAX_ID)]
 PipelineId = Annotated[int, ApiPath(ge=1, le=MAX_ID)]

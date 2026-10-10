@@ -39,8 +39,8 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "Accept"],
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+        allow_headers=["Content-Type", "Accept", "X-ADO-PAT"],
     )
     app.add_middleware(
         RequestSizeLimit,
@@ -52,6 +52,8 @@ def create_app() -> FastAPI:
         },
     )
     app.add_middleware(SecurityHeaders, csp=not docs)
+    from app.api.planning_routes import router as planning_router
+    app.include_router(planning_router)
     app.include_router(router)
 
     if frontend_dist.exists():
