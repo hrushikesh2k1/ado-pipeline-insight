@@ -4,6 +4,23 @@ All notable changes to ADO Pipeline Insight. Versions follow [Semantic Versionin
 **MAJOR** = breaking change, **MINOR** = new feature, **PATCH** = bug fix only.
 The number lives in the `VERSION` file; change it with `python scripts/bump_version.py minor|patch|major`.
 
+## [1.11.0] - 2026-10-10
+
+- Persist scoped Deliverables snapshots with safe regeneration, item filters and stories/bugs-only email reports.
+- Expand group recipients into individuals and show auditable capacity inputs.
+- Add native read-only backlog, capacity and daily historical remaining-task-hour views.
+- Add manual Planning Assistant test drafts, signed response forms, persisted settings and capacity-based proposals. Automatic email remains disabled; no Azure DevOps writes.
+- Add private Blob or explicit persistent-directory storage and a local test deployment script.
+
+## [1.10.0] - 2026-10-10
+
+### Added
+
+- Azure Boards Deliverables reports completed work by completion date, so prior-iteration carryovers appear in the period they were finished.
+- Per-person work items, separate completed task contributions, recorded task effort, missing-effort flags and leave-adjusted available capacity.
+- Sprint-end revision attribution, reopen/re-completion labels, team recipient preview, full report copy and a draft in the default mail application.
+- Calculation and deployment details in `docs/deliverables.md`.
+
 ## [1.9.0] - 2026-10-08
 
 The AI pull request review was rebuilt. It now reads what really changed, works through a checklist for each kind of file (JSON

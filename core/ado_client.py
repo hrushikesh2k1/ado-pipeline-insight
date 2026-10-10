@@ -473,8 +473,61 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response)
 
+    def list_work_item_revisions(self, project: str, item_id: int) -> list[dict[str, Any]]:
+        """Read every revision; history is required for sprint-end attribution."""
+        results: list[dict[str, Any]] = []
+        while True:
+            response = self.session.get(
+                self._url(project, f"_apis/wit/workitems/{item_id}/revisions"),
+                params={"api-version": self.api_version, "$top": 200, "$skip": len(results)},
+                timeout=30,
+            )
+            response.raise_for_status()
+            page = self._json_response(response).get("value", [])
+            results.extend(page)
+            if len(page) < 200:
+                return results
+
+    def list_team_members(self, project: str, team: str) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        while True:
+            response = self.session.get(
+                f"https://dev.azure.com/{quote(self.organization, safe='')}/_apis/projects/{quote(project, safe='')}/teams/{quote(team, safe='')}/members",
+                params={"api-version": self.api_version, "$top": 100, "$skip": len(results)},
+                timeout=30,
+            )
+            response.raise_for_status()
+            page = self._json_response(response).get("value", [])
+            results.extend(page)
+            if len(page) < 100:
+                return results
+
+    def get_iteration_capacity(self, project: str, team: str, iteration_id: str) -> dict[str, Any]:
+        response = self.session.get(
+            f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/iterations/{quote(iteration_id, safe='')}/capacities",
+            params={"api-version": self.api_version}, timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response)
+
+    def get_team_settings(self, project: str, team: str) -> dict[str, Any]:
+        response = self.session.get(
+            f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings",
+            params={"api-version": self.api_version}, timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response)
+
+    def get_team_days_off(self, project: str, team: str, iteration_id: str) -> dict[str, Any]:
+        response = self.session.get(
+            f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/iterations/{quote(iteration_id, safe='')}/teamdaysoff",
+            params={"api-version": self.api_version}, timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response)
+
     def get_work_items_batch(
-        self, project: str, ids: list[int], fields: list[str] | None = None
+        self, project: str, ids: list[int], fields: list[str] | None = None, as_of: str | None = None
     ) -> list[dict[str, Any]]:
         """Batch fetch work items by their IDs.
 
@@ -488,6 +541,8 @@ class AzureDevOpsClient:
         for i in range(0, len(ids), 200):
             chunk = ids[i : i + 200]
             payload: dict[str, Any] = {"ids": chunk}
+            if as_of:
+                payload["asOf"] = as_of
             if fields:
                 payload["fields"] = fields
             else:

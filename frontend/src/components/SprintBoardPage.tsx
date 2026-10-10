@@ -41,6 +41,9 @@ import {
   Send,
 } from 'lucide-react'
 import { api } from '../services/api'
+import { PlanningAssistant } from './PlanningAssistant'
+import { BoardDataView } from './BoardDataView'
+import { DeliverablesPage } from './DeliverablesPage'
 import { usePlugins } from '../context/PluginContext'
 import type {
   AdoTeam,
@@ -64,7 +67,7 @@ interface SprintBoardPageProps {
   theme?: 'dark' | 'light'
 }
 
-type SubTab = 'Taskboard' | 'Milestone' | 'Backlog' | 'Capacity' | 'Analytics'
+type SubTab = 'Taskboard' | 'Milestone' | 'Deliverables' | 'Planning Assistant' | 'Backlog' | 'Capacity' | 'Analytics'
 type FilterMode = 'all' | 'closed_without_hours' | 'stale_in_review'
 
 export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
@@ -819,7 +822,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
 
       {/* 2. Sub Navigation Tabs: Taskboard, Milestone, Backlog, Capacity, Analytics */}
       <div className="adoSubNavTabs">
-        {(['Taskboard', 'Milestone', 'Backlog', 'Capacity', 'Analytics'] as SubTab[])
+        {(['Taskboard', 'Milestone', 'Deliverables', 'Planning Assistant', 'Backlog', 'Capacity', 'Analytics'] as SubTab[])
           .filter(tab => tab !== 'Milestone' || showMilestone)
           .map(tab => (
           <button
@@ -1758,33 +1761,14 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
             </div>
           )}
         </div>
-      ) : activeSubTab === 'Backlog' ? (
-        <div className="adoPlaceholderTab">
-          <Layers size={36} color="#0078d4" />
-          <h3>Sprint Backlog View</h3>
-          <p>View prioritized backlog items, estimations, and sprint commitment.</p>
-          <button type="button" className="adoSecondaryBtn" onClick={() => setActiveSubTab('Taskboard')}>
-            Switch to Taskboard
-          </button>
-        </div>
-      ) : activeSubTab === 'Capacity' ? (
-        <div className="adoPlaceholderTab">
-          <Users size={36} color="#0078d4" />
-          <h3>Team Capacity Planning</h3>
-          <p>Allocate team daily capacity per activity (Development, Testing, Documentation) and manage days off.</p>
-          <button type="button" className="adoSecondaryBtn" onClick={() => setActiveSubTab('Taskboard')}>
-            Switch to Taskboard
-          </button>
-        </div>
+      ) : activeSubTab === 'Deliverables' ? (
+        <DeliverablesPage organization={organization} project={project} team={selectedTeamId}
+          teamName={teams.find(t => t.id === selectedTeamId)?.name || selectedTeamId}
+          iterationId={selectedIterationId} pat={pat} />
+      ) : activeSubTab === 'Planning Assistant' ? (
+        <PlanningAssistant organization={organization} project={project} team={selectedTeamId} teamName={teams.find(t => t.id === selectedTeamId)?.name || selectedTeamId} iterationId={selectedIterationId} pat={pat}/>
       ) : (
-        <div className="adoPlaceholderTab">
-          <Flame size={36} color="#0078d4" />
-          <h3>Sprint Analytics & Burndown</h3>
-          <p>Sprint burndown, velocity trends, and task burn-up metrics.</p>
-          <button type="button" className="adoSecondaryBtn" onClick={() => setActiveSubTab('Taskboard')}>
-            Switch to Taskboard
-          </button>
-        </div>
+        <BoardDataView view={activeSubTab.toLowerCase()} organization={organization} project={project} team={selectedTeamId} teamName={teams.find(t => t.id === selectedTeamId)?.name || selectedTeamId} iterationId={selectedIterationId} pat={pat}/>
       )}
 
       {/* 6. Comprehensive Health & Compliance Checks Modal / Drawer */}

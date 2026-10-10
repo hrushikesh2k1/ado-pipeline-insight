@@ -15,6 +15,7 @@ import { ReleaseReadinessPage } from './components/ReleaseReadinessPage'
 import { IncidentResponsePage } from './components/IncidentResponsePage'
 import { WorkItemInsightsPage } from './components/WorkItemInsightsPage'
 import { PluginManagerModal } from './components/PluginManagerModal'
+import { PlanningResponseForm } from './components/PlanningAssistant'
 import octaveLogo from './assets/octave-logo.png'
 import type { Recommendation } from './types/api'
 import { formatSeconds as fmt } from './utils'
@@ -1851,4 +1852,14 @@ function AiTraceDrawer({
 }
 
 
-export default App
+function AppWithPlanningResponse(){
+ const readToken = () => new URLSearchParams(window.location.hash.slice(1)).get('planning_response')
+ const [token, setToken] = useState(readToken)
+ useEffect(() => {
+   const changed = () => setToken(readToken())
+   window.addEventListener('hashchange', changed)
+   return () => window.removeEventListener('hashchange', changed)
+ }, [])
+ return token ? <PlanningResponseForm token={token}/> : <App/>
+}
+export default AppWithPlanningResponse
