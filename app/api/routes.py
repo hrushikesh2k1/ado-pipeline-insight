@@ -780,6 +780,7 @@ def get_ado_sprint_board(
         selected_iteration = next((it for it in all_iterations if it.time_frame == "current"), all_iterations[0])
 
     raw_work_items: list[dict[str, Any]] = []
+    backlog_raw_items: list[dict[str, Any]] = []
     if token:
         try:
             ado = AzureDevOpsClient(org_clean, token)
@@ -873,6 +874,23 @@ def get_ado_sprint_board(
                             elif "hierarchy-reverse" in rel_type:
                                 relation_parent_map[sid] = tid
 
+            # A sprint is shared by every team in the project; the team's own area paths decide which items are theirs.
+            team_scopes: list[tuple[str, bool]] = []
+            try:
+                team_scopes = parse_team_area_scopes(ado.get_team_field_values(proj_clean, effective_team))
+            except Exception as e_scope:
+                logging.warning("Could not read area paths for team '%s'; showing every team's items: %s", effective_team, e_scope)
+
+            area_clause = ""
+            if team_scopes:
+                area_conditions = []
+                for a_path, a_children in team_scopes:
+                    safe_ap = a_path.replace("'", "''")
+                    op = "UNDER" if a_children else "="
+                    area_conditions.append(f"[System.AreaPath] {op} '{safe_ap}'")
+                if area_conditions:
+                    area_clause = f" AND ({' OR '.join(area_conditions)})"
+
             # Query WIQL by iteration path for comprehensive sprint work item discovery
             if selected_iteration:
                 try:
@@ -891,6 +909,30 @@ def get_ado_sprint_board(
                 except Exception as e_wiql:
                     logging.info("WIQL iteration query failed: %s", e_wiql)
 
+            # Query WIQL for stories closed during this sprint window (using date-only precision required by ADO WIQL)
+            if selected_iteration and selected_iteration.start_date and selected_iteration.finish_date:
+                try:
+                    s_dt = parse_ado_date(selected_iteration.start_date)
+                    f_dt = parse_ado_date(selected_iteration.finish_date)
+                    if s_dt and f_dt:
+                        s_str = s_dt.strftime("%Y-%m-%d")
+                        next_day = (f_dt + timedelta(days=1)).strftime("%Y-%m-%d")
+                        safe_project = proj_clean.replace("'", "''")
+                        closed_wiql = (
+                            f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{safe_project}'"
+                            f" AND [System.WorkItemType] IN ('User Story', 'Product Backlog Item', 'Bug', 'Requirement', 'Feature', 'Story', 'Issue')"
+                            f" AND [System.State] IN ('Closed', 'Done', 'Resolved', 'Completed')"
+                            f" AND (([Microsoft.VSTS.Common.ClosedDate] >= '{s_str}' AND [Microsoft.VSTS.Common.ClosedDate] < '{next_day}')"
+                            f" OR ([Microsoft.VSTS.Common.StateChangeDate] >= '{s_str}' AND [Microsoft.VSTS.Common.StateChangeDate] < '{next_day}'))"
+                            f"{area_clause}"
+                        )
+                        closed_ids = ado.query_wiql(proj_clean, closed_wiql)
+                        if closed_ids:
+                            for wid in closed_ids:
+                                candidate_ids.add(wid)
+                except Exception as e_closed_wiql:
+                    logging.info("WIQL closed in sprint query failed: %s", e_closed_wiql)
+
             # 4. Batch fetch real work item fields
             item_ids = list(candidate_ids)
             if item_ids:
@@ -903,13 +945,6 @@ def get_ado_sprint_board(
                     if iid:
                         item_by_id[int(iid)] = item
 
-                # A sprint is shared by every team in the project; the team's own area paths decide which items are theirs.
-                team_scopes: list[tuple[str, bool]] = []
-                try:
-                    team_scopes = parse_team_area_scopes(ado.get_team_field_values(proj_clean, effective_team))
-                except Exception as e_scope:
-                    logging.warning("Could not read area paths for team '%s'; showing every team's items: %s", effective_team, e_scope)
-
                 # Identify sprint parent stories/bugs/PBIs
                 sprint_parent_items: list[dict[str, Any]] = []
                 sprint_parent_ids: set[int] = set()
@@ -918,15 +953,33 @@ def get_ado_sprint_board(
                     f = item.get("fields") or {}
                     wtype = str(f.get("System.WorkItemType") or "").lower()
                     if wtype in ("user story", "product backlog item", "feature", "bug", "requirement", "issue"):
-                        if is_in_team_areas(f.get("System.AreaPath"), team_scopes) and is_work_item_in_iteration(
-                            f.get("System.IterationPath"),
-                            f.get("System.IterationId"),
-                            selected_iteration,
-                        ):
-                            sprint_parent_items.append(item)
-                            iid = item.get("id") or f.get("System.Id")
-                            if iid:
-                                sprint_parent_ids.add(int(iid))
+                        if is_in_team_areas(f.get("System.AreaPath"), team_scopes):
+                            in_iter = is_work_item_in_iteration(
+                                f.get("System.IterationPath"),
+                                f.get("System.IterationId"),
+                                selected_iteration,
+                            )
+                            closed_in_sprint = False
+                            if selected_iteration and selected_iteration.start_date and selected_iteration.finish_date:
+                                state_lower = str(f.get("System.State") or "").lower()
+                                if state_lower in ("closed", "done", "resolved", "completed"):
+                                    c_raw = (
+                                        f.get("Microsoft.VSTS.Common.ClosedDate")
+                                        or f.get("Microsoft.VSTS.Common.StateChangeDate")
+                                        or f.get("System.ChangedDate")
+                                    )
+                                    c_dt = parse_ado_date(c_raw)
+                                    s_dt = parse_ado_date(selected_iteration.start_date)
+                                    f_dt = parse_ado_date(selected_iteration.finish_date)
+                                    if c_dt and s_dt and f_dt:
+                                        f_end = f_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+                                        if s_dt <= c_dt <= f_end:
+                                            closed_in_sprint = True
+                            if in_iter or closed_in_sprint:
+                                sprint_parent_items.append(item)
+                                iid = item.get("id") or f.get("System.Id")
+                                if iid:
+                                    sprint_parent_ids.add(int(iid))
 
                 # Discover child tasks from relations of all sprint parent stories (e.g. child tasks under 1078348, 1067972)
                 child_ids_to_fetch: set[int] = set()
@@ -990,6 +1043,58 @@ def get_ado_sprint_board(
                         ):
                             # Unparented task assigned directly to this sprint iteration
                             raw_work_items.append(item)
+
+                # 6. FETCH TEAM PRODUCT BACKLOG (items not on board)
+                try:
+                    area_conditions = []
+                    for a_path, a_children in team_scopes:
+                        safe_ap = a_path.replace("'", "''")
+                        op = "UNDER" if a_children else "="
+                        area_conditions.append(f"[System.AreaPath] {op} '{safe_ap}'")
+                    area_clause = f" AND ({' OR '.join(area_conditions)})" if area_conditions else ""
+                    safe_project = proj_clean.replace("'", "''")
+
+                    order_clauses = [
+                        "[Microsoft.VSTS.Common.StackRank] ASC, [System.Id] ASC",
+                        "[Microsoft.VSTS.Common.BacklogPriority] ASC, [System.Id] ASC",
+                        "[System.Id] ASC",
+                    ]
+
+                    backlog_ids: list[int] = []
+                    for ord_clause in order_clauses:
+                        try:
+                            b_wiql = (
+                                f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{safe_project}'"
+                                f" AND [System.WorkItemType] IN ('User Story', 'Product Backlog Item', 'Bug', 'Requirement', 'Feature', 'Issue')"
+                                f" AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Completed')"
+                                f"{area_clause} ORDER BY {ord_clause}"
+                            )
+                            backlog_ids = ado.query_wiql(proj_clean, b_wiql, top=300)
+                            if backlog_ids:
+                                break
+                        except Exception as e_ord:
+                            logging.debug("Backlog query with order %s failed: %s", ord_clause, e_ord)
+
+                    if not backlog_ids and area_clause:
+                        for ord_clause in order_clauses:
+                            try:
+                                b_wiql = (
+                                    f"SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = '{safe_project}'"
+                                    f" AND [System.WorkItemType] IN ('User Story', 'Product Backlog Item', 'Bug', 'Requirement', 'Feature', 'Issue')"
+                                    f" AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Completed')"
+                                    f" ORDER BY {ord_clause}"
+                                )
+                                backlog_ids = ado.query_wiql(proj_clean, b_wiql, top=300)
+                                if backlog_ids:
+                                    break
+                            except Exception as e_ord_fallback:
+                                logging.debug("Fallback backlog query failed: %s", e_ord_fallback)
+
+                    if backlog_ids:
+                        backlog_raw_items = ado.get_work_items_batch(proj_clean, backlog_ids)
+                except Exception as e_backlog:
+                    logging.warning("Failed to fetch team product backlog: %s", e_backlog)
+
         except Exception as e:
             logging.error("Failed to query sprint work items from Azure DevOps: %s", e)
 
@@ -1078,6 +1183,101 @@ def get_ado_sprint_board(
                 },
             ]
 
+    # Test fixture backlog items for unauthenticated / mock mode
+    if not backlog_raw_items and not token and org_clean in ("myorg", "testorg", "test"):
+        backlog_raw_items = [
+            {
+                "id": 5,
+                "fields": {
+                    "System.Id": 5,
+                    "System.Title": "Monitoring: Integrate the designed monitoring flow into the CI/CD monitoring release",
+                    "System.WorkItemType": "User Story",
+                    "System.State": "New",
+                    "Microsoft.VSTS.Scheduling.StoryPoints": 8.0,
+                    "Microsoft.VSTS.Common.ValueArea": "Business",
+                    "System.IterationPath": f"{proj_clean}\\Backlog",
+                    "System.AreaPath": f"{proj_clean}\\{team_clean}",
+                    "Microsoft.VSTS.Common.StackRank": 5,
+                    "System.Tags": "Monitoring; CI/CD",
+                },
+            },
+            {
+                "id": 6,
+                "fields": {
+                    "System.Id": 6,
+                    "System.Title": "Monitoring: Optimize AKS Logging Costs by Reducing Audit Log Volume",
+                    "System.WorkItemType": "User Story",
+                    "System.State": "New",
+                    "Microsoft.VSTS.Scheduling.StoryPoints": 8.0,
+                    "Microsoft.VSTS.Common.ValueArea": "Business",
+                    "System.IterationPath": f"{proj_clean}\\Backlog",
+                    "System.AreaPath": f"{proj_clean}\\{team_clean}",
+                    "Microsoft.VSTS.Common.StackRank": 6,
+                    "System.Tags": "Monitoring; Optimization",
+                },
+            },
+            {
+                "id": 7,
+                "fields": {
+                    "System.Id": 7,
+                    "System.Title": "Monitoring: Cost Spike - Root Cause Analysis and Optimization",
+                    "System.WorkItemType": "User Story",
+                    "System.State": "New",
+                    "Microsoft.VSTS.Scheduling.StoryPoints": 4.0,
+                    "Microsoft.VSTS.Common.ValueArea": "Business",
+                    "System.IterationPath": f"{proj_clean}\\Backlog",
+                    "System.AreaPath": f"{proj_clean}\\{team_clean}",
+                    "Microsoft.VSTS.Common.StackRank": 7,
+                    "System.Tags": "Monitoring",
+                },
+            },
+            {
+                "id": 9,
+                "fields": {
+                    "System.Id": 9,
+                    "System.Title": "Monitoring: Add validation check in monitoring pipeline for product-monitoring version compatibility",
+                    "System.WorkItemType": "User Story",
+                    "System.State": "New",
+                    "Microsoft.VSTS.Scheduling.StoryPoints": 2.0,
+                    "Microsoft.VSTS.Common.ValueArea": "Business",
+                    "System.IterationPath": f"{proj_clean}\\Backlog",
+                    "System.AreaPath": f"{proj_clean}\\{team_clean}",
+                    "Microsoft.VSTS.Common.StackRank": 9,
+                    "System.Tags": "Monitoring; Validation",
+                },
+            },
+            {
+                "id": 11,
+                "fields": {
+                    "System.Id": 11,
+                    "System.Title": "Monitoring: Create Alert for Sudden Spikes in Warning-Severity Alerts (>50%) Across Critical Modules",
+                    "System.WorkItemType": "User Story",
+                    "System.State": "New",
+                    "Microsoft.VSTS.Scheduling.StoryPoints": 8.0,
+                    "Microsoft.VSTS.Common.ValueArea": "Business",
+                    "System.IterationPath": f"{proj_clean}\\Backlog",
+                    "System.AreaPath": f"{proj_clean}\\{team_clean}",
+                    "Microsoft.VSTS.Common.StackRank": 11,
+                    "System.Tags": "Monitoring; Alerts",
+                },
+            },
+            {
+                "id": 12,
+                "fields": {
+                    "System.Id": 12,
+                    "System.Title": "QA: Validate Alert for Sudden Spike (>50%) in Warning-Severity Alerts Across Critical Modules",
+                    "System.WorkItemType": "User Story",
+                    "System.State": "New",
+                    "Microsoft.VSTS.Scheduling.StoryPoints": 2.0,
+                    "Microsoft.VSTS.Common.ValueArea": "Business",
+                    "System.IterationPath": f"{proj_clean}\\Backlog",
+                    "System.AreaPath": f"{proj_clean}\\{team_clean}",
+                    "Microsoft.VSTS.Common.StackRank": 12,
+                    "System.Tags": "Monitoring; QA",
+                },
+            },
+        ]
+
     # Fix Bug 1: Ensure selected_iteration does not display as a raw GUID
     is_guid = bool(re.match(r"^[0-9a-fA-F-]{30,}$", (selected_iteration.name or "").strip())) if selected_iteration else False
     if selected_iteration and is_guid:
@@ -1110,6 +1310,14 @@ def get_ado_sprint_board(
                     break
 
     parsed_items, checks_summary = evaluate_sprint_work_items(raw_work_items, org_clean, proj_clean, now)
+    board_ids = {it["id"] for it in parsed_items}
+
+    # Evaluate product backlog items and retain only items not currently placed on the sprint board
+    parsed_backlog, _ = evaluate_sprint_work_items(backlog_raw_items, org_clean, proj_clean, now)
+    uncommitted_backlog = [b for b in parsed_backlog if b["id"] not in board_ids]
+    for idx, b in enumerate(uncommitted_backlog, 1):
+        if not b.get("order"):
+            b["order"] = idx
 
     # Resolve each story/bug's parent Feature/Epic (title + type) so milestone streams reflect the team's
     # own backlog structure. A parent already present in this sprint's items is resolved for free; anything
@@ -1144,12 +1352,13 @@ def get_ado_sprint_board(
     finish_dt = parse_ado_date(selected_iteration.finish_date) if selected_iteration else None
     remaining_days = calculate_remaining_work_days(finish_dt, now)
 
-    milestone_data = calculate_sprint_milestones(parsed_items, parent_lookup)
+    milestone_data = calculate_sprint_milestones(parsed_items, parent_lookup, iteration=selected_iteration)
 
     return AdoSprintBoardResponse(
         team=AdoTeam(id=f"team-{team_clean}", name=team_clean),
         iteration=selected_iteration,
         work_items=[AdoWorkItem(**item) for item in parsed_items],
+        backlog_items=[AdoWorkItem(**item) for item in uncommitted_backlog],
         checks_summary=AdoSprintChecksSummary(**checks_summary),
         working_days_remaining=remaining_days,
         milestone=AdoSprintMilestoneSummary(**milestone_data),

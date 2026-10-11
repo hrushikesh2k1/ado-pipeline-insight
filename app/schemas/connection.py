@@ -228,6 +228,7 @@ class AdoWorkItem(BaseModel):
     original_estimate: float | None = None
     parent_id: int | None = None
     state_change_date: str | None = None
+    closed_date: str | None = None
     changed_date: str | None = None
     web_url: str | None = None
     business_days_in_review: int | None = None
@@ -240,6 +241,11 @@ class AdoWorkItem(BaseModel):
     iteration_id: int | None = None
     severity: str | None = None
     priority: int | None = None
+    story_points: float | None = None
+    value_area: str | None = None
+    order: int | None = None
+    activity: str | None = None
+    tags: str | None = None
 
 
 class AdoSprintChecksSummary(BaseModel):
@@ -308,6 +314,7 @@ class AdoSprintBoardResponse(BaseModel):
     team: AdoTeam
     iteration: AdoIteration | None = None
     work_items: list[AdoWorkItem] = Field(default_factory=list)
+    backlog_items: list[AdoWorkItem] = Field(default_factory=list)
     checks_summary: AdoSprintChecksSummary
     working_days_remaining: int | None = None
     milestone: AdoSprintMilestoneSummary | None = None

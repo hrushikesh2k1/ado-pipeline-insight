@@ -396,3 +396,48 @@ def test_team_area_scope_unknown_means_no_filtering():
     assert parse_team_area_scopes(None) == [] and parse_team_area_scopes({}) == []
     assert is_in_team_areas(r"Anything\At All", [])
     assert parse_team_area_scopes({"defaultValue": r"Proj\Team A"}) == [(r"proj\team a", False)]
+
+
+def test_calculate_sprint_milestones_scoped_to_sprint_dates():
+    from app.services.board_service import calculate_sprint_milestones
+
+    iteration = {
+        "start_date": "2026-09-01T00:00:00Z",
+        "finish_date": "2026-09-30T00:00:00Z",
+    }
+
+    work_items = [
+        # Closed inside September sprint window -> deliverable
+        {
+            "id": 101,
+            "title": "Story closed in September",
+            "work_item_type": "User Story",
+            "state": "Closed",
+            "closed_date": "2026-09-15T10:00:00Z",
+            "assigned_to_name": "Alice",
+        },
+        # Closed in October -> NOT deliverable in September sprint
+        {
+            "id": 102,
+            "title": "Story closed in October",
+            "work_item_type": "User Story",
+            "state": "Closed",
+            "closed_date": "2026-10-05T10:00:00Z",
+            "assigned_to_name": "Bob",
+        },
+        # Closed in August -> NOT deliverable in September sprint
+        {
+            "id": 103,
+            "title": "Story closed in August",
+            "work_item_type": "User Story",
+            "state": "Closed",
+            "closed_date": "2026-08-25T10:00:00Z",
+            "assigned_to_name": "Charlie",
+        },
+    ]
+
+    milestone = calculate_sprint_milestones(work_items, iteration=iteration)
+    achieved = milestone["achieved_items"]
+    assert len(achieved) == 1
+    assert achieved[0]["id"] == 101
+

@@ -380,7 +380,7 @@ class TestPlanFromAzureDevOps:
         carried, planned, backlog = board.queries
         assert "[System.IterationPath] IN ('Demo\\Sprint 2')" in carried and "[System.State] NOT IN ('Closed', 'Done', 'Removed')" in carried
         assert "[System.IterationPath] IN ('Demo\\Sprint 3')" in planned and "[System.State] NOT IN ('Closed', 'Done', 'Removed')" in planned
-        assert "[System.IterationPath] IN ('Demo', 'Demo\\Sprint 3')" in backlog and "[System.State] IN ('New')" in backlog and "[System.AssignedTo] = ''" in backlog
+        assert "[System.IterationPath] NOT IN ('Demo\\Sprint 2')" in backlog and "[System.State] NOT IN ('Closed', 'Done', 'Removed')" in backlog and "[System.AssignedTo] = ''" in backlog
         assert all("[System.TeamProject] = 'Demo'" in q and "[System.WorkItemType] IN ('User Story')" in q and "[System.AreaPath] UNDER 'Demo\\Alpha'" in q for q in board.queries)
         assert all(q.endswith("ORDER BY [Microsoft.VSTS.Common.BacklogPriority] ASC, [System.Id] ASC") for q in board.queries)
 
@@ -401,7 +401,7 @@ class TestPlanFromAzureDevOps:
 
     def test_an_empty_backlog_is_said_in_a_note(self):
         result, _ = run(FakeBoard([story(10, state="Active", who="ava", since=ago(1), iteration=S2)]), people=[AVA], per_person=2)
-        assert any("No unassigned story in a proposed state" in n for n in result["notes"]) and row(result, "Ava Stone")["open_places"] == 1
+        assert any("No backlog stories were found" in n for n in result["notes"]) and row(result, "Ava Stone")["open_places"] == 1
 
     def test_a_story_of_another_teams_area_is_left_out_even_if_the_query_returned_it(self):
         result, _ = run(FakeBoard(scenario_items(), ignore_areas=True))
@@ -526,3 +526,59 @@ class TestSetup:
 
     def test_the_types_that_cannot_be_listed_fall_back_to_the_common_ones(self):
         assert sp.team_setup(FakeBoard([], fail=("types",)), PROJECT, TEAM)["work_item_types"] == list(sp.DEFAULT_TYPES)
+
+
+class TestSprintPlanningEnhancements:
+    def test_points_capacity_and_workload_calculation(self):
+        p1 = {"name": "Ava Stone", "unique_name": "ava@example.test", "areas": [BACKEND], "working_days": 10, "pto_days": 2, "focus_factor": 0.8}
+        clean = sp.normalize_people([p1])
+        assert clean[0]["working_days"] == 10
+        assert clean[0]["pto_days"] == 2
+        assert clean[0]["focus_factor"] == 0.8
+
+        res = sp.make_plan(
+            people=clean,
+            carried=[{"id": 1, "title": "S1", "points": 3.0, "area_path": BACKEND, "assigned_to": "Ava Stone", "assigned_unique": "ava@example.test", "flags": [], "matched_area": None}],
+            planned=[],
+            backlog=[{"id": 2, "title": "S2", "points": 5.0, "area_path": BACKEND, "assigned_to": "", "assigned_unique": "", "flags": [], "matched_area": None}],
+            per_person=6,
+        )
+        ava_row = res["people"][0]
+        assert ava_row["points_carried"] == 3.0
+        assert ava_row["points_new"] == 5.0
+        assert ava_row["points_planned"] == 8.0
+        # (10 - 2) * 0.8 = 6.4 capacity
+        assert ava_row["points_capacity"] == 6.4
+        assert ava_row["points_over_by"] == 1.6
+
+    def test_commit_sprint_plan(self):
+        class MockClient:
+            def __init__(self):
+                self.calls = []
+            def update_work_item(self, project, work_item_id, patch):
+                self.calls.append((project, work_item_id, patch))
+
+        client = MockClient()
+        res = sp.commit_sprint_plan(
+            client,
+            project=PROJECT,
+            iteration_path="Demo\\Sprint 3",
+            assignments=[{"story_id": 101, "assigned_to": "Ava Stone"}, {"story_id": 102, "assigned_to": "Ben Ortiz"}],
+        )
+        assert res["success"] is True
+        assert res["updated_count"] == 2
+        assert len(client.calls) == 2
+        assert client.calls[0][1] == 101
+        assert client.calls[0][2][0]["value"] == "Demo\\Sprint 3"
+
+    def test_tags_and_area_filter_in_wiql_and_matching(self):
+        wiql = sp.build_wiql("Demo", types=["User Story"], areas=[("Demo\\Alpha", True)], order="[System.Id] ASC", tags=["Monitoring", "Maintenance"])
+        assert "[System.Tags] CONTAINS 'Monitoring'" in wiql
+        assert "[System.Tags] CONTAINS 'Maintenance'" in wiql
+        assert "[System.AreaPath] UNDER 'Demo\\Alpha'" in wiql
+
+        # Test area matching with tags
+        assert sp.area_matches("Demo\\Alpha", ["Monitoring"], tags=["Monitoring", "TeamName"]) == "Monitoring"
+        assert sp.area_matches("Demo\\Alpha\\Other", ["cloudops-monitoring"], tags=["CloudOps-Monitoring"]) == "cloudops-monitoring"
+
+

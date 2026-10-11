@@ -284,9 +284,11 @@ def evaluate_sprint_work_items(
             except (ValueError, TypeError):
                 parent_id = None
 
+        closed_date_raw = fields.get("Microsoft.VSTS.Common.ClosedDate")
         state_change_raw = fields.get("Microsoft.VSTS.Common.StateChangeDate")
         changed_raw = fields.get("System.ChangedDate")
-        state_change_dt = parse_ado_date(state_change_raw) or parse_ado_date(changed_raw)
+        effective_closed_raw = closed_date_raw or state_change_raw or changed_raw
+        state_change_dt = parse_ado_date(effective_closed_raw) or parse_ado_date(state_change_raw) or parse_ado_date(changed_raw)
 
         web_url = item.get("_links", {}).get("html", {}).get("href")
         if not web_url:
@@ -346,6 +348,29 @@ def evaluate_sprint_work_items(
         except (ValueError, TypeError):
             priority = None
 
+        # Extract story points, value area, order, activity
+        raw_points = fields.get("Microsoft.VSTS.Scheduling.StoryPoints") or fields.get("Microsoft.VSTS.Scheduling.Effort") or fields.get("StoryPoints") or fields.get("Effort") or fields.get("Microsoft.VSTS.Scheduling.Size")
+        story_points: float | None = None
+        if raw_points is not None:
+            try:
+                story_points = float(raw_points)
+            except (ValueError, TypeError):
+                story_points = None
+
+        value_area_raw = fields.get("Microsoft.VSTS.Common.ValueArea") or fields.get("ValueArea")
+        value_area = str(value_area_raw).strip() if value_area_raw else None
+
+        raw_order = fields.get("Microsoft.VSTS.Common.StackRank") or fields.get("Microsoft.VSTS.Common.BacklogPriority") or fields.get("StackRank")
+        order_val: int | None = None
+        if raw_order is not None:
+            try:
+                order_val = int(float(raw_order))
+            except (ValueError, TypeError):
+                order_val = None
+
+        activity_raw = fields.get("Microsoft.VSTS.Common.Activity") or fields.get("Activity")
+        activity = str(activity_raw).strip() if activity_raw else None
+
         parsed_items.append({
             "id": item_id,
             "title": title,
@@ -357,7 +382,8 @@ def evaluate_sprint_work_items(
             "completed_work": completed_work,
             "original_estimate": original_estimate,
             "parent_id": parent_id,
-            "state_change_date": state_change_raw,
+            "state_change_date": effective_closed_raw or state_change_raw,
+            "closed_date": effective_closed_raw,
             "changed_date": changed_raw,
             "web_url": web_url,
             "business_days_in_review": business_days_in_review,
@@ -371,6 +397,10 @@ def evaluate_sprint_work_items(
             "iteration_id": int(fields.get("System.IterationId")) if fields.get("System.IterationId") is not None else None,
             "severity": severity,
             "priority": priority,
+            "story_points": story_points,
+            "value_area": value_area,
+            "order": order_val,
+            "activity": activity,
         })
 
     checks_summary = {
@@ -424,6 +454,7 @@ def derive_milestone_category(item: dict[str, Any]) -> str:
 def calculate_sprint_milestones(
     parsed_items: list[dict[str, Any]],
     parent_lookup: dict[int, tuple[str, str]] | None = None,
+    iteration: Any | None = None,
 ) -> dict[str, Any]:
     """Calculate milestone achievements and a next-sprint baseline from the work items closed in a sprint.
 
@@ -434,6 +465,29 @@ def calculate_sprint_milestones(
     parent_lookup = parent_lookup or {}
     closed_states = {"closed", "done", "completed", "resolved"}
     story_types = {"user story", "product backlog item", "requirement", "feature", "story", "bug"}
+
+    start_dt = None
+    finish_end = None
+    if iteration is not None:
+        start_str = getattr(iteration, "start_date", None) or (iteration.get("start_date") if isinstance(iteration, dict) else None)
+        finish_str = getattr(iteration, "finish_date", None) or (iteration.get("finish_date") if isinstance(iteration, dict) else None)
+        if start_str and finish_str:
+            s_dt = parse_ado_date(start_str)
+            f_dt = parse_ado_date(finish_str)
+            if s_dt and f_dt:
+                start_dt = s_dt
+                finish_end = f_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+    def is_item_closed_in_sprint(item: dict[str, Any]) -> bool:
+        if str(item.get("state", "")).lower() not in closed_states:
+            return False
+        if not start_dt or not finish_end:
+            return True
+        c_raw = item.get("closed_date") or item.get("state_change_date") or item.get("changed_date")
+        c_dt = parse_ado_date(c_raw)
+        if not c_dt:
+            return True
+        return start_dt <= c_dt <= finish_end
 
     # Map tasks by parent ID to calculate child contributions
     tasks_by_parent: dict[int, list[dict[str, Any]]] = {}
@@ -450,7 +504,7 @@ def calculate_sprint_milestones(
 
     closed_story_items = [
         item for item in all_story_items
-        if str(item.get("state", "")).lower() in closed_states
+        if is_item_closed_in_sprint(item)
     ]
 
     total_stories = len(all_story_items)
@@ -472,7 +526,7 @@ def calculate_sprint_milestones(
         assignee = item.get("assigned_to_name")
         avatar = item.get("assigned_to_avatar")
         web_url = item.get("web_url")
-        completed_date = item.get("state_change_date") or item.get("changed_date")
+        completed_date = item.get("closed_date") or item.get("state_change_date") or item.get("changed_date")
         desc = item.get("description") or ""
         ac = item.get("acceptance_criteria") or ""
         is_bug = w_type.lower() == "bug"

@@ -35,10 +35,13 @@ import type {
   InsightScope,
   AlertInventoryUploadRequest,
   WorkItemInsights,
+  SprintCommitRequest,
+  SprintCommitResponse,
   SprintPlan,
   SprintPlanRequest,
   SprintPlanningSetup,
 } from '../types/api'
+
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 const REVIEW_POLL_MS = 1500
@@ -155,6 +158,13 @@ export const api = {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   }),
+  /** Commit assignments and iteration path to Azure DevOps. */
+  sprintCommit:(payload:SprintCommitRequest)=>request<SprintCommitResponse>('/api/v1/ado/sprint-planning/commit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  }),
+
   milestoneAiSummary:(payload:{sprint_name?:string;team_name?:string;achieved_items:any[];total_stories:number;closed_stories_count:number;total_delivered_hours:number})=>{
     return request<MilestoneAiSummaryResponse>('/api/v1/sprint-board/milestone-ai-summary', {
       method: 'POST',

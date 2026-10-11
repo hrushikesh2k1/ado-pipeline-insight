@@ -1,4 +1,12 @@
-import { assignee, buildSprintReport, workItemUrl } from '../utils/sprintReport'
+import {
+  assignee,
+  buildSprintReport,
+  buildTeamDeliverablesReport,
+  calculateSprintBusinessDays,
+  formatSprintMonthYear,
+  prepareMemberDeliverables,
+  workItemUrl,
+} from '../utils/sprintReport'
 import { formatSprintRange, formatWorkDaysRemaining, withListedDates } from '../utils/sprintDates'
 import React, { useState, useEffect, useMemo } from 'react'
 import {
@@ -18,6 +26,7 @@ import {
   Search,
   Settings,
   ShieldAlert,
+  ShieldCheck,
   Star,
   User,
   Users,
@@ -32,13 +41,23 @@ import {
   Check,
   Target,
   CheckCircle,
-  ShieldCheck,
-  Zap,
-  Radio,
-  Cpu,
   AlertCircle,
   Mail,
   Send,
+  Radio,
+  Cpu,
+  Zap,
+  ChevronRight,
+  TrendingDown,
+  TrendingUp,
+  BarChart3,
+  PieChart,
+  BookOpen,
+  Bug,
+  Briefcase,
+  Activity,
+  Save,
+  Trash2,
 } from 'lucide-react'
 import { api } from '../services/api'
 import { usePlugins } from '../context/PluginContext'
@@ -52,6 +71,19 @@ import type {
   AdoMilestoneItem,
   MilestoneAiSummaryResponse
 } from '../types/api'
+import type {
+  DeliverablesReport,
+  DeliverablesReportStatus,
+  PendingDeliverableItem,
+  MemberContributionItem
+} from '../types/deliverables'
+import {
+  buildDeliverablesReport,
+  formatReportDate,
+  isItemClosedInSprint,
+  loadSavedDeliverablesReport,
+  saveDeliverablesReportToStorage
+} from '../utils/deliverablesReport'
 
 interface SprintBoardPageProps {
   organization: string
@@ -64,8 +96,53 @@ interface SprintBoardPageProps {
   theme?: 'dark' | 'light'
 }
 
-type SubTab = 'Taskboard' | 'Milestone' | 'Backlog' | 'Capacity' | 'Analytics'
+type SubTab = 'Taskboard' | 'Deliverables' | 'Milestone' | 'Backlog' | 'Capacity' | 'Analytics'
 type FilterMode = 'all' | 'closed_without_hours' | 'stale_in_review'
+
+// In-memory module cache so sprint board data persists across navigation transitions and tab switches
+const sprintBoardCache = new Map<string, AdoSprintBoardResponse>()
+const teamsCache = new Map<string, AdoTeam[]>()
+const sprintsCache = new Map<string, AdoIteration[]>()
+
+const SPRINT_CACHE_KEY = (org: string, project: string, teamId: string, iterationId?: string): string => {
+  return `${(org || '').toLowerCase()}:${(project || '').toLowerCase()}:${(teamId || '').toLowerCase()}:${(iterationId || '').toLowerCase()}`
+}
+
+const TEAMS_CACHE_KEY = (org: string, project: string): string => {
+  return `${(org || '').toLowerCase()}:${(project || '').toLowerCase()}`
+}
+
+function getStoredBoardData(org: string, project: string, teamId: string, iterationId?: string): AdoSprintBoardResponse | null {
+  if (!org || !project || !teamId) return null
+  const key = SPRINT_CACHE_KEY(org, project, teamId, iterationId)
+  if (sprintBoardCache.has(key)) return sprintBoardCache.get(key)!
+  try {
+    const raw = sessionStorage.getItem(`ado_board_cache_${key}`)
+    if (raw) {
+      const parsed = JSON.parse(raw) as AdoSprintBoardResponse
+      sprintBoardCache.set(key, parsed)
+      return parsed
+    }
+  } catch {}
+  return null
+}
+
+function storeBoardData(org: string, project: string, teamId: string, iterationId: string | undefined, data: AdoSprintBoardResponse) {
+  if (!org || !project || !teamId || !data) return
+  const key = SPRINT_CACHE_KEY(org, project, teamId, iterationId)
+  sprintBoardCache.set(key, data)
+  if (data.iteration?.id) {
+    const iterKey = SPRINT_CACHE_KEY(org, project, teamId, data.iteration.id)
+    sprintBoardCache.set(iterKey, data)
+  }
+  try {
+    sessionStorage.setItem(`ado_board_cache_${key}`, JSON.stringify(data))
+    if (data.iteration?.id) {
+      const iterKey = SPRINT_CACHE_KEY(org, project, teamId, data.iteration.id)
+      sessionStorage.setItem(`ado_board_cache_${iterKey}`, JSON.stringify(data))
+    }
+  } catch {}
+}
 
 export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
   organization,
@@ -95,9 +172,9 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
   const [copiedToClipboard, setCopiedToClipboard] = useState<boolean>(false)
   const [emailNeedsPaste, setEmailNeedsPaste] = useState<boolean>(false)
 
-  // Auto-switch away from Milestone if milestone plugin is disabled
+  // Auto-switch away from Deliverables/Milestone if milestone plugin is disabled
   useEffect(() => {
-    if (!showMilestone && activeSubTab === 'Milestone') {
+    if (!showMilestone && (activeSubTab === 'Deliverables' || activeSubTab === 'Milestone')) {
       setActiveSubTab('Taskboard')
     }
   }, [showMilestone, activeSubTab])
@@ -113,17 +190,23 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
   }, [showClosedWithoutHours, showStaleInReview])
 
   // Teams & Iterations
-  const [teams, setTeams] = useState<AdoTeam[]>([])
   const [selectedTeamId, setSelectedTeamId] = useState<string>(() => {
     return localStorage.getItem('ado_sprint_selected_team') || ''
   })
-  const [iterations, setIterations] = useState<AdoIteration[]>([])
+  const [teams, setTeams] = useState<AdoTeam[]>(() => {
+    return teamsCache.get(TEAMS_CACHE_KEY(organization, project)) || []
+  })
   const [selectedIterationId, setSelectedIterationId] = useState<string>(() => {
     return localStorage.getItem('ado_sprint_selected_iteration') || ''
   })
+  const [iterations, setIterations] = useState<AdoIteration[]>(() => {
+    return sprintsCache.get(SPRINT_CACHE_KEY(organization, project, selectedTeamId || '')) || []
+  })
 
   // Sprint Board Data
-  const [boardData, setBoardData] = useState<AdoSprintBoardResponse | null>(null)
+  const [boardData, setBoardData] = useState<AdoSprintBoardResponse | null>(() => {
+    return getStoredBoardData(organization, project, selectedTeamId, selectedIterationId)
+  })
   const [isLoadingTeams, setIsLoadingTeams] = useState(false)
   const [isLoadingSprints, setIsLoadingSprints] = useState(false)
   const [isLoadingBoard, setIsLoadingBoard] = useState(false)
@@ -137,11 +220,45 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
   const [modalActiveTab, setModalActiveTab] = useState<'hours' | 'review'>('hours')
   const [isStarred, setIsStarred] = useState(true)
 
-  // Milestone Feature States
+  // Backlog View State
+  const [expandedStoryIds, setExpandedStoryIds] = useState<Set<number>>(new Set())
+  const [backlogSearch, setBacklogSearch] = useState<string>('')
+  const [backlogTypeFilter, setBacklogTypeFilter] = useState<string>('all')
+  const [backlogStateFilter, setBacklogStateFilter] = useState<string>('all')
+  const [backlogAssigneeFilter, setBacklogAssigneeFilter] = useState<string>('all')
+  const [backlogTagFilter, setBacklogTagFilter] = useState<string>('all')
+
+  // Capacity Planning State
+  const [capacityMembers, setCapacityMembers] = useState<{
+    id: string
+    name: string
+    avatar?: string
+    activity: string
+    capacity_per_day: number
+    days_off: number
+  }[]>([])
+  const [newMemberName, setNewMemberName] = useState<string>('')
+  const [capacitySavedNotice, setCapacitySavedNotice] = useState<boolean>(false)
+
+  // Analytics View State
+  const [analyticsMetric, setAnalyticsMetric] = useState<'hours' | 'items'>('hours')
+  const [hoveredDayIndex, setHoveredDayIndex] = useState<number | null>(null)
+
+  // Deliverables Handover Report Center States
+  const [deliverablesReport, setDeliverablesReport] = useState<DeliverablesReport | null>(() => {
+    return loadSavedDeliverablesReport(organization, project, selectedTeamId, selectedIterationId)
+  })
+  const [isRegeneratingDeliverables, setIsRegeneratingDeliverables] = useState<boolean>(false)
+  const [deliverablesActiveSection, setDeliverablesActiveSection] = useState<
+    'completed' | 'pending' | 'members' | 'streams' | 'hygiene'
+  >('completed')
   const [milestoneCategoryFilter, setMilestoneCategoryFilter] = useState<'all' | 'features' | 'bugs'>('all')
   const [selectedMilestoneStream, setSelectedMilestoneStream] = useState<string>('all')
   const [milestoneSearch, setMilestoneSearch] = useState<string>('')
-  const [aiSummary, setAiSummary] = useState<MilestoneAiSummaryResponse | null>(null)
+  const [aiSummary, setAiSummary] = useState<MilestoneAiSummaryResponse | null>(() => {
+    const saved = loadSavedDeliverablesReport(organization, project, selectedTeamId, selectedIterationId)
+    return saved?.aiSummary || null
+  })
   const [isGeneratingAi, setIsGeneratingAi] = useState<boolean>(false)
   const [copiedSummary, setCopiedSummary] = useState<boolean>(false)
 
@@ -158,11 +275,19 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       setTeams([])
       return
     }
+    const cachedTeams = teamsCache.get(TEAMS_CACHE_KEY(organization, project))
+    if (cachedTeams && cachedTeams.length > 0 && teams.length === 0) {
+      setTeams(cachedTeams)
+    }
+
     let isCurrent = true
-    setIsLoadingTeams(true)
+    if (!cachedTeams || cachedTeams.length === 0) {
+      setIsLoadingTeams(true)
+    }
     api.teams(organization, project, pat)
       .then(res => {
         if (!isCurrent) return
+        teamsCache.set(TEAMS_CACHE_KEY(organization, project), res)
         setTeams(res)
         if (res.length > 0) {
           const match = res.find(t => t.id === selectedTeamId || t.name.toLowerCase() === selectedTeamId.toLowerCase())
@@ -188,11 +313,19 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       setIterations([])
       return
     }
+    const cachedSprints = sprintsCache.get(SPRINT_CACHE_KEY(organization, project, selectedTeamId))
+    if (cachedSprints && cachedSprints.length > 0 && iterations.length === 0) {
+      setIterations(cachedSprints)
+    }
+
     let isCurrent = true
-    setIsLoadingSprints(true)
+    if (!cachedSprints || cachedSprints.length === 0) {
+      setIsLoadingSprints(true)
+    }
     api.sprints(organization, project, selectedTeamId, pat)
       .then(res => {
         if (!isCurrent) return
+        sprintsCache.set(SPRINT_CACHE_KEY(organization, project, selectedTeamId), res)
         setIterations(res)
         if (res.length > 0) {
           const match = res.find(it => it.id === selectedIterationId || it.name === selectedIterationId)
@@ -219,11 +352,18 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       return
     }
     const iterToUse = typeof overrideIterationId === 'string' ? overrideIterationId : selectedIterationId
-    setIsLoadingBoard(true)
+    const cached = getStoredBoardData(organization, project, selectedTeamId, iterToUse)
+    if (cached) {
+      setBoardData(cached)
+    }
+    if (!cached && !boardData) {
+      setIsLoadingBoard(true)
+    }
     setErrorMessage(null)
 
     api.sprintBoard(organization, project, selectedTeamId, iterToUse || undefined, pat)
       .then(res => {
+        storeBoardData(organization, project, selectedTeamId, iterToUse, res)
         setBoardData(res)
         if (res.iteration?.id) {
           setSelectedIterationId(res.iteration.id)
@@ -231,7 +371,11 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         }
       })
       .catch(err => {
-        setErrorMessage(err.message || 'Failed to load sprint board')
+        if (!cached && !boardData) {
+          setErrorMessage(err.message || 'Failed to load sprint board')
+        } else {
+          console.warn('Background board refresh failed:', err)
+        }
       })
       .finally(() => {
         setIsLoadingBoard(false)
@@ -247,6 +391,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       let teamIdToUse = selectedTeamId
       if (!teamIdToUse) {
         const teamList = await api.teams(organization, project, pat)
+        teamsCache.set(TEAMS_CACHE_KEY(organization, project), teamList)
         setTeams(teamList)
         if (teamList.length > 0) {
           teamIdToUse = teamList[0].id
@@ -257,6 +402,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       if (teamIdToUse) {
         setIsLoadingSprints(true)
         const sprintList = await api.sprints(organization, project, teamIdToUse, pat)
+        sprintsCache.set(SPRINT_CACHE_KEY(organization, project, teamIdToUse), sprintList)
         setIterations(sprintList)
         setIsLoadingSprints(false)
 
@@ -271,6 +417,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         }
 
         const data = await api.sprintBoard(organization, project, teamIdToUse, targetIterationId || undefined, pat)
+        storeBoardData(organization, project, teamIdToUse, targetIterationId, data)
         setBoardData(data)
         if (data.iteration?.id) {
           setSelectedIterationId(data.iteration.id)
@@ -289,17 +436,152 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
     fetchBoardData()
   }, [organization, project, selectedTeamId, pat])
 
+  // Synchronize Deliverables report from storage or fresh boardData
+  useEffect(() => {
+    if (!organization || !project || !selectedTeamId) return
+    const saved = loadSavedDeliverablesReport(organization, project, selectedTeamId, selectedIterationId)
+
+    // Check if boardData belongs to the currently selected sprint iteration
+    const isMatchingBoardData = Boolean(
+      boardData &&
+      boardData.iteration &&
+      (!selectedIterationId || boardData.iteration.id === selectedIterationId)
+    )
+
+    if (saved) {
+      // Discard report if it has a different iterationId
+      if (selectedIterationId && saved.iterationId && saved.iterationId !== selectedIterationId) {
+        setDeliverablesReport(null)
+        return
+      }
+
+      // If matching boardData is loaded, verify the saved report does not contain foreign work items from another sprint,
+      // and verify that it is not missing any achieved items that are present in the fresh boardData
+      if (isMatchingBoardData && boardData) {
+        const boardWorkItemIds = new Set(boardData.work_items.map(w => w.id))
+        const savedDeliverableIds = new Set(saved.completedDeliverables.map(item => item.id))
+        const hasForeignItems =
+          saved.completedDeliverables.length > 0 &&
+          boardData.work_items.length > 0 &&
+          saved.completedDeliverables.some(item => !boardWorkItemIds.has(item.id))
+
+        const achievedItems = boardData.milestone?.achieved_items || []
+        const isMissingAchievedItems =
+          achievedItems.length > 0 &&
+          achievedItems.some((a: any) => !savedDeliverableIds.has(a.id))
+
+        if (hasForeignItems || isMissingAchievedItems) {
+          // Rebuild fresh report from authentic boardData
+          const cleanSprint = formatSprintName(boardData.iteration?.name || currentIteration?.name, boardData.iteration?.path || currentIteration?.path)
+          const fresh = buildDeliverablesReport(
+            boardData,
+            organization,
+            project,
+            selectedTeamId,
+            boardData.iteration?.id || selectedIterationId,
+            cleanSprint,
+            'fresh'
+          )
+          saveDeliverablesReportToStorage(fresh)
+          setDeliverablesReport(fresh)
+          return
+        }
+      }
+
+      setDeliverablesReport(saved)
+      if (saved.aiSummary && !aiSummary) {
+        setAiSummary(saved.aiSummary)
+      }
+    } else if (isMatchingBoardData && boardData) {
+      const cleanSprint = formatSprintName(boardData.iteration?.name || currentIteration?.name, boardData.iteration?.path || currentIteration?.path)
+      const fresh = buildDeliverablesReport(
+        boardData,
+        organization,
+        project,
+        selectedTeamId,
+        boardData.iteration?.id || selectedIterationId,
+        cleanSprint,
+        'fresh'
+      )
+      saveDeliverablesReportToStorage(fresh)
+      setDeliverablesReport(fresh)
+    } else if (!saved) {
+      setDeliverablesReport(null)
+    }
+  }, [organization, project, selectedTeamId, selectedIterationId, boardData])
+
+  // Explicit user action: Regenerate fresh ADO Deliverables handover data
+  const handleRegenerateDeliverables = async () => {
+    if (!organization || !project || !selectedTeamId) return
+    setIsRegeneratingDeliverables(true)
+    try {
+      const freshBoard = await api.sprintBoard(
+        organization,
+        project,
+        selectedTeamId,
+        selectedIterationId || undefined,
+        pat
+      )
+      storeBoardData(organization, project, selectedTeamId, selectedIterationId, freshBoard)
+      setBoardData(freshBoard)
+
+      const cleanSprint = formatSprintName(currentIteration?.name, currentIteration?.path)
+      const freshReport = buildDeliverablesReport(
+        freshBoard,
+        organization,
+        project,
+        selectedTeamId,
+        selectedIterationId,
+        cleanSprint,
+        'fresh',
+        deliverablesReport
+      )
+      saveDeliverablesReportToStorage(freshReport)
+      setDeliverablesReport(freshReport)
+    } catch (err: any) {
+      const errMsg = err?.message || 'Failed to refresh ADO sprint board data'
+      console.warn('Deliverables regeneration failed:', errMsg)
+      if (deliverablesReport) {
+        const updated = {
+          ...deliverablesReport,
+          status: 'regenerate_failed' as DeliverablesReportStatus,
+          lastRegenerateError: errMsg
+        }
+        saveDeliverablesReportToStorage(updated)
+        setDeliverablesReport(updated)
+      }
+    } finally {
+      setIsRegeneratingDeliverables(false)
+    }
+  }
+
   // Handle Team change
   const handleTeamChange = (teamId: string) => {
     setSelectedTeamId(teamId)
     localStorage.setItem('ado_sprint_selected_team', teamId)
     setSelectedIterationId('')
+    const cached = getStoredBoardData(organization, project, teamId, '')
+    if (cached) {
+      setBoardData(cached)
+    }
+    const saved = loadSavedDeliverablesReport(organization, project, teamId, '')
+    if (saved) {
+      setDeliverablesReport(saved)
+    }
   }
 
   // Handle Sprint change
   const handleIterationChange = (iterationId: string) => {
     setSelectedIterationId(iterationId)
     localStorage.setItem('ado_sprint_selected_iteration', iterationId)
+    const cached = getStoredBoardData(organization, project, selectedTeamId, iterationId)
+    if (cached && cached.iteration?.id === iterationId) {
+      setBoardData(cached)
+    } else {
+      setBoardData(null)
+    }
+    const saved = loadSavedDeliverablesReport(organization, project, selectedTeamId, iterationId)
+    setDeliverablesReport(saved)
     fetchBoardData(iterationId)
   }
 
@@ -473,7 +755,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       storyTypes.includes(w.work_item_type.toLowerCase())
     )
     const closedStories = storyItems.filter(w =>
-      closedStates.includes(w.state.toLowerCase())
+      isItemClosedInSprint(w, boardData.iteration || currentIteration)
     )
 
     let totalDeliveredHours = 0
@@ -623,8 +905,11 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
   }, [boardData])
 
   const filteredMilestoneItems = useMemo(() => {
-    if (!computedMilestone) return []
-    let list = computedMilestone.achieved_items
+    const iterToUse = boardData?.iteration || currentIteration
+    const rawItems = deliverablesReport?.completedDeliverables || computedMilestone?.achieved_items || []
+    const sourceItems = rawItems.filter(item => isItemClosedInSprint(item, iterToUse))
+    if (sourceItems.length === 0) return []
+    let list = sourceItems
 
     if (selectedMilestoneStream !== 'all') {
       list = list.filter(i => (i.milestone_stream || '').toLowerCase() === selectedMilestoneStream.toLowerCase())
@@ -650,7 +935,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
     }
 
     return list
-  }, [computedMilestone, selectedMilestoneStream, milestoneCategoryFilter, milestoneSearch])
+  }, [deliverablesReport, computedMilestone, selectedMilestoneStream, milestoneCategoryFilter, milestoneSearch])
 
   const handleGenerateAiMilestone = async () => {
     if (!computedMilestone) return
@@ -685,6 +970,366 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
     setCopiedSummary(true)
     setTimeout(() => setCopiedSummary(false), 2000)
   }
+
+  // Initialize all stories as expanded whenever userStories changes
+  useEffect(() => {
+    if (userStories.length > 0) {
+      setExpandedStoryIds(new Set(userStories.map(s => s.id)))
+    }
+  }, [userStories])
+
+  // Story expand/collapse handlers
+  const toggleStoryExpand = (storyId: number) => {
+    setExpandedStoryIds(prev => {
+      const next = new Set(prev)
+      if (next.has(storyId)) next.delete(storyId)
+      else next.add(storyId)
+      return next
+    })
+  }
+
+  const expandAllStories = () => {
+    setExpandedStoryIds(new Set(userStories.map(s => s.id)))
+  }
+
+  const collapseAllStories = () => {
+    setExpandedStoryIds(new Set())
+  }
+
+  // Initialize capacity members
+  useEffect(() => {
+    const key = `ado_sprint_capacity_${selectedTeamId || 'default'}_${selectedIterationId || 'current'}`
+    try {
+      const saved = localStorage.getItem(key)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCapacityMembers(parsed)
+          return
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (uniqueAssignees.length > 0) {
+      const initial = uniqueAssignees.map((name, idx) => ({
+        id: `cap-${idx}-${name.toLowerCase().replace(/\s+/g, '-')}`,
+        name,
+        activity: 'Development',
+        capacity_per_day: 6,
+        days_off: 0
+      }))
+      setCapacityMembers(initial)
+    } else {
+      setCapacityMembers([])
+    }
+  }, [uniqueAssignees, selectedTeamId, selectedIterationId])
+
+  const saveCapacitySettings = (updated: typeof capacityMembers) => {
+    setCapacityMembers(updated)
+    const key = `ado_sprint_capacity_${selectedTeamId || 'default'}_${selectedIterationId || 'current'}`
+    try {
+      localStorage.setItem(key, JSON.stringify(updated))
+      setCapacitySavedNotice(true)
+      setTimeout(() => setCapacitySavedNotice(false), 2500)
+    } catch {
+      // ignore
+    }
+  }
+
+  const handleUpdateMemberCapacity = (id: string, field: 'activity' | 'capacity_per_day' | 'days_off', value: any) => {
+    const updated = capacityMembers.map(m => {
+      if (m.id === id) {
+        return { ...m, [field]: value }
+      }
+      return m
+    })
+    saveCapacitySettings(updated)
+  }
+
+  const handleAddCapacityMember = () => {
+    if (!newMemberName.trim()) return
+    const name = newMemberName.trim()
+    const newMember = {
+      id: `cap-custom-${Date.now()}`,
+      name,
+      activity: 'Development',
+      capacity_per_day: 6,
+      days_off: 0
+    }
+    const updated = [...capacityMembers, newMember]
+    saveCapacitySettings(updated)
+    setNewMemberName('')
+  }
+
+  const handleRemoveCapacityMember = (id: string) => {
+    const updated = capacityMembers.filter(m => m.id !== id)
+    saveCapacitySettings(updated)
+  }
+
+  // Product Backlog (items not on sprint board)
+  const backlogItems = useMemo(() => {
+    return boardData?.backlog_items || []
+  }, [boardData])
+
+  const filteredBacklogItems = useMemo(() => {
+    let list = backlogItems
+
+    if (backlogTypeFilter !== 'all') {
+      list = list.filter(item => {
+        const t = item.work_item_type.toLowerCase()
+        if (backlogTypeFilter === 'stories') return t.includes('story') || t.includes('backlog') || t.includes('requirement')
+        if (backlogTypeFilter === 'bugs') return t.includes('bug')
+        if (backlogTypeFilter === 'features') return t.includes('feature')
+        return true
+      })
+    }
+
+    if (backlogStateFilter !== 'all') {
+      list = list.filter(item => item.state.toLowerCase() === backlogStateFilter.toLowerCase())
+    }
+
+    if (backlogAssigneeFilter !== 'all') {
+      if (backlogAssigneeFilter === 'unassigned') {
+        list = list.filter(item => !item.assigned_to_name)
+      } else {
+        list = list.filter(item => item.assigned_to_name?.toLowerCase() === backlogAssigneeFilter.toLowerCase())
+      }
+    }
+
+    if (backlogTagFilter !== 'all') {
+      list = list.filter(item => (item.tags || '').toLowerCase().includes(backlogTagFilter.toLowerCase()))
+    }
+
+    if (backlogSearch.trim()) {
+      const q = backlogSearch.toLowerCase()
+      list = list.filter(item =>
+        item.title.toLowerCase().includes(q) ||
+        String(item.id).includes(q) ||
+        item.work_item_type.toLowerCase().includes(q) ||
+        (item.assigned_to_name || '').toLowerCase().includes(q) ||
+        (item.tags || '').toLowerCase().includes(q) ||
+        (item.area_path || '').toLowerCase().includes(q) ||
+        (item.iteration_path || '').toLowerCase().includes(q)
+      )
+    }
+
+    return list
+  }, [backlogItems, backlogTypeFilter, backlogStateFilter, backlogAssigneeFilter, backlogTagFilter, backlogSearch])
+
+  const backlogStats = useMemo(() => {
+    const totalCount = backlogItems.length
+    let totalPoints = 0
+    let businessCount = 0
+    let archCount = 0
+    const stateCounts: Record<string, number> = {}
+    const typeCounts: Record<string, number> = { 'User Story': 0, 'Bug': 0, 'Feature': 0, 'Other': 0 }
+
+    backlogItems.forEach(item => {
+      const pts = item.story_points || (item.original_estimate != null && item.original_estimate <= 20 ? item.original_estimate : 0)
+      totalPoints += pts
+
+      const va = (item.value_area || '').toLowerCase()
+      if (va.includes('arch')) archCount++
+      else businessCount++
+
+      const s = item.state || 'New'
+      stateCounts[s] = (stateCounts[s] || 0) + 1
+
+      const t = item.work_item_type.toLowerCase()
+      if (t.includes('story') || t.includes('backlog') || t.includes('requirement')) typeCounts['User Story']++
+      else if (t.includes('bug')) typeCounts['Bug']++
+      else if (t.includes('feature')) typeCounts['Feature']++
+      else typeCounts['Other']++
+    })
+
+    return {
+      totalCount,
+      totalPoints,
+      businessCount,
+      archCount,
+      stateCounts,
+      typeCounts,
+      avgSize: totalCount > 0 ? Math.round((totalPoints / totalCount) * 10) / 10 : 0
+    }
+  }, [backlogItems])
+
+  // Backlog & Analytics Metrics Computations
+  const sprintStats = useMemo(() => {
+    const allItems = boardData?.work_items || []
+    let totalOriginal = 0
+    let totalRemaining = 0
+    let totalCompleted = 0
+    let totalPoints = 0
+    let completedPoints = 0
+
+    const stateDistribution: Record<string, { count: number; hours: number }> = {
+      'To Do': { count: 0, hours: 0 },
+      'In Progress': { count: 0, hours: 0 },
+      'In Review': { count: 0, hours: 0 },
+      'Done': { count: 0, hours: 0 },
+    }
+
+    const typeDistribution: Record<string, number> = {
+      'User Story': 0,
+      'Bug': 0,
+      'Task': 0,
+      'Feature': 0,
+      'Other': 0,
+    }
+
+    const memberEffort: Record<string, { completed: number; remaining: number; total: number }> = {}
+
+    allItems.forEach(item => {
+      const rem = item.remaining_work || 0
+      const comp = item.completed_work || 0
+      const orig = item.original_estimate || 0
+
+      totalOriginal += orig
+      totalRemaining += rem
+      totalCompleted += comp
+
+      const t = item.work_item_type.toLowerCase()
+      if (t.includes('story') || t.includes('backlog')) typeDistribution['User Story'] += 1
+      else if (t.includes('bug')) typeDistribution['Bug'] += 1
+      else if (t.includes('task')) typeDistribution['Task'] += 1
+      else if (t.includes('feature')) typeDistribution['Feature'] += 1
+      else typeDistribution['Other'] += 1
+
+      const s = item.state.toLowerCase()
+      let category = 'To Do'
+      if (s === 'in progress' || s === 'active') category = 'In Progress'
+      else if (s === 'in review' || s === 'resolved') category = 'In Review'
+      else if (s === 'done' || s === 'closed' || s === 'completed') category = 'Done'
+
+      stateDistribution[category].count += 1
+      stateDistribution[category].hours += (comp + rem)
+
+      const member = item.assigned_to_name || 'Unassigned'
+      if (!memberEffort[member]) memberEffort[member] = { completed: 0, remaining: 0, total: 0 }
+      memberEffort[member].completed += comp
+      memberEffort[member].remaining += rem
+      memberEffort[member].total += (comp + rem)
+    })
+
+    userStories.forEach(s => {
+      const pts = (s as any).story_points || (s as any).points || (s.original_estimate != null && s.original_estimate <= 20 ? s.original_estimate : 3)
+      totalPoints += pts
+      const isDone = ['done', 'closed', 'completed', 'resolved'].includes(s.state.toLowerCase())
+      if (isDone) completedPoints += pts
+    })
+
+    const workingDays = Math.max(1, boardData?.working_days_remaining || 10)
+    const requiredDailyBurn = Math.round((totalRemaining / workingDays) * 10) / 10
+    const totalSprintWork = totalCompleted + totalRemaining
+    const percentDelivered = totalSprintWork > 0 ? Math.round((totalCompleted / totalSprintWork) * 100) : 0
+
+    let healthStatus: 'On Track' | 'At Risk' | 'Behind Schedule' = 'On Track'
+    if (percentDelivered < 40 && workingDays <= 4) healthStatus = 'Behind Schedule'
+    else if (percentDelivered < 60 && workingDays <= 5) healthStatus = 'At Risk'
+
+    return {
+      totalOriginal: Math.round(totalOriginal * 10) / 10,
+      totalRemaining: Math.round(totalRemaining * 10) / 10,
+      totalCompleted: Math.round(totalCompleted * 10) / 10,
+      totalSprintWork: Math.round(totalSprintWork * 10) / 10,
+      totalPoints,
+      completedPoints,
+      percentDelivered,
+      workingDays,
+      requiredDailyBurn,
+      healthStatus,
+      stateDistribution,
+      typeDistribution,
+      memberEffort,
+    }
+  }, [boardData, userStories])
+
+  // Capacity Stats Computation
+  const capacityStats = useMemo(() => {
+    const workingDays = Math.max(1, boardData?.working_days_remaining || 10)
+    let totalTeamCapacity = 0
+    let totalAssignedHours = 0
+
+    const activityCapacity: Record<string, { capacity: number; assigned: number }> = {
+      'Development': { capacity: 0, assigned: 0 },
+      'Testing': { capacity: 0, assigned: 0 },
+      'Design': { capacity: 0, assigned: 0 },
+      'Documentation': { capacity: 0, assigned: 0 },
+      'Requirements': { capacity: 0, assigned: 0 },
+      'Deployment': { capacity: 0, assigned: 0 },
+    }
+
+    const memberDetails = capacityMembers.map(m => {
+      const availableDays = Math.max(0, workingDays - (m.days_off || 0))
+      const individualCap = Math.round(availableDays * (m.capacity_per_day || 6) * 10) / 10
+      totalTeamCapacity += individualCap
+
+      const assignedTasks = (boardData?.work_items || []).filter(w => w.assigned_to_name?.toLowerCase() === m.name.toLowerCase())
+      const assignedHours = Math.round(assignedTasks.reduce((sum, t) => sum + (t.remaining_work || 0), 0) * 10) / 10
+      const completedHours = Math.round(assignedTasks.reduce((sum, t) => sum + (t.completed_work || 0), 0) * 10) / 10
+      totalAssignedHours += assignedHours
+
+      const act = m.activity || 'Development'
+      if (!activityCapacity[act]) activityCapacity[act] = { capacity: 0, assigned: 0 }
+      activityCapacity[act].capacity += individualCap
+      activityCapacity[act].assigned += assignedHours
+
+      const utilization = individualCap > 0 ? Math.round((assignedHours / individualCap) * 100) : 0
+      const isOverloaded = assignedHours > individualCap
+
+      return {
+        ...m,
+        availableDays,
+        individualCap,
+        assignedHours,
+        completedHours,
+        utilization,
+        isOverloaded,
+      }
+    })
+
+    const teamUtilization = totalTeamCapacity > 0 ? Math.round((totalAssignedHours / totalTeamCapacity) * 100) : 0
+
+    return {
+      workingDays,
+      totalTeamCapacity: Math.round(totalTeamCapacity * 10) / 10,
+      totalAssignedHours: Math.round(totalAssignedHours * 10) / 10,
+      teamUtilization,
+      activityCapacity,
+      memberDetails,
+    }
+  }, [capacityMembers, boardData])
+
+  // Burndown Data Points Computation
+  const burndownData = useMemo(() => {
+    const daysTotal = 10
+    const startEffort = analyticsMetric === 'hours' ? (sprintStats.totalSprintWork || 120) : (boardData?.work_items.length || 24)
+    const currentRemaining = analyticsMetric === 'hours' ? sprintStats.totalRemaining : (boardData?.work_items.filter(w => !['done', 'closed', 'completed', 'resolved'].includes(w.state.toLowerCase())).length || 8)
+    const currentCompleted = analyticsMetric === 'hours' ? sprintStats.totalCompleted : (boardData?.work_items.filter(w => ['done', 'closed', 'completed', 'resolved'].includes(w.state.toLowerCase())).length || 16)
+
+    const points = []
+    for (let day = 1; day <= daysTotal; day++) {
+      const ideal = Math.max(0, Math.round((startEffort - (startEffort / (daysTotal - 1)) * (day - 1)) * 10) / 10)
+      let actual = null
+      let completed = null
+      if (day <= 6) {
+        const factor = (day - 1) / 5
+        actual = Math.max(0, Math.round((startEffort - (startEffort - currentRemaining) * factor) * 10) / 10)
+        completed = Math.round((currentCompleted * factor) * 10) / 10
+      }
+
+      points.push({
+        day,
+        label: `Day ${day}`,
+        ideal,
+        actual,
+        completed,
+      })
+    }
+    return points
+  }, [sprintStats, analyticsMetric, boardData])
 
   return (
     <div className="sprintBoardContainer">
@@ -817,24 +1462,30 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         </div>
       </div>
 
-      {/* 2. Sub Navigation Tabs: Taskboard, Milestone, Backlog, Capacity, Analytics */}
+      {/* 2. Sub Navigation Tabs: Taskboard, Deliverables, Backlog, Capacity, Analytics */}
       <div className="adoSubNavTabs">
-        {(['Taskboard', 'Milestone', 'Backlog', 'Capacity', 'Analytics'] as SubTab[])
-          .filter(tab => tab !== 'Milestone' || showMilestone)
-          .map(tab => (
-          <button
-            key={tab}
-            type="button"
-            className={`adoSubNavTab ${activeSubTab === tab ? 'active' : ''}`}
-            onClick={() => setActiveSubTab(tab)}
-          >
-            {tab === 'Milestone' && <Trophy size={13} style={{ marginRight: '5px' }} />}
-            {tab === 'Milestone' ? 'Milestone' : tab}
-            {tab === 'Milestone' && computedMilestone && computedMilestone.closed_stories_count > 0 && (
-              <span className="adoTabBadge">{computedMilestone.closed_stories_count}</span>
-            )}
-          </button>
-        ))}
+        {(['Taskboard', 'Deliverables', 'Backlog', 'Capacity', 'Analytics'] as SubTab[])
+          .filter(tab => tab !== 'Deliverables' || showMilestone)
+          .map(tab => {
+            const count = tab === 'Deliverables'
+              ? deliverablesReport?.capacityEffortSummary?.closedStoriesCount ?? computedMilestone?.closed_stories_count ?? 0
+              : 0
+            const isActive = activeSubTab === tab || (tab === 'Deliverables' && (activeSubTab as any) === 'Milestone')
+            return (
+              <button
+                key={tab}
+                type="button"
+                className={`adoSubNavTab ${isActive ? 'active' : ''}`}
+                onClick={() => setActiveSubTab(tab)}
+              >
+                {tab === 'Deliverables' && <Trophy size={13} style={{ marginRight: '5px' }} />}
+                {tab}
+                {tab === 'Deliverables' && count > 0 && (
+                  <span className="adoTabBadge">{count}</span>
+                )}
+              </button>
+            )
+          })}
       </div>
 
       {/* 3. Secondary Toolbar (Sprint selector, Person filter, Burndown & Work days remaining) */}
@@ -1029,33 +1680,33 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       {/* 5. Main Taskboard or Other SubTabs */}
       {activeSubTab === 'Taskboard' ? (
         <div className="adoTaskboardWrapper">
-          {/* Milestone Quick Teaser Banner on Taskboard */}
-          {computedMilestone && computedMilestone.total_stories > 0 && (
-            <div className="adoTaskboardMilestoneBar" onClick={() => setActiveSubTab('Milestone')}>
+          {/* Deliverables Quick Teaser Banner on Taskboard */}
+          {(deliverablesReport || (computedMilestone && computedMilestone.total_stories > 0)) && (
+            <div className="adoTaskboardMilestoneBar" onClick={() => setActiveSubTab('Deliverables')}>
               <div className="adoMilestoneBarLeft">
                 <Trophy size={15} color="#f59e0b" />
                 <span>
-                  <b>Sprint Milestone:</b> <b>{computedMilestone.closed_stories_count}</b> of <b>{computedMilestone.total_stories}</b> stories closed ({computedMilestone.completion_rate_pct}% delivered)
+                  <b>Sprint Deliverables:</b> <b>{deliverablesReport?.capacityEffortSummary?.closedStoriesCount ?? computedMilestone?.closed_stories_count ?? 0}</b> of <b>{deliverablesReport?.capacityEffortSummary?.totalStories ?? computedMilestone?.total_stories ?? 0}</b> stories closed ({deliverablesReport?.capacityEffortSummary?.completionRatePct ?? computedMilestone?.completion_rate_pct ?? 0}% delivered)
                 </span>
-                {computedMilestone.total_delivered_hours > 0 && (
+                {((deliverablesReport?.capacityEffortSummary?.totalDeliveredHours ?? computedMilestone?.total_delivered_hours ?? 0) > 0) && (
                   <span className="adoMilestoneHoursPill">
-                    ⚡ {computedMilestone.total_delivered_hours}h completed
+                    ⚡ {deliverablesReport?.capacityEffortSummary?.totalDeliveredHours ?? computedMilestone?.total_delivered_hours}h verified
                   </span>
                 )}
               </div>
               <button type="button" className="adoMilestoneViewBtn">
-                View Sprint Milestone Deliverables &rarr;
+                View Sprint Deliverables Handover &rarr;
               </button>
             </div>
           )}
-          {isLoadingBoard && (
+          {isLoadingBoard && !boardData && (
             <div className="adoBoardLoading">
               <RefreshCw size={24} className="spin" color="#0078d4" />
               <span>Loading Sprint Tasks...</span>
             </div>
           )}
 
-          {errorMessage && (
+          {errorMessage && !boardData && (
             <div className="adoBoardError">
               <AlertTriangle size={18} color="#ef4444" />
               <span>{errorMessage}</span>
@@ -1063,7 +1714,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
             </div>
           )}
 
-          {!isLoadingBoard && (
+          {(!isLoadingBoard || boardData) && (
             <div className="adoTaskboardTable">
               {/* Column Headers */}
               <div className="adoTaskboardHeaderRow">
@@ -1306,34 +1957,100 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
             </div>
           )}
         </div>
-      ) : activeSubTab === 'Milestone' ? (
+      ) : (activeSubTab === 'Deliverables' || (activeSubTab as any) === 'Milestone') ? (
         <div className="adoMilestoneContainer">
-          {/* Milestone Overview Hero Banner */}
+          {/* Deliverables Status Line with Saved/Fresh/Failed Status & Regenerate Button */}
+          <div className="adoDeliverablesStatusLine">
+            <div className="adoDeliverablesStatusLeft">
+              {deliverablesReport ? (
+                <>
+                  <span
+                    className={`adoReportStatusPill ${
+                      deliverablesReport.status === 'regenerate_failed'
+                        ? 'warning'
+                        : deliverablesReport.status === 'saved'
+                        ? 'saved'
+                        : 'success'
+                    }`}
+                  >
+                    {deliverablesReport.status === 'regenerate_failed' ? (
+                      <>
+                        <AlertTriangle size={13} />
+                        <span>Regeneration failed, showing last saved</span>
+                      </>
+                    ) : deliverablesReport.status === 'saved' ? (
+                      <>
+                        <Clock size={13} />
+                        <span>Saved report</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle size={13} />
+                        <span>Freshly generated</span>
+                      </>
+                    )}
+                  </span>
+                  <span style={{ color: '#a1a1aa', fontSize: '12px' }}>
+                    Generated at{' '}
+                    <strong style={{ color: '#f4f4f5' }}>
+                      {formatReportDate(deliverablesReport.generatedAt)}
+                    </strong>
+                    {deliverablesReport.lastRegenerateError && (
+                      <span style={{ color: '#f87171', marginLeft: '6px' }}>
+                        ({deliverablesReport.lastRegenerateError})
+                      </span>
+                    )}
+                  </span>
+                </>
+              ) : (
+                <span style={{ color: '#a1a1aa', fontSize: '12px' }}>
+                  No saved report for this sprint yet. Click Regenerate to fetch from ADO.
+                </span>
+              )}
+            </div>
+
+            <div className="adoDeliverablesStatusRight">
+              <button
+                type="button"
+                className="adoRegenerateBtn"
+                onClick={handleRegenerateDeliverables}
+                disabled={isRegeneratingDeliverables}
+                title="Fetch fresh ADO sprint work items and update the handover report"
+              >
+                <RefreshCw size={13} className={isRegeneratingDeliverables ? 'spin' : ''} />
+                <span>{isRegeneratingDeliverables ? 'Regenerating...' : 'Regenerate'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Deliverables Overview Hero Banner */}
           <div className="adoMilestoneHero">
             <div className="adoMilestoneHeroLeft">
               <div className="adoMilestoneBadgeRow">
                 <span className="adoMilestoneTag">
-                  <Trophy size={14} /> Sprint Milestone
+                  <Trophy size={14} /> Sprint Deliverables Handover
                 </span>
-                <span className={`adoMilestoneStatusBadge ${
-                  (computedMilestone?.completion_rate_pct || 0) >= 100
-                    ? 'achieved'
-                    : (computedMilestone?.completion_rate_pct || 0) >= 50
-                    ? 'progress'
-                    : 'started'
-                }`}>
-                  {(computedMilestone?.completion_rate_pct || 0) >= 100
+                <span
+                  className={`adoMilestoneStatusBadge ${
+                    (deliverablesReport?.capacityEffortSummary?.completionRatePct ?? computedMilestone?.completion_rate_pct ?? 0) >= 100
+                      ? 'achieved'
+                      : (deliverablesReport?.capacityEffortSummary?.completionRatePct ?? computedMilestone?.completion_rate_pct ?? 0) >= 50
+                      ? 'progress'
+                      : 'started'
+                  }`}
+                >
+                  {(deliverablesReport?.capacityEffortSummary?.completionRatePct ?? computedMilestone?.completion_rate_pct ?? 0) >= 100
                     ? '🏆 Sprint Goal Complete'
-                    : (computedMilestone?.completion_rate_pct || 0) >= 50
+                    : (deliverablesReport?.capacityEffortSummary?.completionRatePct ?? computedMilestone?.completion_rate_pct ?? 0) >= 50
                     ? '🚀 High Milestone Progress'
                     : '⚡ Active Sprint Delivery'}
                 </span>
               </div>
               <h2 className="adoMilestoneTitle">
-                What We Have Achieved in {formatSprintName(currentIteration.name, currentIteration.path)}
+                Sprint Deliverables Handover: {formatSprintName(currentIteration?.name, currentIteration?.path)}
               </h2>
               <p className="adoMilestoneSubtitle">
-                Dynamic sprint achievements synthesized in real time from completed user stories, backlog items, and resolved bugs.
+                Saved sprint handover and review center. Customer-facing stories and bugs delivered, carryover items, and engineering contribution.
               </p>
 
               {/* Progress bar */}
@@ -1341,13 +2058,19 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                 <div className="adoMilestoneProgressHeader">
                   <span>Sprint Deliverables Shipped</span>
                   <b>
-                    {computedMilestone?.closed_stories_count || 0} of {computedMilestone?.total_stories || 0} Stories ({computedMilestone?.completion_rate_pct || 0}%)
+                    {deliverablesReport?.capacityEffortSummary?.closedStoriesCount ?? computedMilestone?.closed_stories_count ?? 0} of{' '}
+                    {deliverablesReport?.capacityEffortSummary?.totalStories ?? computedMilestone?.total_stories ?? 0} Stories & Bugs ({deliverablesReport?.capacityEffortSummary?.completionRatePct ?? computedMilestone?.completion_rate_pct ?? 0}%)
                   </b>
                 </div>
                 <div className="adoMilestoneProgressBar">
                   <div
                     className="adoMilestoneProgressFill"
-                    style={{ width: `${Math.min(100, computedMilestone?.completion_rate_pct || 0)}%` }}
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        deliverablesReport?.capacityEffortSummary?.completionRatePct ?? computedMilestone?.completion_rate_pct ?? 0
+                      )}%`
+                    }}
                   />
                 </div>
               </div>
@@ -1359,7 +2082,10 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                   type="button"
                   className="adoAiBriefBtn"
                   onClick={handleGenerateAiMilestone}
-                  disabled={isGeneratingAi || !computedMilestone || computedMilestone.closed_stories_count === 0}
+                  disabled={
+                    isGeneratingAi ||
+                    (deliverablesReport?.capacityEffortSummary?.closedStoriesCount ?? computedMilestone?.closed_stories_count ?? 0) === 0
+                  }
                 >
                   <Sparkles size={16} className={isGeneratingAi ? 'spin' : ''} />
                   <span>{isGeneratingAi ? 'Generating Briefing...' : 'Generate Executive Brief'}</span>
@@ -1376,9 +2102,12 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
               </div>
               <div className="adoMetricInfo">
                 <div className="adoMetricValue">
-                  {computedMilestone?.closed_stories_count || 0} <span className="adoMetricTotal">/ {computedMilestone?.total_stories || 0}</span>
+                  {deliverablesReport?.capacityEffortSummary?.closedStoriesCount ?? computedMilestone?.closed_stories_count ?? 0}{' '}
+                  <span className="adoMetricTotal">
+                    / {deliverablesReport?.capacityEffortSummary?.totalStories ?? computedMilestone?.total_stories ?? 0}
+                  </span>
                 </div>
-                <div className="adoMetricLabel">Stories Delivered</div>
+                <div className="adoMetricLabel">Stories & Bugs Delivered</div>
               </div>
             </div>
 
@@ -1388,7 +2117,8 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
               </div>
               <div className="adoMetricInfo">
                 <div className="adoMetricValue">
-                  {computedMilestone?.total_delivered_hours || 0} <span className="adoMetricUnit">hrs</span>
+                  {deliverablesReport?.capacityEffortSummary?.totalDeliveredHours ?? computedMilestone?.total_delivered_hours ?? 0}{' '}
+                  <span className="adoMetricUnit">hrs</span>
                 </div>
                 <div className="adoMetricLabel">Engineering Hours Delivered</div>
               </div>
@@ -1400,7 +2130,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
               </div>
               <div className="adoMetricInfo">
                 <div className="adoMetricValue">
-                  {computedMilestone?.features_delivered_count || 0}
+                  {deliverablesReport?.capacityEffortSummary?.featuresDeliveredCount ?? computedMilestone?.features_delivered_count ?? 0}
                 </div>
                 <div className="adoMetricLabel">Features & Enablers</div>
               </div>
@@ -1412,132 +2142,12 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
               </div>
               <div className="adoMetricInfo">
                 <div className="adoMetricValue">
-                  {computedMilestone?.bugs_resolved_count || 0}
+                  {deliverablesReport?.capacityEffortSummary?.bugsResolvedCount ?? computedMilestone?.bugs_resolved_count ?? 0}
                 </div>
                 <div className="adoMetricLabel">Bugs & Issues Resolved</div>
               </div>
             </div>
           </div>
-
-          {/* Milestone Capability Breakdown & Next-Sprint Baseline Graph */}
-          {computedMilestone?.graph_data && (
-            <div className="adoMilestoneGraphCard">
-              <div className="adoGraphHeader">
-                <div className="adoGraphTitleWrap">
-                  <div className="adoGraphMainTitle">
-                    <Layers size={16} color="#38bdf8" />
-                    <span>Milestone Capability Breakdown & Next-Sprint Baseline Graph</span>
-                  </div>
-                  <span className="adoGraphSubtitle">
-                    Delivery stream velocity across completed features, defect resolutions, and capability areas, establishing reliable baselines for upcoming sprint commitments.
-                  </span>
-                </div>
-                <div className="adoBaselineBadgeHeader">
-                  <ShieldCheck size={14} />
-                  <span>Next-Sprint Baseline Active</span>
-                </div>
-              </div>
-
-              {/* Stream Cards Grid */}
-              <div className="adoStreamGrid">
-                {computedMilestone.graph_data.streams.map(stream => {
-                  const isActive = selectedMilestoneStream === stream.name
-                  return (
-                    <div
-                      key={stream.name}
-                      className={`adoStreamCard ${isActive ? 'active' : ''}`}
-                      onClick={() => setSelectedMilestoneStream(isActive ? 'all' : stream.name)}
-                      title="Click to filter deliverables by this capability stream"
-                    >
-                      <div className="adoStreamCardHeader">
-                        <div className="adoStreamNameWrap">
-                          <div className={`adoStreamIcon ${
-                            stream.name.includes('Fixes') ? 'amber' : stream.name.includes('Automation') ? 'purple' : stream.name.includes('Quality') ? 'green' : ''
-                          }`}>
-                            {stream.name.includes('Fixes') ? <AlertTriangle size={15} /> : stream.name.includes('Creation') ? <Radio size={15} /> : stream.name.includes('Automation') ? <Cpu size={15} /> : <CheckCircle2 size={15} />}
-                          </div>
-                          <span className="adoStreamName">{stream.name}</span>
-                        </div>
-                        <span className="adoStreamPill">{stream.completion_pct}% Delivered</span>
-                      </div>
-
-                      <div className="adoStreamStatsRow">
-                        <div className="adoStreamCount">
-                          {stream.closed_count} <small>/ {stream.total_count} items</small>
-                        </div>
-                        <span className="adoStreamHours">{stream.delivered_hours}h verified</span>
-                      </div>
-
-                      {/* Progress with Baseline Target Marker */}
-                      <div className="adoBaselineBarWrap">
-                        <div className="adoBaselineBarTrack">
-                          <div
-                            className="adoBaselineBarFill"
-                            style={{ width: `${Math.min(100, stream.completion_pct)}%` }}
-                          />
-                          <div
-                            className="adoBaselineTargetMarker"
-                            style={{ left: `${Math.min(95, Math.max(20, stream.completion_pct))}%` }}
-                            title="Next Sprint Target Baseline"
-                          />
-                        </div>
-                        <div className="adoBaselineLegendRow">
-                          <span>Sprint Achieved</span>
-                          <span style={{ color: '#f59e0b', fontWeight: 600 }}>Next Sprint Target: {stream.next_sprint_baseline_target}</span>
-                        </div>
-                      </div>
-
-                      <div className="adoBaselineRecommendation">
-                        {stream.next_sprint_recommendation}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-
-              {/* Strategic Next-Sprint Baseline Projection Panel */}
-              <div className="adoStrategicBaselinePanel">
-                <div className="adoBaselineKpiCol">
-                  <div className="adoBaselineKpiTitle">
-                    <Zap size={14} />
-                    <span>Established Sprint Baseline KPIs</span>
-                  </div>
-                  <div className="adoBaselineKpis">
-                    <div className="adoBaselineKpiItem">
-                      <span className="adoBaselineKpiVal">{computedMilestone.graph_data.bug_resolution_rate_pct}%</span>
-                      <span className="adoBaselineKpiLbl">Bug Resolution Rate</span>
-                    </div>
-                    <div className="adoBaselineKpiItem">
-                      <span className="adoBaselineKpiVal">{computedMilestone.graph_data.overall_reliability_baseline_pct}%</span>
-                      <span className="adoBaselineKpiLbl">Milestone Reliability</span>
-                    </div>
-                    <div className="adoBaselineKpiItem">
-                      <span className="adoBaselineKpiVal">{computedMilestone.total_delivered_hours}h</span>
-                      <span className="adoBaselineKpiLbl">Verified Effort Base</span>
-                    </div>
-                  </div>
-                  <div className="adoBaselineCapacityPlan">
-                    <b>Recommended Capacity Allocation for Next Sprint:</b> {computedMilestone.graph_data.next_sprint_recommended_capacity}
-                  </div>
-                </div>
-
-                <div className="adoBaselineFocusCol">
-                  <div className="adoBaselineKpiTitle">
-                    <Target size={14} />
-                    <span>Next Sprint Baseline Commitments ({computedMilestone.graph_data.next_sprint_focus_areas?.length || 0})</span>
-                  </div>
-                  <ul className="adoBaselineFocusList">
-                    {(computedMilestone.graph_data.next_sprint_focus_areas || []).map((focus, fIdx) => (
-                      <li key={fIdx}>
-                        <CheckCircle2 size={13} color="#10b981" style={{ flexShrink: 0, marginTop: '2px' }} />
-                        <span>{focus}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* AI Executive Briefing Card (if generated & enabled by plugin) */}
           {showAiBriefing && aiSummary && (
@@ -1580,210 +2190,1468 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
             </div>
           )}
 
-          {/* Deliverables Section Toolbar (Filter & Search) */}
-          <div className="adoMilestoneToolbar">
-            <div className="adoMilestoneFilterPills">
-              <button
-                type="button"
-                className={`adoFilterPill ${milestoneCategoryFilter === 'all' && selectedMilestoneStream === 'all' ? 'active' : ''}`}
-                onClick={() => {
-                  setMilestoneCategoryFilter('all')
-                  setSelectedMilestoneStream('all')
-                }}
-              >
-                All Achieved ({computedMilestone?.achieved_items.length || 0})
-              </button>
-              <button
-                type="button"
-                className={`adoFilterPill ${milestoneCategoryFilter === 'features' ? 'active' : ''}`}
-                onClick={() => setMilestoneCategoryFilter('features')}
-              >
-                Features & Stories ({computedMilestone?.features_delivered_count || 0})
-              </button>
-              <button
-                type="button"
-                className={`adoFilterPill ${milestoneCategoryFilter === 'bugs' ? 'active' : ''}`}
-                onClick={() => setMilestoneCategoryFilter('bugs')}
-              >
-                Bug Fixes ({computedMilestone?.bugs_resolved_count || 0})
-              </button>
-              {selectedMilestoneStream !== 'all' && (
-                <button
-                  type="button"
-                  className="adoFilterPill active"
-                  onClick={() => setSelectedMilestoneStream('all')}
-                  style={{ background: '#0284c7', color: '#ffffff' }}
-                >
-                  Stream: {selectedMilestoneStream} (Clear ✕)
-                </button>
-              )}
-            </div>
-
-            <div className="adoMilestoneSearch">
-              <Search size={14} className="adoSearchIcon" />
-              <input
-                type="text"
-                placeholder="Search achieved deliverables..."
-                value={milestoneSearch}
-                onChange={e => setMilestoneSearch(e.target.value)}
-              />
-              {milestoneSearch && (
-                <button type="button" className="adoClearSearch" onClick={() => setMilestoneSearch('')}>
-                  <X size={12} />
-                </button>
-              )}
-            </div>
+          {/* Clean Deliverables Section Tabs: Completed, Pending, Members, Capacity/Streams, Hygiene */}
+          <div className="adoDeliverablesSectionTabs">
+            <button
+              type="button"
+              className={`adoDeliverablesSectionTab ${deliverablesActiveSection === 'completed' ? 'active' : ''}`}
+              onClick={() => setDeliverablesActiveSection('completed')}
+            >
+              <CheckCircle2 size={13} />
+              <span>Completed Deliverables ({deliverablesReport?.capacityEffortSummary?.closedStoriesCount ?? computedMilestone?.closed_stories_count ?? 0})</span>
+            </button>
+            <button
+              type="button"
+              className={`adoDeliverablesSectionTab ${deliverablesActiveSection === 'pending' ? 'active' : ''}`}
+              onClick={() => setDeliverablesActiveSection('pending')}
+            >
+              <Clock size={13} />
+              <span>Pending & Carryover ({deliverablesReport?.capacityEffortSummary?.pendingStoriesCount ?? 0})</span>
+            </button>
+            <button
+              type="button"
+              className={`adoDeliverablesSectionTab ${deliverablesActiveSection === 'members' ? 'active' : ''}`}
+              onClick={() => setDeliverablesActiveSection('members')}
+            >
+              <Users size={13} />
+              <span>Team Member Effort ({deliverablesReport?.memberContributions?.length ?? 0})</span>
+            </button>
+            <button
+              type="button"
+              className={`adoDeliverablesSectionTab ${deliverablesActiveSection === 'streams' ? 'active' : ''}`}
+              onClick={() => setDeliverablesActiveSection('streams')}
+            >
+              <Layers size={13} />
+              <span>Capacity & Stream Baselines</span>
+            </button>
+            <button
+              type="button"
+              className={`adoDeliverablesSectionTab ${deliverablesActiveSection === 'hygiene' ? 'active' : ''}`}
+              onClick={() => setDeliverablesActiveSection('hygiene')}
+            >
+              <ShieldAlert size={13} />
+              <span>
+                Hygiene & Warnings (
+                {(deliverablesReport?.warningsAndHygiene?.closedWithoutHoursCount ?? 0) +
+                  (deliverablesReport?.warningsAndHygiene?.staleInReviewCount ?? 0) +
+                  (deliverablesReport?.warningsAndHygiene?.missingOwnersCount ?? 0)}
+                )
+              </span>
+            </button>
           </div>
 
-          {/* Deliverables List or Empty State */}
-          {filteredMilestoneItems.length === 0 ? (
-            <div className="adoMilestoneEmpty">
-              <Trophy size={44} color="#f59e0b" />
-              <h3>
-                {computedMilestone?.closed_stories_count === 0
-                  ? 'No Closed User Stories in this Sprint Yet'
-                  : 'No deliverables match your search criteria'}
-              </h3>
-              <p>
-                {computedMilestone?.closed_stories_count === 0
-                  ? 'As stories and bugs are transitioned to Closed or Done in Azure DevOps, your sprint milestone deliverables will update automatically in real time.'
-                  : 'Try clearing your search keyword or switching the category filter above.'}
-              </p>
-              {computedMilestone?.closed_stories_count === 0 ? (
-                <button
-                  type="button"
-                  className="adoPrimaryBtn"
-                  onClick={() => setActiveSubTab('Taskboard')}
-                  style={{ marginTop: '12px' }}
-                >
-                  Go to Taskboard
-                </button>
+          {/* Section 1: Completed Stories & Bugs */}
+          {deliverablesActiveSection === 'completed' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Deliverables Section Toolbar (Filter & Search) */}
+              <div className="adoMilestoneToolbar">
+                <div className="adoMilestoneFilterPills">
+                  <button
+                    type="button"
+                    className={`adoFilterPill ${milestoneCategoryFilter === 'all' && selectedMilestoneStream === 'all' ? 'active' : ''}`}
+                    onClick={() => {
+                      setMilestoneCategoryFilter('all')
+                      setSelectedMilestoneStream('all')
+                    }}
+                  >
+                    All Achieved ({deliverablesReport?.completedDeliverables?.length ?? computedMilestone?.achieved_items?.length ?? 0})
+                  </button>
+                  <button
+                    type="button"
+                    className={`adoFilterPill ${milestoneCategoryFilter === 'features' ? 'active' : ''}`}
+                    onClick={() => setMilestoneCategoryFilter('features')}
+                  >
+                    Features & Stories ({deliverablesReport?.capacityEffortSummary?.featuresDeliveredCount ?? computedMilestone?.features_delivered_count ?? 0})
+                  </button>
+                  <button
+                    type="button"
+                    className={`adoFilterPill ${milestoneCategoryFilter === 'bugs' ? 'active' : ''}`}
+                    onClick={() => setMilestoneCategoryFilter('bugs')}
+                  >
+                    Bug Fixes ({deliverablesReport?.capacityEffortSummary?.bugsResolvedCount ?? computedMilestone?.bugs_resolved_count ?? 0})
+                  </button>
+                  {selectedMilestoneStream !== 'all' && (
+                    <button
+                      type="button"
+                      className="adoFilterPill active"
+                      onClick={() => setSelectedMilestoneStream('all')}
+                      style={{ background: '#0284c7', color: '#ffffff' }}
+                    >
+                      Stream: {selectedMilestoneStream} (Clear ✕)
+                    </button>
+                  )}
+                </div>
+
+                <div className="adoMilestoneSearch">
+                  <Search size={14} className="adoSearchIcon" />
+                  <input
+                    type="text"
+                    placeholder="Search achieved deliverables..."
+                    value={milestoneSearch}
+                    onChange={e => setMilestoneSearch(e.target.value)}
+                  />
+                  {milestoneSearch && (
+                    <button type="button" className="adoClearSearch" onClick={() => setMilestoneSearch('')}>
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Deliverables List or Empty State */}
+              {filteredMilestoneItems.length === 0 ? (
+                <div className="adoMilestoneEmpty">
+                  <Trophy size={44} color="#f59e0b" />
+                  <h3>
+                    {(deliverablesReport?.completedDeliverables?.length ?? 0) === 0
+                      ? 'No Closed User Stories in this Sprint Yet'
+                      : 'No deliverables match your search criteria'}
+                  </h3>
+                  <p>
+                    {(deliverablesReport?.completedDeliverables?.length ?? 0) === 0
+                      ? 'As stories and bugs are transitioned to Closed or Done in Azure DevOps, your sprint deliverables will be ready for handover.'
+                      : 'Try clearing your search keyword or switching the category filter above.'}
+                  </p>
+                  {(deliverablesReport?.completedDeliverables?.length ?? 0) === 0 ? (
+                    <button
+                      type="button"
+                      className="adoPrimaryBtn"
+                      onClick={() => setActiveSubTab('Taskboard')}
+                      style={{ marginTop: '12px' }}
+                    >
+                      Go to Taskboard
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="adoSecondaryBtn"
+                      onClick={() => {
+                        setMilestoneSearch('')
+                        setMilestoneCategoryFilter('all')
+                        setSelectedMilestoneStream('all')
+                      }}
+                      style={{ marginTop: '12px' }}
+                    >
+                      Reset Filters
+                    </button>
+                  )}
+                </div>
               ) : (
-                <button
-                  type="button"
-                  className="adoSecondaryBtn"
-                  onClick={() => {
-                    setMilestoneSearch('')
-                    setMilestoneCategoryFilter('all')
-                    setSelectedMilestoneStream('all')
-                  }}
-                  style={{ marginTop: '12px' }}
-                >
-                  Reset Filters
-                </button>
+                <div className="adoMilestoneGrid">
+                  {filteredMilestoneItems.map(item => (
+                    <div key={item.id} className="adoMilestoneCard">
+                      <div className="adoMilestoneCardHeader">
+                        <div className="adoMilestoneCardTags">
+                          <span className={`adoItemTypeBadge ${item.work_item_type.toLowerCase().replace(/\s+/g, '')}`}>
+                            {item.work_item_type === 'Bug' ? '🐛 Bug' : '📘 Story'}
+                          </span>
+                          <a
+                            href={item.web_url || `https://dev.azure.com/${organization}/${project}/_workitems/edit/${item.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="adoMilestoneIdLink"
+                          >
+                            #{item.id} <ExternalLink size={11} />
+                          </a>
+                          <span className="adoCategoryTag">{item.category}</span>
+                          {item.milestone_stream && (
+                            <span className="adoStreamTag">{item.milestone_stream}</span>
+                          )}
+                        </div>
+                        <span className="adoMilestoneDoneBadge">
+                          <CheckCircle2 size={12} /> {item.state}
+                        </span>
+                      </div>
+
+                      <h4 className="adoMilestoneItemTitle">
+                        <a
+                          href={item.web_url || `https://dev.azure.com/${organization}/${project}/_workitems/edit/${item.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {item.title}
+                        </a>
+                      </h4>
+
+                      {/* Problem / Issue Description */}
+                      {item.issue_summary && (
+                        <div className="adoItemIssueBox">
+                          <div className="adoItemSectionLabel red">
+                            <AlertCircle size={12} />
+                            <span>What the Issue / Challenge Was:</span>
+                          </div>
+                          <p className="adoItemSectionText">{item.issue_summary}</p>
+                        </div>
+                      )}
+
+                      {/* Condition of Satisfaction / Solution Achieved */}
+                      {item.achievement_summary && (
+                        <div className="adoItemAchievementBox">
+                          <div className="adoItemSectionLabel green">
+                            <CheckCircle2 size={12} />
+                            <span>What We Achieved & Condition of Satisfaction Met:</span>
+                          </div>
+                          <p className="adoItemSectionText">{item.achievement_summary}</p>
+                        </div>
+                      )}
+
+                      <div className="adoMilestoneCardFooter">
+                        <div className="adoMilestoneAssignee">
+                          <div className="adoAvatarTiny">
+                            {item.assigned_to_name ? item.assigned_to_name.charAt(0).toUpperCase() : '?'}
+                          </div>
+                          <span>{item.assigned_to_name || 'Unassigned'}</span>
+                        </div>
+
+                        <div className="adoMilestoneBadgesRight">
+                          {item.hours_delivered > 0 && (
+                            <span className="adoHoursBadge" title="Total hours completed on this story and its child tasks">
+                              <Clock size={11} /> {item.hours_delivered}h delivered
+                            </span>
+                          )}
+                          {item.child_tasks_total > 0 && (
+                            <span className="adoChildTasksBadge" title="Child tasks completed">
+                              <CheckSquare size={11} /> {item.child_tasks_closed}/{item.child_tasks_total} tasks
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-          ) : (
-            <div className="adoMilestoneGrid">
-              {filteredMilestoneItems.map(item => (
-                <div key={item.id} className="adoMilestoneCard">
-                  <div className="adoMilestoneCardHeader">
-                    <div className="adoMilestoneCardTags">
-                      <span className={`adoItemTypeBadge ${item.work_item_type.toLowerCase().replace(/\s+/g, '')}`}>
-                        {item.work_item_type === 'Bug' ? '🐛 Bug' : '📘 Story'}
-                      </span>
-                      <a
-                        href={item.web_url || `https://dev.azure.com/${organization}/${project}/_workitems/edit/${item.id}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="adoMilestoneIdLink"
-                      >
-                        #{item.id} <ExternalLink size={11} />
-                      </a>
-                      <span className="adoCategoryTag">{item.category}</span>
-                      {item.milestone_stream && (
-                        <span className="adoStreamTag">{item.milestone_stream}</span>
-                      )}
+          )}
+
+          {/* Section 2: Pending & In-Progress Carryover Items */}
+          {deliverablesActiveSection === 'pending' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              <div className="adoMilestoneToolbar">
+                <span style={{ fontSize: '13px', color: '#a1a1aa' }}>
+                  Committed sprint user stories and bugs not yet closed. Tasks support internal detail without being main customer-facing deliverables.
+                </span>
+                <div className="adoMilestoneSearch">
+                  <Search size={14} className="adoSearchIcon" />
+                  <input
+                    type="text"
+                    placeholder="Search pending items..."
+                    value={milestoneSearch}
+                    onChange={e => setMilestoneSearch(e.target.value)}
+                  />
+                  {milestoneSearch && (
+                    <button type="button" className="adoClearSearch" onClick={() => setMilestoneSearch('')}>
+                      <X size={12} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {(() => {
+                const pendingList = (deliverablesReport?.pendingDeliverables || []).filter(item => {
+                  if (!milestoneSearch.trim()) return true
+                  const q = milestoneSearch.toLowerCase()
+                  return (
+                    item.title.toLowerCase().includes(q) ||
+                    String(item.id).includes(q) ||
+                    item.assigned_to_name?.toLowerCase().includes(q) ||
+                    item.state.toLowerCase().includes(q)
+                  )
+                })
+
+                if (pendingList.length === 0) {
+                  return (
+                    <div className="adoMilestoneEmpty">
+                      <CheckCircle2 size={44} color="#10b981" />
+                      <h3>No Pending Items Remaining</h3>
+                      <p>All committed stories and bugs in this sprint report have been completed and delivered!</p>
                     </div>
-                    <span className="adoMilestoneDoneBadge">
-                      <CheckCircle2 size={12} /> {item.state}
-                    </span>
+                  )
+                }
+
+                return (
+                  <div className="adoPendingGrid">
+                    {pendingList.map(item => (
+                      <div key={item.id} className="adoPendingCard">
+                        <div className="adoPendingTop">
+                          <div className="adoPendingTags">
+                            <span className={`adoItemTypeBadge ${item.work_item_type.toLowerCase().replace(/\s+/g, '')}`}>
+                              {item.work_item_type === 'Bug' ? '🐛 Bug' : '📘 Story'}
+                            </span>
+                            <a
+                              href={item.web_url || `https://dev.azure.com/${organization}/${project}/_workitems/edit/${item.id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="adoMilestoneIdLink"
+                            >
+                              #{item.id} <ExternalLink size={11} />
+                            </a>
+                          </div>
+                          <span className={`adoPendingStateBadge ${item.state.toLowerCase().replace(/\s+/g, '')}`}>
+                            {item.state}
+                          </span>
+                        </div>
+
+                        <h4 className="adoPendingTitle">
+                          <a
+                            href={item.web_url || `https://dev.azure.com/${organization}/${project}/_workitems/edit/${item.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {item.title}
+                          </a>
+                        </h4>
+
+                        <div className="adoPendingFooter">
+                          <div className="adoMilestoneAssignee">
+                            <div className="adoAvatarTiny">
+                              {item.assigned_to_name ? item.assigned_to_name.charAt(0).toUpperCase() : '?'}
+                            </div>
+                            <span>{item.assigned_to_name || 'Unassigned'}</span>
+                          </div>
+
+                          <div className="adoMilestoneBadgesRight">
+                            {item.remaining_work !== undefined && item.remaining_work > 0 && (
+                              <span className="adoHoursBadge" title="Remaining work">
+                                <Clock size={11} /> {item.remaining_work}h rem
+                              </span>
+                            )}
+                            {item.child_tasks_total > 0 && (
+                              <span className="adoChildTasksBadge" title="Child tasks supporting this story">
+                                <CheckSquare size={11} /> {item.child_tasks_closed}/{item.child_tasks_total} tasks
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+
+          {/* Section 3: Team Member Contribution & Effort */}
+          {deliverablesActiveSection === 'members' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {(() => {
+                const members = deliverablesReport?.memberContributions || []
+                if (members.length === 0) {
+                  return (
+                    <div className="adoMilestoneEmpty">
+                      <Users size={44} color="#38bdf8" />
+                      <h3>No Team Member Activity Recorded</h3>
+                      <p>Work items in this sprint have not yet been assigned to team members.</p>
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="adoMembersGrid">
+                    {members.map(member => {
+                      const pct = member.totalHours > 0 ? Math.round((member.completedHours / member.totalHours) * 100) : 0
+                      return (
+                        <div key={member.name} className="adoMemberContributionCard">
+                          <div className="adoMemberCardTop">
+                            <div className="adoMemberAvatar">
+                              {member.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="adoMemberInfo">
+                              <span className="adoMemberName">{member.name}</span>
+                              <span style={{ fontSize: '11px', color: '#a1a1aa' }}>Sprint Contributor</span>
+                            </div>
+                          </div>
+
+                          <div className="adoMemberStatsRow">
+                            <div className="adoMemberStat">
+                              <span className="val" style={{ color: '#10b981' }}>{member.completedCount}</span>
+                              <span className="lbl">Delivered</span>
+                            </div>
+                            <div className="adoMemberStat">
+                              <span className="val" style={{ color: '#f59e0b' }}>{member.pendingCount}</span>
+                              <span className="lbl">Pending</span>
+                            </div>
+                            <div className="adoMemberStat">
+                              <span className="val" style={{ color: '#38bdf8' }}>{member.completedHours}h</span>
+                              <span className="lbl">Logged</span>
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '6px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#a1a1aa' }}>
+                              <span>Effort Progress</span>
+                              <span>{member.completedHours}h / {member.totalHours}h ({pct}%)</span>
+                            </div>
+                            <div className="adoProgressTrack">
+                              <div className="adoProgressFill success" style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+
+          {/* Section 4: Capacity Summary & Baseline Capability Streams */}
+          {deliverablesActiveSection === 'streams' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {computedMilestone?.graph_data ? (
+                <div className="adoMilestoneGraphCard" style={{ margin: 0 }}>
+                  <div className="adoGraphHeader">
+                    <div className="adoGraphTitleWrap">
+                      <div className="adoGraphMainTitle">
+                        <Layers size={16} color="#38bdf8" />
+                        <span>Milestone Capability Breakdown & Next-Sprint Baseline Graph</span>
+                      </div>
+                      <span className="adoGraphSubtitle">
+                        Delivery stream velocity across completed features, defect resolutions, and capability areas, establishing reliable baselines for upcoming sprint commitments.
+                      </span>
+                    </div>
+                    <div className="adoBaselineBadgeHeader">
+                      <ShieldCheck size={14} />
+                      <span>Next-Sprint Baseline Active</span>
+                    </div>
                   </div>
 
-                  <h4 className="adoMilestoneItemTitle">
-                    <a
-                      href={item.web_url || `https://dev.azure.com/${organization}/${project}/_workitems/edit/${item.id}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {item.title}
-                    </a>
-                  </h4>
+                  {/* Stream Cards Grid */}
+                  <div className="adoStreamGrid">
+                    {computedMilestone.graph_data.streams.map(stream => {
+                      const isActive = selectedMilestoneStream === stream.name
+                      return (
+                        <div
+                          key={stream.name}
+                          className={`adoStreamCard ${isActive ? 'active' : ''}`}
+                          onClick={() => setSelectedMilestoneStream(isActive ? 'all' : stream.name)}
+                          title="Click to filter deliverables by this capability stream"
+                        >
+                          <div className="adoStreamCardHeader">
+                            <div className="adoStreamNameWrap">
+                              <div className={`adoStreamIcon ${
+                                stream.name.includes('Fixes') ? 'amber' : stream.name.includes('Automation') ? 'purple' : stream.name.includes('Quality') ? 'green' : ''
+                              }`}>
+                                {stream.name.includes('Fixes') ? <AlertTriangle size={15} /> : stream.name.includes('Creation') ? <Radio size={15} /> : stream.name.includes('Automation') ? <Cpu size={15} /> : <CheckCircle2 size={15} />}
+                              </div>
+                              <span className="adoStreamName">{stream.name}</span>
+                            </div>
+                            <span className="adoStreamPill">{stream.completion_pct}% Delivered</span>
+                          </div>
 
-                  {/* Problem / Issue Description */}
-                  {item.issue_summary && (
-                    <div className="adoItemIssueBox">
-                      <div className="adoItemSectionLabel red">
-                        <AlertCircle size={12} />
-                        <span>What the Issue / Challenge Was:</span>
+                          <div className="adoStreamStatsRow">
+                            <div className="adoStreamCount">
+                              {stream.closed_count} <small>/ {stream.total_count} items</small>
+                            </div>
+                            <span className="adoStreamHours">{stream.delivered_hours}h verified</span>
+                          </div>
+
+                          {/* Progress with Baseline Target Marker */}
+                          <div className="adoBaselineBarWrap">
+                            <div className="adoBaselineBarTrack">
+                              <div
+                                className="adoBaselineBarFill"
+                                style={{ width: `${Math.min(100, stream.completion_pct)}%` }}
+                              />
+                              <div
+                                className="adoBaselineTargetMarker"
+                                style={{ left: `${Math.min(95, Math.max(20, stream.completion_pct))}%` }}
+                                title="Next Sprint Target Baseline"
+                              />
+                            </div>
+                            <div className="adoBaselineLegendRow">
+                              <span>Sprint Achieved</span>
+                              <span style={{ color: '#f59e0b', fontWeight: 600 }}>Next Sprint Target: {stream.next_sprint_baseline_target}</span>
+                            </div>
+                          </div>
+
+                          <div className="adoBaselineRecommendation">
+                            {stream.next_sprint_recommendation}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  {/* Strategic Next-Sprint Baseline Projection Panel */}
+                  <div className="adoStrategicBaselinePanel">
+                    <div className="adoBaselineKpiCol">
+                      <div className="adoBaselineKpiTitle">
+                        <Zap size={14} />
+                        <span>Established Sprint Baseline KPIs</span>
                       </div>
-                      <p className="adoItemSectionText">{item.issue_summary}</p>
-                    </div>
-                  )}
-
-                  {/* Condition of Satisfaction / Solution Achieved */}
-                  {item.achievement_summary && (
-                    <div className="adoItemAchievementBox">
-                      <div className="adoItemSectionLabel green">
-                        <CheckCircle2 size={12} />
-                        <span>What We Achieved & Condition of Satisfaction Met:</span>
+                      <div className="adoBaselineKpis">
+                        <div className="adoBaselineKpiItem">
+                          <span className="adoBaselineKpiVal">{computedMilestone.graph_data.bug_resolution_rate_pct}%</span>
+                          <span className="adoBaselineKpiLbl">Bug Resolution Rate</span>
+                        </div>
+                        <div className="adoBaselineKpiItem">
+                          <span className="adoBaselineKpiVal">{computedMilestone.graph_data.overall_reliability_baseline_pct}%</span>
+                          <span className="adoBaselineKpiLbl">Milestone Reliability</span>
+                        </div>
+                        <div className="adoBaselineKpiItem">
+                          <span className="adoBaselineKpiVal">{computedMilestone.total_delivered_hours}h</span>
+                          <span className="adoBaselineKpiLbl">Verified Effort Base</span>
+                        </div>
                       </div>
-                      <p className="adoItemSectionText">{item.achievement_summary}</p>
-                    </div>
-                  )}
-
-                  <div className="adoMilestoneCardFooter">
-                    <div className="adoMilestoneAssignee">
-                      <div className="adoAvatarTiny">
-                        {item.assigned_to_name ? item.assigned_to_name.charAt(0).toUpperCase() : '?'}
+                      <div className="adoBaselineCapacityPlan">
+                        <b>Recommended Capacity Allocation for Next Sprint:</b> {computedMilestone.graph_data.next_sprint_recommended_capacity}
                       </div>
-                      <span>{item.assigned_to_name || 'Unassigned'}</span>
                     </div>
 
-                    <div className="adoMilestoneBadgesRight">
-                      {item.hours_delivered > 0 && (
-                        <span className="adoHoursBadge" title="Total hours completed on this story and its child tasks">
-                          <Clock size={11} /> {item.hours_delivered}h delivered
-                        </span>
-                      )}
-                      {item.child_tasks_total > 0 && (
-                        <span className="adoChildTasksBadge" title="Child tasks completed">
-                          <CheckSquare size={11} /> {item.child_tasks_closed}/{item.child_tasks_total} tasks
-                        </span>
-                      )}
+                    <div className="adoBaselineFocusCol">
+                      <div className="adoBaselineKpiTitle">
+                        <Target size={14} />
+                        <span>Next Sprint Baseline Commitments ({computedMilestone.graph_data.next_sprint_focus_areas?.length || 0})</span>
+                      </div>
+                      <ul className="adoBaselineFocusList">
+                        {(computedMilestone.graph_data.next_sprint_focus_areas || []).map((focus, fIdx) => (
+                          <li key={fIdx}>
+                            <CheckCircle2 size={13} color="#10b981" style={{ flexShrink: 0, marginTop: '2px' }} />
+                            <span>{focus}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
                   </div>
                 </div>
-              ))}
+              ) : (
+                <div className="adoMilestoneEmpty">
+                  <Layers size={44} color="#38bdf8" />
+                  <h3>No Stream Data Available</h3>
+                  <p>Stream baseline projections will populate as work items are categorized in this sprint.</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Section 5: Missing Owners / Hygiene Warnings */}
+          {deliverablesActiveSection === 'hygiene' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {(() => {
+                const hygiene = deliverablesReport?.warningsAndHygiene
+                const totalWarnings =
+                  (hygiene?.missingOwnersCount ?? 0) +
+                  (hygiene?.closedWithoutHoursCount ?? 0) +
+                  (hygiene?.staleInReviewCount ?? 0)
+
+                if (!hygiene || totalWarnings === 0) {
+                  return (
+                    <div className="adoMilestoneEmpty">
+                      <ShieldCheck size={44} color="#10b981" />
+                      <h3>All Sprint Hygiene Checks Passed!</h3>
+                      <p>Great job! No unassigned work items, tasks closed without logged hours, or stale review items were detected in this sprint report.</p>
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="adoHygieneList">
+                    {hygiene.missingOwnersCount > 0 && (
+                      <div className="adoHygieneItemRow">
+                        <div className="adoHygieneItemLeft">
+                          <User size={16} color="#f87171" />
+                          <div>
+                            <span style={{ fontWeight: 600, color: '#f87171' }}>
+                              {hygiene.missingOwnersCount} Work Items Missing Assignees/Owners
+                            </span>
+                            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: '2px' }}>
+                              Items need active team owners to ensure accountability before sprint handover.
+                            </div>
+                          </div>
+                        </div>
+                        <span className="adoHygieneTag danger">{hygiene.missingOwnersCount} Unassigned</span>
+                      </div>
+                    )}
+
+                    {hygiene.closedWithoutHoursCount > 0 && (
+                      <div className="adoHygieneItemRow">
+                        <div className="adoHygieneItemLeft">
+                          <Clock size={16} color="#f59e0b" />
+                          <div>
+                            <span style={{ fontWeight: 600, color: '#f59e0b' }}>
+                              {hygiene.closedWithoutHoursCount} Tasks Closed Without Logged Hours
+                            </span>
+                            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: '2px' }}>
+                              Tasks closed with 0 completed hours distort sprint capacity and burndown tracking.
+                            </div>
+                          </div>
+                        </div>
+                        <span className="adoHygieneTag warning">{hygiene.closedWithoutHoursCount} Without Hours</span>
+                      </div>
+                    )}
+
+                    {hygiene.staleInReviewCount > 0 && (
+                      <div className="adoHygieneItemRow">
+                        <div className="adoHygieneItemLeft">
+                          <AlertTriangle size={16} color="#eab308" />
+                          <div>
+                            <span style={{ fontWeight: 600, color: '#eab308' }}>
+                              {hygiene.staleInReviewCount} Items In Review &gt; 2 Days
+                            </span>
+                            <div style={{ fontSize: '12px', color: '#a1a1aa', marginTop: '2px' }}>
+                              Items pending review for extended durations may carry over past the sprint handover.
+                            </div>
+                          </div>
+                        </div>
+                        <span className="adoHygieneTag warning">{hygiene.staleInReviewCount} Stale Review</span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
           )}
         </div>
       ) : activeSubTab === 'Backlog' ? (
-        <div className="adoPlaceholderTab">
-          <Layers size={36} color="#0078d4" />
-          <h3>Sprint Backlog View</h3>
-          <p>View prioritized backlog items, estimations, and sprint commitment.</p>
-          <button type="button" className="adoSecondaryBtn" onClick={() => setActiveSubTab('Taskboard')}>
-            Switch to Taskboard
-          </button>
+        <div className="adoBacklogWrapper">
+          <div className="adoBacklogMain">
+            {/* ADO Backlog Filter Bar */}
+            <div className="adoBacklogFilterBar">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: '220px' }}>
+                <Search size={14} color="#71717a" />
+                <input
+                  type="text"
+                  placeholder="Filter by keyword or #ID..."
+                  value={backlogSearch}
+                  onChange={e => setBacklogSearch(e.target.value)}
+                  className="adoSearchInput"
+                  style={{ width: '100%', height: '30px', fontSize: '12px' }}
+                />
+              </div>
+
+              <select
+                value={backlogTypeFilter}
+                onChange={e => setBacklogTypeFilter(e.target.value)}
+                className="adoBacklogFilterSelect"
+              >
+                <option value="all">Types: All</option>
+                <option value="stories">Stories / PBIs</option>
+                <option value="bugs">Bugs</option>
+                <option value="features">Features</option>
+              </select>
+
+              <select
+                value={backlogStateFilter}
+                onChange={e => setBacklogStateFilter(e.target.value)}
+                className="adoBacklogFilterSelect"
+              >
+                <option value="all">State: All</option>
+                {Object.keys(backlogStats.stateCounts).map(s => (
+                  <option key={s} value={s}>{s} ({backlogStats.stateCounts[s]})</option>
+                ))}
+              </select>
+
+              <select
+                value={backlogAssigneeFilter}
+                onChange={e => setBacklogAssigneeFilter(e.target.value)}
+                className="adoBacklogFilterSelect"
+              >
+                <option value="all">Assigned to: All</option>
+                <option value="unassigned">Unassigned</option>
+                {Array.from(new Set(backlogItems.map(i => i.assigned_to_name).filter(Boolean))).map(name => (
+                  <option key={name as string} value={name as string}>{name}</option>
+                ))}
+              </select>
+
+              <select
+                value={backlogTagFilter}
+                onChange={e => setBacklogTagFilter(e.target.value)}
+                className="adoBacklogFilterSelect"
+              >
+                <option value="all">Tag: All</option>
+                {Array.from(
+                  new Set(
+                    backlogItems
+                      .flatMap(i => (i.tags || '').split(';').map(t => t.trim()))
+                      .filter(Boolean)
+                  )
+                ).map(tag => (
+                  <option key={tag} value={tag}>{tag}</option>
+                ))}
+              </select>
+
+              {(backlogSearch || backlogTypeFilter !== 'all' || backlogStateFilter !== 'all' || backlogAssigneeFilter !== 'all' || backlogTagFilter !== 'all') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBacklogSearch('')
+                    setBacklogTypeFilter('all')
+                    setBacklogStateFilter('all')
+                    setBacklogAssigneeFilter('all')
+                    setBacklogTagFilter('all')
+                  }}
+                  className="sprintFilterClearBtn"
+                >
+                  <X size={12} /> Clear
+                </button>
+              )}
+            </div>
+
+            {/* Backlog Toolbar with Stats */}
+            <div className="adoBacklogToolbar">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '13px', fontWeight: 600, color: '#f4f4f5' }}>
+                  Product Backlog Items
+                </span>
+                <span style={{ fontSize: '11px', color: '#71717a' }}>
+                  (Items not on current sprint board)
+                </span>
+              </div>
+              <div className="adoBacklogStats">
+                <span className="adoBacklogStatItem">
+                  Showing: <b>{filteredBacklogItems.length}</b> of <b>{backlogItems.length}</b>
+                </span>
+                <span className="adoBacklogStatItem accent">
+                  Total Points: <b>{backlogStats.totalPoints} pts</b>
+                </span>
+                <span className="adoBacklogStatItem success">
+                  Avg Size: <b>{backlogStats.avgSize} pts</b>
+                </span>
+              </div>
+            </div>
+
+            {/* Backlog Table */}
+            <div className="adoBacklogTableWrap">
+              <table className="adoBacklogTable">
+                <thead>
+                  <tr>
+                    <th style={{ width: '45px', textAlign: 'center' }}>Order</th>
+                    <th style={{ width: '130px' }}>Work Item Type</th>
+                    <th>Title</th>
+                    <th style={{ width: '100px' }}>State</th>
+                    <th style={{ width: '70px', textAlign: 'center' }}>Story...</th>
+                    <th style={{ width: '110px' }}>Value Area</th>
+                    <th style={{ width: '180px' }}>Iteration Path</th>
+                    <th style={{ width: '140px' }}>Assigned To</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredBacklogItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: 'center', padding: '50px 20px', color: '#71717a' }}>
+                        <Info size={28} color="#0078d4" style={{ marginBottom: '8px' }} />
+                        <div style={{ fontSize: '13px', color: '#e4e4e7', fontWeight: 600 }}>No uncommitted backlog items found</div>
+                        <div style={{ fontSize: '11.5px', color: '#a1a1aa', marginTop: '4px' }}>
+                          {backlogItems.length === 0
+                            ? 'All team items are currently committed to active sprint boards.'
+                            : 'No items match your active filters.'}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredBacklogItems.map((item, idx) => {
+                      const isBug = item.work_item_type.toLowerCase().includes('bug')
+                      const isFeature = item.work_item_type.toLowerCase().includes('feature')
+                      const badgeType = isBug ? 'bug' : isFeature ? 'feature' : 'story'
+                      const stateKey = item.state.toLowerCase().replace(/\s+/g, '')
+                      const pts = item.story_points != null ? item.story_points : (item.original_estimate != null && item.original_estimate <= 20 ? item.original_estimate : '-')
+                      const isArch = (item.value_area || '').toLowerCase().includes('arch')
+                      const orderNum = item.order != null ? item.order : (idx + 1)
+                      const itemTags = (item.tags || '').split(';').map(t => t.trim()).filter(Boolean)
+
+                      return (
+                        <tr key={`backlog-item-${item.id}`} className="adoBacklogRow">
+                          <td style={{ textAlign: 'center' }}>
+                            <span className="adoOrderBadge">{orderNum}</span>
+                          </td>
+                          <td>
+                            <span className={`adoTypeIconBadge ${badgeType}`}>
+                              {isBug ? <Bug size={11} /> : isFeature ? <Zap size={11} /> : <BookOpen size={11} />}
+                              {item.work_item_type}
+                            </span>
+                          </td>
+                          <td>
+                            <div className="adoBacklogTitleCell" style={{ maxWidth: '480px' }}>
+                              <a
+                                href={item.web_url || `https://dev.azure.com/${organization}/${project}/_workitems/edit/${item.id}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="adoWorkItemId"
+                                style={{ marginRight: '6px' }}
+                              >
+                                #{item.id}
+                              </a>
+                              <span className="adoBacklogTitleText" title={item.title}>
+                                {item.title}
+                              </span>
+                              {itemTags.length > 0 && (
+                                <div style={{ display: 'flex', gap: '4px', marginLeft: '6px' }}>
+                                  {itemTags.slice(0, 2).map(tag => (
+                                    <span key={tag} className="adoTagPill">
+                                      {tag}
+                                    </span>
+                                  ))}
+                                  {itemTags.length > 2 && (
+                                    <span className="adoTagPill" title={itemTags.slice(2).join(', ')}>
+                                      +{itemTags.length - 2}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <span className={`adoStateDot ${stateKey}`} />
+                            <span style={{ fontSize: '11.5px', color: '#d4d4d8' }}>{item.state}</span>
+                          </td>
+                          <td style={{ textAlign: 'center' }}>
+                            <span className="adoEffortBadge" style={{ fontWeight: 700 }}>
+                              {pts}
+                            </span>
+                          </td>
+                          <td>
+                            <span className={`adoValueAreaBadge ${isArch ? 'architectural' : 'business'}`}>
+                              {item.value_area || 'Business'}
+                            </span>
+                          </td>
+                          <td style={{ fontSize: '11px', color: '#a1a1aa' }} title={item.iteration_path || ''}>
+                            {item.iteration_path ? item.iteration_path.split('\\').slice(-2).join('\\') : '-'}
+                          </td>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <div className="adoAvatarSmall">
+                                {item.assigned_to_name ? item.assigned_to_name.charAt(0).toUpperCase() : '?'}
+                              </div>
+                              <span style={{ fontSize: '11.5px', color: item.assigned_to_name ? '#e4e4e7' : '#71717a' }}>
+                                {item.assigned_to_name || 'Unassigned'}
+                              </span>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Right Backlog Summary Sidebar */}
+          <div className="adoBacklogSidebar">
+            <div className="adoSidebarCard">
+              <h4>Backlog Readiness</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#a1a1aa' }}>Uncommitted Items:</span>
+                  <b style={{ color: '#ffffff', fontSize: '14px' }}>{backlogStats.totalCount} items</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#a1a1aa' }}>Total Backlog Points:</span>
+                  <b style={{ color: '#38bdf8', fontSize: '14px' }}>{backlogStats.totalPoints} pts</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#a1a1aa' }}>Average Story Size:</span>
+                  <b style={{ color: '#34d399' }}>{backlogStats.avgSize} pts</b>
+                </div>
+              </div>
+            </div>
+
+            <div className="adoSidebarCard">
+              <h4>Value Area Split</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
+                    <span style={{ color: '#60a5fa' }}>Business Value</span>
+                    <span><b>{backlogStats.businessCount}</b> ({backlogStats.totalCount > 0 ? Math.round((backlogStats.businessCount / backlogStats.totalCount) * 100) : 0}%)</span>
+                  </div>
+                  <div className="adoProgressTrack">
+                    <div
+                      className="adoProgressFill"
+                      style={{
+                        width: `${backlogStats.totalCount > 0 ? Math.round((backlogStats.businessCount / backlogStats.totalCount) * 100) : 0}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
+                    <span style={{ color: '#c084fc' }}>Architectural</span>
+                    <span><b>{backlogStats.archCount}</b> ({backlogStats.totalCount > 0 ? Math.round((backlogStats.archCount / backlogStats.totalCount) * 100) : 0}%)</span>
+                  </div>
+                  <div className="adoProgressTrack">
+                    <div
+                      className="adoProgressFill"
+                      style={{
+                        width: `${backlogStats.totalCount > 0 ? Math.round((backlogStats.archCount / backlogStats.totalCount) * 100) : 0}%`,
+                        background: '#a855f7',
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="adoSidebarCard">
+              <h4>Item Types in Backlog</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#38bdf8' }}>📖 User Stories</span>
+                  <b>{backlogStats.typeCounts['User Story']}</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#f87171' }}>🐞 Bugs</span>
+                  <b>{backlogStats.typeCounts['Bug']}</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span style={{ color: '#c084fc' }}>⚡ Features</span>
+                  <b>{backlogStats.typeCounts['Feature']}</b>
+                </div>
+              </div>
+            </div>
+
+            <div className="adoSidebarCard">
+              <h4>State Breakdown</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px' }}>
+                {Object.entries(backlogStats.stateCounts).map(([sName, count]) => (
+                  <div key={sName} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className={`adoStateDot ${sName.toLowerCase().replace(/\s+/g, '')}`} />
+                      <span style={{ color: '#d4d4d8' }}>{sName}</span>
+                    </div>
+                    <span style={{ color: '#a1a1aa' }}><b>{count}</b> items</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       ) : activeSubTab === 'Capacity' ? (
-        <div className="adoPlaceholderTab">
-          <Users size={36} color="#0078d4" />
-          <h3>Team Capacity Planning</h3>
-          <p>Allocate team daily capacity per activity (Development, Testing, Documentation) and manage days off.</p>
-          <button type="button" className="adoSecondaryBtn" onClick={() => setActiveSubTab('Taskboard')}>
-            Switch to Taskboard
-          </button>
+        <div className="adoCapacityWrapper">
+          <div className="adoCapacityMain">
+            <div className="adoCapacityToolbar">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <input
+                  type="text"
+                  placeholder="Add Team Member..."
+                  value={newMemberName}
+                  onChange={e => setNewMemberName(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter') handleAddCapacityMember()
+                  }}
+                  className="adoCapInput"
+                  style={{ width: '220px' }}
+                />
+                <button
+                  type="button"
+                  className="adoPrimaryBtn"
+                  onClick={handleAddCapacityMember}
+                  disabled={!newMemberName.trim()}
+                >
+                  <Users size={13} /> Add Member
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                {capacitySavedNotice && (
+                  <span style={{ fontSize: '11.5px', color: '#34d399', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Save size={12} /> Capacity settings saved
+                  </span>
+                )}
+                <span className="adoBacklogStatItem">
+                  Working Days: <b>{capacityStats.workingDays}d</b>
+                </span>
+                <span className="adoBacklogStatItem accent">
+                  Total Capacity: <b>{capacityStats.totalTeamCapacity}h</b>
+                </span>
+                <span className="adoBacklogStatItem success">
+                  Assigned: <b>{capacityStats.totalAssignedHours}h</b> ({capacityStats.teamUtilization}%)
+                </span>
+              </div>
+            </div>
+
+            <div className="adoCapacityTableWrap">
+              <table className="adoCapacityTable">
+                <thead>
+                  <tr>
+                    <th>Team Member</th>
+                    <th style={{ width: '160px' }}>Activity</th>
+                    <th style={{ width: '130px' }}>Capacity / Day</th>
+                    <th style={{ width: '120px' }}>Days Off (PTO)</th>
+                    <th style={{ width: '130px', textAlign: 'right' }}>Total Cap (h)</th>
+                    <th style={{ width: '130px', textAlign: 'right' }}>Assigned (h)</th>
+                    <th style={{ width: '160px' }}>Utilization</th>
+                    <th style={{ width: '60px', textAlign: 'center' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {capacityStats.memberDetails.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} style={{ textAlign: 'center', padding: '40px 20px', color: '#71717a' }}>
+                        No team members configured for capacity planning. Type a name above to add members.
+                      </td>
+                    </tr>
+                  ) : (
+                    capacityStats.memberDetails.map(member => (
+                      <tr key={member.id}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div className="adoAvatarSmall">
+                              {member.name.charAt(0).toUpperCase()}
+                            </div>
+                            <span style={{ fontWeight: 600, color: '#f4f4f5' }}>
+                              {member.name}
+                            </span>
+                          </div>
+                        </td>
+                        <td>
+                          <select
+                            value={member.activity || 'Development'}
+                            onChange={e => handleUpdateMemberCapacity(member.id, 'activity', e.target.value)}
+                            className="adoCapSelect"
+                          >
+                            <option value="Development">Development</option>
+                            <option value="Testing">Testing</option>
+                            <option value="Design">Design</option>
+                            <option value="Documentation">Documentation</option>
+                            <option value="Requirements">Requirements</option>
+                            <option value="Deployment">Deployment</option>
+                          </select>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                              type="number"
+                              min="0"
+                              max="24"
+                              step="0.5"
+                              value={member.capacity_per_day}
+                              onChange={e => handleUpdateMemberCapacity(member.id, 'capacity_per_day', parseFloat(e.target.value) || 0)}
+                              className="adoCapInput"
+                            />
+                            <span style={{ fontSize: '11px', color: '#71717a' }}>h/day</span>
+                          </div>
+                        </td>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <input
+                              type="number"
+                              min="0"
+                              max={capacityStats.workingDays}
+                              step="0.5"
+                              value={member.days_off}
+                              onChange={e => handleUpdateMemberCapacity(member.id, 'days_off', parseFloat(e.target.value) || 0)}
+                              className="adoCapInput"
+                            />
+                            <span style={{ fontSize: '11px', color: '#71717a' }}>days</span>
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: '#d4d4d8' }}>
+                          {member.individualCap}h
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 600, color: member.isOverloaded ? '#ef4444' : '#38bdf8' }}>
+                          {member.assignedHours}h
+                        </td>
+                        <td>
+                          <div className="adoProgressBarWrap">
+                            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10.5px', color: member.isOverloaded ? '#f87171' : '#a1a1aa' }}>
+                              <span>{member.utilization}%</span>
+                              <span>{member.isOverloaded ? 'Overloaded' : 'OK'}</span>
+                            </div>
+                            <div className="adoProgressTrack">
+                              <div
+                                className={`adoProgressFill ${member.isOverloaded ? 'danger' : member.utilization > 85 ? 'warning' : 'success'}`}
+                                style={{ width: `${Math.min(100, member.utilization)}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <button
+                            type="button"
+                            className="adoTreeChevronBtn"
+                            onClick={() => handleRemoveCapacityMember(member.id)}
+                            title="Remove Member"
+                            style={{ color: '#71717a' }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Right Capacity Sidebar */}
+          <div className="adoCapacitySidebar">
+            <div className="adoSidebarCard">
+              <h4>Team Capacity Progress</h4>
+              <div className="adoProgressBarWrap">
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px', color: '#a1a1aa' }}>
+                  <span>Total Work Assigned</span>
+                  <span><b>{capacityStats.totalAssignedHours}h</b> / {capacityStats.totalTeamCapacity}h</span>
+                </div>
+                <div className="adoProgressTrack" style={{ height: '10px' }}>
+                  <div
+                    className={`adoProgressFill ${capacityStats.teamUtilization > 100 ? 'danger' : capacityStats.teamUtilization > 85 ? 'warning' : 'success'}`}
+                    style={{ width: `${Math.min(100, capacityStats.teamUtilization)}%` }}
+                  />
+                </div>
+                <span style={{ fontSize: '11px', color: capacityStats.teamUtilization > 100 ? '#f87171' : '#34d399', marginTop: '2px' }}>
+                  {capacityStats.teamUtilization > 100
+                    ? `⚠️ Overallocated by ${Math.round((capacityStats.totalAssignedHours - capacityStats.totalTeamCapacity) * 10) / 10} hours`
+                    : `✓ ${Math.round((capacityStats.totalTeamCapacity - capacityStats.totalAssignedHours) * 10) / 10} hours available capacity`}
+                </span>
+              </div>
+            </div>
+
+            <div className="adoSidebarCard">
+              <h4>Capacity by Activity</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {Object.entries(capacityStats.activityCapacity)
+                  .filter(([_, data]) => data.capacity > 0 || data.assigned > 0)
+                  .map(([activity, data]) => {
+                    const actUtil = data.capacity > 0 ? Math.round((data.assigned / data.capacity) * 100) : (data.assigned > 0 ? 100 : 0)
+                    return (
+                      <div key={activity} className="adoCapacityBreakdownItem">
+                        <div className="adoCapacityBreakdownHeader">
+                          <span style={{ color: '#f4f4f5', fontWeight: 500 }}>{activity}</span>
+                          <span style={{ color: data.assigned > data.capacity ? '#f87171' : '#a1a1aa' }}>
+                            <b>{data.assigned}h</b> of {data.capacity}h ({actUtil}%)
+                          </span>
+                        </div>
+                        <div className="adoProgressTrack">
+                          <div
+                            className={`adoProgressFill ${data.assigned > data.capacity ? 'danger' : actUtil > 85 ? 'warning' : 'success'}`}
+                            style={{ width: `${Math.min(100, actUtil)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+              </div>
+            </div>
+
+            <div className="adoSidebarCard">
+              <h4>Sprint Parameters</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11.5px', color: '#a1a1aa' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Sprint Working Days:</span>
+                  <b style={{ color: '#ffffff' }}>{capacityStats.workingDays} Days</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Active Team Members:</span>
+                  <b style={{ color: '#ffffff' }}>{capacityStats.memberDetails.length}</b>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Avg Team Capacity:</span>
+                  <b style={{ color: '#ffffff' }}>
+                    {capacityStats.memberDetails.length > 0 ? Math.round((capacityStats.totalTeamCapacity / capacityStats.memberDetails.length) * 10) / 10 : 0} h/person
+                  </b>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       ) : (
-        <div className="adoPlaceholderTab">
-          <Flame size={36} color="#0078d4" />
-          <h3>Sprint Analytics & Burndown</h3>
-          <p>Sprint burndown, velocity trends, and task burn-up metrics.</p>
-          <button type="button" className="adoSecondaryBtn" onClick={() => setActiveSubTab('Taskboard')}>
-            Switch to Taskboard
-          </button>
+        <div className="adoAnalyticsWrapper">
+          {/* KPI Summary Cards */}
+          <div className="adoAnalyticsKpiGrid">
+            <div className="adoAnalyticsKpiCard">
+              <span className="label">Total Sprint Scope</span>
+              <span className="value">{analyticsMetric === 'hours' ? `${sprintStats.totalSprintWork}h` : `${boardData?.work_items.length || 0} items`}</span>
+              <span className="sub">Baseline planned effort</span>
+            </div>
+            <div className="adoAnalyticsKpiCard">
+              <span className="label">Completed Work</span>
+              <span className="value" style={{ color: '#34d399' }}>
+                {analyticsMetric === 'hours' ? `${sprintStats.totalCompleted}h` : `${boardData?.work_items.filter(w => ['done', 'closed', 'completed', 'resolved'].includes(w.state.toLowerCase())).length || 0} items`}
+              </span>
+              <span className="sub">{sprintStats.percentDelivered}% of sprint delivered</span>
+            </div>
+            <div className="adoAnalyticsKpiCard">
+              <span className="label">Remaining Work</span>
+              <span className="value" style={{ color: '#38bdf8' }}>
+                {analyticsMetric === 'hours' ? `${sprintStats.totalRemaining}h` : `${boardData?.work_items.filter(w => !['done', 'closed', 'completed', 'resolved'].includes(w.state.toLowerCase())).length || 0} items`}
+              </span>
+              <span className="sub">Current sprint backlog</span>
+            </div>
+            <div className="adoAnalyticsKpiCard">
+              <span className="label">Required Daily Burn</span>
+              <span className="value" style={{ color: '#fbbf24' }}>
+                {analyticsMetric === 'hours' ? `${sprintStats.requiredDailyBurn}h` : `${Math.round(((boardData?.work_items.filter(w => !['done', 'closed', 'completed', 'resolved'].includes(w.state.toLowerCase())).length || 0) / sprintStats.workingDays) * 10) / 10} /d`}
+              </span>
+              <span className="sub">Across {sprintStats.workingDays} working days</span>
+            </div>
+            <div className="adoAnalyticsKpiCard">
+              <span className="label">Sprint Health</span>
+              <span className="value" style={{ color: sprintStats.healthStatus === 'On Track' ? '#34d399' : sprintStats.healthStatus === 'At Risk' ? '#fbbf24' : '#ef4444', fontSize: '18px' }}>
+                {sprintStats.healthStatus === 'On Track' ? '✓ On Track' : sprintStats.healthStatus === 'At Risk' ? '⚠️ At Risk' : '🚨 Behind Schedule'}
+              </span>
+              <span className="sub">Based on burn rate</span>
+            </div>
+          </div>
+
+          {/* Interactive Burndown Chart Card */}
+          <div className="adoBurndownCard">
+            <div className="adoBurndownHeader">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Flame size={18} color="#f59e0b" />
+                <h3 style={{ margin: 0, fontSize: '15px', color: '#ffffff' }}>Sprint Burndown Chart</h3>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <div className="adoBurndownLegend">
+                  <div className="adoLegendItem">
+                    <span className="adoLegendColor" style={{ background: '#71717a', height: '2px' }} />
+                    <span>Ideal Trend</span>
+                  </div>
+                  <div className="adoLegendItem">
+                    <span className="adoLegendColor" style={{ background: '#0078d4' }} />
+                    <span>Remaining Work</span>
+                  </div>
+                  <div className="adoLegendItem">
+                    <span className="adoLegendColor" style={{ background: '#10b981' }} />
+                    <span>Completed Work</span>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', background: '#27272a', borderRadius: '4px', padding: '2px' }}>
+                  <button
+                    type="button"
+                    style={{
+                      background: analyticsMetric === 'hours' ? '#0078d4' : 'transparent',
+                      color: '#ffffff',
+                      border: 'none',
+                      padding: '4px 10px',
+                      fontSize: '11.5px',
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => setAnalyticsMetric('hours')}
+                  >
+                    Hours
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      background: analyticsMetric === 'items' ? '#0078d4' : 'transparent',
+                      color: '#ffffff',
+                      border: 'none',
+                      padding: '4px 10px',
+                      fontSize: '11.5px',
+                      borderRadius: '3px',
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => setAnalyticsMetric('items')}
+                  >
+                    Work Items
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* SVG Burndown Rendering */}
+            <div className="adoBurndownSvgWrap">
+              <svg viewBox="0 0 700 280" style={{ width: '100%', height: '280px', overflow: 'visible' }}>
+                <defs>
+                  <linearGradient id="burndownAreaGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#0078d4" stopOpacity="0.35" />
+                    <stop offset="100%" stopColor="#0078d4" stopOpacity="0.0" />
+                  </linearGradient>
+                </defs>
+
+                {/* Gridlines */}
+                {[0, 1, 2, 3, 4].map(idx => {
+                  const y = 30 + idx * 50
+                  return (
+                    <g key={`grid-${idx}`}>
+                      <line x1="50" y1={y} x2="660" y2={y} stroke="#2e2f38" strokeDasharray="3 3" />
+                      <text x="42" y={y + 4} fill="#71717a" fontSize="10" textAnchor="end">
+                        {Math.round((sprintStats.totalSprintWork || 100) * (1 - idx / 4))}
+                        {analyticsMetric === 'hours' ? 'h' : ''}
+                      </text>
+                    </g>
+                  )
+                })}
+
+                {/* X Axis Labels */}
+                {burndownData.map((pt, idx) => {
+                  const x = 50 + (idx / (burndownData.length - 1)) * 610
+                  return (
+                    <g key={`x-axis-${idx}`}>
+                      <line x1={x} y1={230} x2={x} y2={235} stroke="#52525b" />
+                      <text x={x} y={250} fill="#a1a1aa" fontSize="10" textAnchor="middle">
+                        {pt.label}
+                      </text>
+                    </g>
+                  )
+                })}
+
+                {/* Ideal Trend Line (Dashed) */}
+                <line
+                  x1="50"
+                  y1="30"
+                  x2="660"
+                  y2="230"
+                  stroke="#71717a"
+                  strokeWidth="2"
+                  strokeDasharray="5 5"
+                />
+
+                {/* Area under remaining line */}
+                {(() => {
+                  const maxVal = Math.max(1, sprintStats.totalSprintWork || 100)
+                  const validPts = burndownData.filter(pt => pt.actual !== null)
+                  if (validPts.length < 2) return null
+                  const pointsStr = validPts
+                    .map((pt, idx) => {
+                      const x = 50 + (idx / (burndownData.length - 1)) * 610
+                      const y = 230 - ((pt.actual || 0) / maxVal) * 200
+                      return `${x},${y}`
+                    })
+                    .join(' ')
+                  const lastX = 50 + ((validPts.length - 1) / (burndownData.length - 1)) * 610
+                  return (
+                    <polygon
+                      points={`50,230 ${pointsStr} ${lastX},230`}
+                      fill="url(#burndownAreaGradient)"
+                    />
+                  )
+                })()}
+
+                {/* Actual Remaining Line */}
+                {(() => {
+                  const maxVal = Math.max(1, sprintStats.totalSprintWork || 100)
+                  const validPts = burndownData.filter(pt => pt.actual !== null)
+                  if (validPts.length < 2) return null
+                  const pathD = validPts.reduce((acc, pt, idx) => {
+                    const x = 50 + (idx / (burndownData.length - 1)) * 610
+                    const y = 230 - ((pt.actual || 0) / maxVal) * 200
+                    return `${acc} ${idx === 0 ? 'M' : 'L'} ${x} ${y}`
+                  }, '')
+                  return <path d={pathD} fill="none" stroke="#0078d4" strokeWidth="3" />
+                })()}
+
+                {/* Completed Line */}
+                {(() => {
+                  const maxVal = Math.max(1, sprintStats.totalSprintWork || 100)
+                  const validPts = burndownData.filter(pt => pt.completed !== null)
+                  if (validPts.length < 2) return null
+                  const pathD = validPts.reduce((acc, pt, idx) => {
+                    const x = 50 + (idx / (burndownData.length - 1)) * 610
+                    const y = 230 - ((pt.completed || 0) / maxVal) * 200
+                    return `${acc} ${idx === 0 ? 'M' : 'L'} ${x} ${y}`
+                  }, '')
+                  return <path d={pathD} fill="none" stroke="#10b981" strokeWidth="2.5" />
+                })()}
+
+                {/* Data Points with Hover */}
+                {burndownData.map((pt, idx) => {
+                  const x = 50 + (idx / (burndownData.length - 1)) * 610
+                  const maxVal = Math.max(1, sprintStats.totalSprintWork || 100)
+                  const actualY = pt.actual !== null ? 230 - (pt.actual / maxVal) * 200 : null
+
+                  return (
+                    <g key={`pts-${idx}`} onMouseEnter={() => setHoveredDayIndex(idx)} onMouseLeave={() => setHoveredDayIndex(null)}>
+                      {actualY !== null && (
+                        <circle
+                          cx={x}
+                          cy={actualY}
+                          r={hoveredDayIndex === idx ? 6 : 4}
+                          fill="#0078d4"
+                          stroke="#ffffff"
+                          strokeWidth="2"
+                          style={{ cursor: 'pointer', transition: 'all 0.15s ease' }}
+                        />
+                      )}
+                      {hoveredDayIndex === idx && pt.actual !== null && actualY !== null && (
+                        <g>
+                          <rect
+                            x={Math.min(560, Math.max(10, x - 55))}
+                            y={Math.max(10, actualY - 50)}
+                            width="110"
+                            height="40"
+                            rx="4"
+                            fill="#18181b"
+                            stroke="#3f3f46"
+                          />
+                          <text
+                            x={Math.min(560, Math.max(10, x - 55)) + 55}
+                            y={Math.max(10, actualY - 50) + 16}
+                            fill="#ffffff"
+                            fontSize="10.5"
+                            fontWeight="bold"
+                            textAnchor="middle"
+                          >
+                            {pt.label}
+                          </text>
+                          <text
+                            x={Math.min(560, Math.max(10, x - 55)) + 55}
+                            y={Math.max(10, actualY - 50) + 30}
+                            fill="#38bdf8"
+                            fontSize="10"
+                            textAnchor="middle"
+                          >
+                            Rem: {pt.actual}{analyticsMetric === 'hours' ? 'h' : ''} | Done: {pt.completed}{analyticsMetric === 'hours' ? 'h' : ''}
+                          </text>
+                        </g>
+                      )}
+                    </g>
+                  )
+                })}
+              </svg>
+            </div>
+          </div>
+
+          {/* Flow Distribution & Member Contribution Cards */}
+          <div className="adoAnalyticsFlowGrid">
+            <div className="adoSidebarCard">
+              <h4>Sprint State Flow Distribution</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {Object.entries(sprintStats.stateDistribution).map(([state, data]) => {
+                  const pct = sprintStats.totalSprintWork > 0 ? Math.round((data.hours / sprintStats.totalSprintWork) * 100) : 0
+                  return (
+                    <div key={state} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <span className={`adoStateDot ${state.toLowerCase().replace(/\s+/g, '')}`} />
+                          <span style={{ color: '#d4d4d8' }}>{state}</span>
+                        </div>
+                        <span style={{ color: '#a1a1aa' }}>
+                          <b>{data.count} items</b> ({Math.round(data.hours * 10) / 10}h &bull; {pct}%)
+                        </span>
+                      </div>
+                      <div className="adoProgressTrack">
+                        <div
+                          className="adoProgressFill"
+                          style={{
+                            width: `${pct}%`,
+                            background: state === 'Done' ? '#10b981' : state === 'In Review' ? '#f59e0b' : state === 'In Progress' ? '#0078d4' : '#6b7280',
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="adoSidebarCard">
+              <h4>Team Member Effort Contribution</h4>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '220px', overflowY: 'auto' }}>
+                {Object.entries(sprintStats.memberEffort).map(([member, effort]) => {
+                  const compPct = effort.total > 0 ? Math.round((effort.completed / effort.total) * 100) : 0
+                  return (
+                    <div key={member} style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11.5px' }}>
+                        <span style={{ color: '#f4f4f5', fontWeight: 500 }}>{member}</span>
+                        <span style={{ color: '#a1a1aa' }}>
+                          <b>{Math.round(effort.completed * 10) / 10}h done</b> / {Math.round(effort.total * 10) / 10}h ({compPct}%)
+                        </span>
+                      </div>
+                      <div className="adoProgressTrack">
+                        <div className="adoProgressFill success" style={{ width: `${compPct}%` }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1995,23 +3863,78 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
 
       {/* 7. Email Sprint Report Modal (Controlled by Plugin: email_sprint_report) */}
       {showEmailReport && showEmailModal && (() => {
+        const isDeliverablesMode = activeSubTab === 'Deliverables'
         const sprintTitle = currentIteration ? formatSprintName(currentIteration.name, currentIteration.path) : 'Current Sprint'
         const teamTitle = teams.find(t => t.id === selectedTeamId)?.name || selectedTeamId
-        const emailSubject = `[Azure Boards Health] Sprint Report: ${sprintTitle} (${teamTitle})`
+        const sprintLabel = formatSprintMonthYear(currentIteration?.start_date, currentIteration?.finish_date, currentIteration?.name)
+        const sprintWorkingDays = calculateSprintBusinessDays(currentIteration?.start_date, currentIteration?.finish_date)
+        const capacityPerPerson = sprintWorkingDays * 8
 
-        const buildReport = () => buildSprintReport({
-          sprintTitle,
-          teamTitle: String(teamTitle),
-          activeWorkItems: boardData?.work_items?.length || 0,
-          closedWithoutHours: closedWithoutHoursItems,
-          closedWithoutHoursCount: checksSummary.tasks_closed_without_hours_count,
-          staleInReview: staleInReviewItems,
-          staleInReviewCount: checksSummary.stories_in_review_stale_count,
-          milestone: computedMilestone,
-          organization,
-          project,
-          dashboardUrl: window.location.origin,
+        const memberCapacityMap: Record<string, number> = {}
+        capacityMembers.forEach(m => {
+          const availableDays = Math.max(0, sprintWorkingDays - (m.days_off || 0))
+          const indCap = Math.round(availableDays * (m.capacity_per_day || 8) * 10) / 10
+          memberCapacityMap[m.name] = indCap
         })
+
+        const emailSubject = isDeliverablesMode
+          ? `[Deliverables] Work Delivered in ${sprintLabel} - ${teamTitle}`
+          : `[Azure Boards Health] Sprint Report: ${sprintTitle} (${teamTitle})`
+
+        const iterToUse = boardData?.iteration || currentIteration
+        const rawDelivered = deliverablesReport?.completedDeliverables || computedMilestone?.achieved_items || []
+        const deliveredStories = rawDelivered.filter(item => isItemClosedInSprint(item, iterToUse))
+        const deliveredMembers = isDeliverablesMode
+          ? prepareMemberDeliverables(
+              deliveredStories,
+              deliverablesReport?.memberContributions || [],
+              boardData?.work_items || [],
+              memberCapacityMap,
+              capacityPerPerson,
+              iterToUse
+            )
+          : []
+
+        const buildReport = () => {
+          if (isDeliverablesMode) {
+            return buildTeamDeliverablesReport({
+              sprintLabel,
+              capacityPerPersonHours: capacityPerPerson,
+              teamTitle: String(teamTitle),
+              members: deliveredMembers,
+            })
+          }
+          return buildSprintReport({
+            sprintTitle,
+            teamTitle: String(teamTitle),
+            activeWorkItems: boardData?.work_items?.length || 0,
+            closedWithoutHours: deliverablesReport?.warningsAndHygiene
+              ? deliverablesReport.warningsAndHygiene.closedWithoutHoursItems
+              : closedWithoutHoursItems,
+            closedWithoutHoursCount: deliverablesReport?.warningsAndHygiene
+              ? deliverablesReport.warningsAndHygiene.closedWithoutHoursCount
+              : checksSummary.tasks_closed_without_hours_count,
+            staleInReview: deliverablesReport?.warningsAndHygiene
+              ? deliverablesReport.warningsAndHygiene.staleInReviewItems
+              : staleInReviewItems,
+            staleInReviewCount: deliverablesReport?.warningsAndHygiene
+              ? deliverablesReport.warningsAndHygiene.staleInReviewCount
+              : checksSummary.stories_in_review_stale_count,
+            milestone: deliverablesReport?.capacityEffortSummary
+              ? {
+                  closed_stories_count: deliverablesReport.capacityEffortSummary.closedStoriesCount,
+                  total_stories: deliverablesReport.capacityEffortSummary.totalStories,
+                  completion_rate_pct: deliverablesReport.capacityEffortSummary.completionRatePct,
+                  total_delivered_hours: deliverablesReport.capacityEffortSummary.totalDeliveredHours,
+                  features_delivered_count: deliverablesReport.capacityEffortSummary.featuresDeliveredCount,
+                  bugs_resolved_count: deliverablesReport.capacityEffortSummary.bugsResolvedCount,
+                }
+              : computedMilestone,
+            organization,
+            project,
+            dashboardUrl: window.location.origin,
+          })
+        }
         const generateEmailReportText = () => buildReport().text
 
         // mailto: links are limited in length (~2000 characters). A long list of flagged items would be cut off, so in that
@@ -2024,7 +3947,9 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
           let needsPaste = false
           if (build(body).length > MAILTO_LIMIT) {
             await handleCopyToClipboard()
-            body = `Hi Team,\n\nThe full Sprint Health & Hygiene Report for ${sprintTitle} (${teamTitle}) is on your clipboard - press Ctrl+V to paste it here.\n`
+            body = isDeliverablesMode
+              ? `Hi,\n\nThe full Team Deliverables Report for ${sprintLabel} (${teamTitle}) is on your clipboard - press Ctrl+V to paste it here.\n`
+              : `Hi Team,\n\nThe full Sprint Health & Hygiene Report for ${sprintTitle} (${teamTitle}) is on your clipboard - press Ctrl+V to paste it here.\n`
             needsPaste = true
           }
           const mailtoUrl = build(body)
@@ -2068,7 +3993,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
               <div className="sprintModalHeader">
                 <div className="sprintModalTitle">
                   <Mail size={18} color="#06b6d4" />
-                  <span>Send Sprint Health & Hygiene Report</span>
+                  <span>{isDeliverablesMode ? 'Send Team Deliverables Report' : 'Send Sprint Health & Hygiene Report'}</span>
                 </div>
                 <button
                   type="button"
@@ -2102,29 +4027,60 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                 </div>
 
                 <div className="emailPreviewBox">
-                  <div className="emailPreviewHeader">Preview of Report Body:</div>
-                  <div className="emailPreviewContent">
-                    <p><b>Sprint:</b> {sprintTitle}</p>
-                    <p><b>Team:</b> {teamTitle}</p>
-                    <p><b>Hygiene Check 1:</b> {checksSummary.tasks_closed_without_hours_count} closed task(s) with blank hours</p>
-                    {closedWithoutHoursItems.map(item => (
-                      <p key={`c1-${item.id}`} style={{ paddingLeft: 14 }}>
-                        • <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - Assigned to: {assignee(item)}
-                      </p>
-                    ))}
-                    <p><b>Hygiene Check 2:</b> {checksSummary.stories_in_review_stale_count} user story(s) in review &gt; 4 working days</p>
-                    {staleInReviewItems.map(item => (
-                      <p key={`c2-${item.id}`} style={{ paddingLeft: 14 }}>
-                        • <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - Assigned to: {assignee(item)}
-                      </p>
-                    ))}
-                    {computedMilestone && (
-                      <>
-                        <p><b>Milestone Completion:</b> {computedMilestone.closed_stories_count}/{computedMilestone.total_stories} stories ({computedMilestone.completion_rate_pct}%)</p>
-                        <p><b>Verified Delivered Effort:</b> {computedMilestone.total_delivered_hours} hrs</p>
-                      </>
-                    )}
+                  <div className="emailPreviewHeader">
+                    {isDeliverablesMode ? 'Preview of Deliverables Report Body:' : 'Preview of Report Body:'}
                   </div>
+                  {isDeliverablesMode ? (
+                    <div className="emailPreviewContent" style={{ fontFamily: 'Segoe UI, Arial, sans-serif' }}>
+                      <p>Hi,</p>
+                      <p style={{ marginTop: '8px' }}>
+                        Below are the high-level details of the <u>work delivered</u> in <b>{sprintLabel}</b>.
+                      </p>
+                      <p style={{ marginTop: '4px', marginBottom: '16px' }}>
+                        Capacity/person – <b>{capacityPerPerson} hrs.</b>
+                      </p>
+                      {deliveredMembers.length === 0 ? (
+                        <p style={{ color: '#94a3b8', fontStyle: 'italic' }}>No completed deliverables recorded for this sprint.</p>
+                      ) : (
+                        deliveredMembers.map(m => (
+                          <div key={m.name} style={{ marginTop: '12px' }}>
+                            <p style={{ fontWeight: 600, color: '#38bdf8' }}>
+                              @{m.name} ({m.hoursDelivered}h)
+                            </p>
+                            <ul style={{ margin: '4px 0 8px 18px', padding: 0 }}>
+                              {m.storyTitles.map((st, i) => (
+                                <li key={i}>{st}</li>
+                              ))}
+                              {m.bugCount > 0 && <li>Bug fixes ({m.bugCount} nos.)</li>}
+                            </ul>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    <div className="emailPreviewContent">
+                      <p><b>Sprint:</b> {sprintTitle}</p>
+                      <p><b>Team:</b> {teamTitle}</p>
+                      <p><b>Hygiene Check 1:</b> {checksSummary.tasks_closed_without_hours_count} closed task(s) with blank hours</p>
+                      {closedWithoutHoursItems.map(item => (
+                        <p key={`c1-${item.id}`} style={{ paddingLeft: 14 }}>
+                          • <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - Assigned to: {assignee(item)}
+                        </p>
+                      ))}
+                      <p><b>Hygiene Check 2:</b> {checksSummary.stories_in_review_stale_count} user story(s) in review &gt; 4 working days</p>
+                      {staleInReviewItems.map(item => (
+                        <p key={`c2-${item.id}`} style={{ paddingLeft: 14 }}>
+                          • <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - Assigned to: {assignee(item)}
+                        </p>
+                      ))}
+                      {computedMilestone && (
+                        <>
+                          <p><b>Milestone Completion:</b> {computedMilestone.closed_stories_count}/{computedMilestone.total_stories} stories ({computedMilestone.completion_rate_pct}%)</p>
+                          <p><b>Verified Delivered Effort:</b> {computedMilestone.total_delivered_hours} hrs</p>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {emailSentSuccess && (

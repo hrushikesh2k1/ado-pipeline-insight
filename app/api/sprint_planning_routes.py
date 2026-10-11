@@ -7,7 +7,7 @@ import requests
 from fastapi import APIRouter, Header, HTTPException, Query
 
 from app.api.routes import _resolve_pat
-from app.schemas.sprint_planning import SprintPlan, SprintPlanRequest, SprintPlanningSetup
+from app.schemas.sprint_planning import SprintCommitRequest, SprintCommitResponse, SprintPlan, SprintPlanRequest, SprintPlanningSetup
 from app.services import sprint_planning
 from core.ado_client import AzureDevOpsClient
 from core.validation import validate_organization, validate_project
@@ -66,7 +66,28 @@ def sprint_planning_plan(payload: SprintPlanRequest) -> SprintPlan:
             AzureDevOpsClient(organization=org_clean, pat=token), organization=org_clean, project=proj_clean, team=payload.team.strip(),
             from_iteration_id=payload.from_iteration_id, to_iteration_id=payload.to_iteration_id,
             people=[p.model_dump() for p in payload.people], per_person=payload.per_person, active_days=payload.active_days, work_item_types=payload.work_item_types,
+            sprint_goal=payload.sprint_goal, capacity_mode=payload.capacity_mode, focus_factor=payload.focus_factor,
+            tags=payload.tags, area_filter=payload.area_filter,
         )
     except Exception as exc:
         raise _explain(exc) from exc
     return SprintPlan(**plan)
+
+
+@router.post("/ado/sprint-planning/commit", response_model=SprintCommitResponse, tags=["ado"], operation_id="sprint_planning_commit")
+def sprint_planning_commit(payload: SprintCommitRequest) -> SprintCommitResponse:
+    """Commit the chosen plan assignments and iteration path into Azure DevOps."""
+    org_clean, proj_clean = _names(payload.organization, payload.project)
+    token = _resolve_pat(org_clean, payload.pat)
+    try:
+        result = sprint_planning.commit_sprint_plan(
+            AzureDevOpsClient(organization=org_clean, pat=token),
+            project=proj_clean,
+            iteration_path=payload.to_iteration_path.strip(),
+            assignments=[a.model_dump() for a in payload.assignments],
+            sprint_goal=payload.sprint_goal,
+        )
+    except Exception as exc:
+        raise _explain(exc) from exc
+    return SprintCommitResponse(**result)
+

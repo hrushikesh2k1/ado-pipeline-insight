@@ -25,9 +25,20 @@ export function loadPeople(org: string, project: string, team: string): Planning
     if (!Array.isArray(parsed)) return []
     return parsed.flatMap((p): PlanningPerson[] => {
       if (!p || typeof p !== 'object') return []
-      const { name, unique_name: unique, areas, included, manual } = p as Record<string, unknown>
+      const { name, unique_name: unique, areas, included, manual, working_days, pto_days, focus_factor, capacity_points } = p as Record<string, unknown>
       if (typeof name !== 'string' || !name.trim()) return []
-      return [{ name: name.trim(), unique_name: typeof unique === 'string' ? unique.trim() : '', areas: cleanAreas(areas), included: included !== false, manual: manual === true }]
+      const item: PlanningPerson = {
+        name: name.trim(),
+        unique_name: typeof unique === 'string' ? unique.trim() : '',
+        areas: cleanAreas(areas),
+        included: included !== false,
+        manual: manual === true,
+      }
+      if (typeof working_days === 'number') item.working_days = working_days
+      if (typeof pto_days === 'number') item.pto_days = pto_days
+      if (typeof focus_factor === 'number') item.focus_factor = focus_factor
+      if (typeof capacity_points === 'number') item.capacity_points = capacity_points
+      return [item]
     })
   } catch {
     return []
@@ -51,7 +62,18 @@ export function mergeMembers(saved: PlanningPerson[], members: TeamMemberChoice[
     if (!key || seen.has(key)) continue
     seen.add(key)
     const old = byKey.get(key)
-    merged.push({ name: member.name || member.unique_name, unique_name: member.unique_name, areas: old?.areas ?? [], included: old?.included ?? true, manual: false })
+    const p: PlanningPerson = {
+      name: member.name || member.unique_name,
+      unique_name: member.unique_name,
+      areas: old?.areas ?? [],
+      included: old?.included ?? true,
+      manual: false,
+    }
+    if (old?.working_days !== undefined) p.working_days = old.working_days
+    if (old?.pto_days !== undefined) p.pto_days = old.pto_days
+    if (old?.focus_factor !== undefined) p.focus_factor = old.focus_factor
+    if (old?.capacity_points !== undefined) p.capacity_points = old.capacity_points
+    merged.push(p)
   }
   for (const p of saved) {
     if (p.manual && !seen.has(personKey(p))) {
@@ -80,9 +102,26 @@ export const setAreas = (people: PlanningPerson[], key: string, areas: string[])
 export const setIncluded = (people: PlanningPerson[], key: string, included: boolean): PlanningPerson[] =>
   people.map(p => (personKey(p) === key ? { ...p, included } : p))
 
+export const setPtoDays = (people: PlanningPerson[], key: string, pto: number): PlanningPerson[] =>
+  people.map(p => (personKey(p) === key ? { ...p, pto_days: Math.max(0, pto) } : p))
+
+export const setWorkingDays = (people: PlanningPerson[], key: string, days: number): PlanningPerson[] =>
+  people.map(p => (personKey(p) === key ? { ...p, working_days: Math.max(0, days) } : p))
+
 /** The people the plan is made for. */
 export const peopleForPlan = (people: PlanningPerson[]): PlanPerson[] =>
-  people.filter(p => p.included).map(p => ({ name: p.name, unique_name: p.unique_name, areas: p.areas }))
+  people.filter(p => p.included).map(p => {
+    const res: PlanPerson = {
+      name: p.name,
+      unique_name: p.unique_name,
+      areas: p.areas,
+    }
+    if (p.working_days !== undefined) res.working_days = p.working_days
+    if (p.pto_days !== undefined) res.pto_days = p.pto_days
+    if (p.focus_factor !== undefined) res.focus_factor = p.focus_factor
+    if (p.capacity_points !== undefined) res.capacity_points = p.capacity_points
+    return res
+  })
 
 /** What stops a plan being made (the button stays off), and what is only worth a warning. */
 export function planProblems(people: PlanningPerson[], fromId: string, toId: string): { blocking: string[]; warnings: string[] } {
@@ -148,6 +187,9 @@ export function daysInState(story: Pick<PlanStory, 'days_in_state' | 'state_sinc
 export function planAsMarkdown(plan: SprintPlan): string {
   const line = (s: PlanStory) => `- #${s.id} ${s.title} (${s.state}${s.flags.length ? `; ${s.flags.map(f => f.reason).join('; ')}` : ''})`
   const out: string[] = [`# Sprint plan: ${plan.to_sprint.name}`, '', `Team ${plan.team}. Stories carried over from ${plan.from_sprint.name}. ${plan.per_person} stories per person. Nothing was changed in Azure DevOps.`, '']
+  if (plan.sprint_goal) {
+    out.push(`> **Sprint Goal:** ${plan.sprint_goal}`, '')
+  }
   if (plan.flagged.length) {
     out.push('## Needs a look first', '')
     for (const s of plan.flagged) {
@@ -169,3 +211,5 @@ export function planAsMarkdown(plan: SprintPlan): string {
   if (plan.unplaced_total) out.push(`## Not placed (${plan.unplaced_total})`, ...plan.unplaced.map(u => `- #${u.story.id} ${u.story.title}: ${u.reason}`), '')
   return out.join('\n').trimEnd() + '\n'
 }
+
+

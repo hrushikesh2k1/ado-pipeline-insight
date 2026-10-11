@@ -144,6 +144,7 @@ class SprintWorkItem:
     original_estimate: float | None = None
     parent_id: int | None = None
     state_change_date: str | None = None
+    closed_date: str | None = None
     changed_date: str | None = None
     web_url: str | None = None
     business_days_in_review: int | None = None

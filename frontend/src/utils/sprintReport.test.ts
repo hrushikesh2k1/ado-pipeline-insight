@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { assignee, buildSprintReport, escapeHtml, workItemUrl } from './sprintReport'
+import {
+  assignee,
+  buildSprintReport,
+  buildTeamDeliverablesReport,
+  calculateSprintBusinessDays,
+  escapeHtml,
+  formatSprintMonthYear,
+  isSamePerson,
+  prepareMemberDeliverables,
+  workItemUrl,
+} from './sprintReport'
 
 const base = {
   sprintTitle: '26-10 (Oct Work) Sprint',
@@ -59,5 +69,97 @@ describe('helpers', () => {
   it('names unassigned items and escapes html', () => {
     expect(assignee({ id: 1, assigned_to_name: '  ' })).toBe('Unassigned')
     expect(escapeHtml('<a href="x">&')).toBe('&lt;a href=&quot;x&quot;&gt;&amp;')
+  })
+})
+
+describe('buildTeamDeliverablesReport & team deliverable helpers', () => {
+  it('formats sprint month and 2-digit year correctly', () => {
+    expect(formatSprintMonthYear('2026-09-01T00:00:00Z', '2026-09-30T00:00:00Z')).toBe("Sep '26")
+    expect(formatSprintMonthYear(null, null, '26-09 (Sep Work) Sprint')).toBe("Sep '26")
+  })
+
+  it('calculates 21 sprint business days and 168h capacity for September', () => {
+    const days = calculateSprintBusinessDays('2026-09-01T00:00:00Z', '2026-09-30T00:00:00Z')
+    expect(days).toBe(21)
+    expect(days * 8).toBe(168)
+  })
+
+  it('matches member names resiliently with aliases', () => {
+    expect(isSamePerson('BOORA Hrushikesh (Boora)', 'BOORA Hrushikesh')).toBe(true)
+    expect(isSamePerson('BADONI Sachin', 'badoni sachin')).toBe(true)
+    expect(isSamePerson('ADAPA Rajesh', 'GUDA Sriram')).toBe(false)
+  })
+
+  it('builds the exact team deliverables report structure', () => {
+    const report = buildTeamDeliverablesReport({
+      sprintLabel: "Sep '26",
+      capacityPerPersonHours: 168,
+      teamTitle: 'CloudOps-Monitoring',
+      members: [
+        {
+          name: 'BADONI Sachin',
+          hoursDelivered: 160,
+          storyTitles: [
+            'Legacy authentication for Container Insights',
+            'Update WebAPI Ingress to a 60 second timeout',
+          ],
+          bugCount: 3,
+        },
+        {
+          name: 'GUDA Sriram',
+          hoursDelivered: 144,
+          storyTitles: [
+            'MDC-related PVs that are in the Released state are to be cleaned up across environments',
+          ],
+          bugCount: 2,
+        },
+      ],
+    })
+
+    expect(report.text).toContain("Below are the high-level details of the work delivered in Sep '26.")
+    expect(report.text).toContain('Capacity/person – 168 hrs.')
+    expect(report.text).toContain('@BADONI Sachin (160h)')
+    expect(report.text).toContain('• Legacy authentication for Container Insights')
+    expect(report.text).toContain('• Bug fixes (3 nos.)')
+    expect(report.text).toContain('@GUDA Sriram (144h)')
+    expect(report.text).toContain('• Bug fixes (2 nos.)')
+
+    expect(report.html).toContain("work delivered</u> in <b>Sep '26</b>")
+    expect(report.html).toContain('Capacity/person – <b>168 hrs.</b>')
+    expect(report.html).toContain('@BADONI Sachin</span> (160h)</b>')
+    expect(report.html).toContain('<li>Bug fixes (3 nos.)</li>')
+  })
+
+  it('prepares member deliverables aggregating stories and bugs', () => {
+    const members = prepareMemberDeliverables(
+      [
+        {
+          id: 101,
+          title: 'Container Insights feature',
+          work_item_type: 'User Story',
+          assigned_to_name: 'BADONI Sachin',
+          hours_delivered: 40,
+        },
+        {
+          id: 102,
+          title: 'Pod restart bug',
+          work_item_type: 'Bug',
+          assigned_to_name: 'BADONI Sachin',
+          hours_delivered: 8,
+        },
+      ],
+      [
+        { name: 'BADONI Sachin', completedHours: 88 },
+      ],
+      [],
+      { 'BADONI Sachin': 160 },
+      168
+    )
+
+    expect(members).toHaveLength(1)
+    expect(members[0].name).toBe('BADONI Sachin')
+    expect(members[0].hoursDelivered).toBe(160) // Uses person capacity (160), not completed hours (88)
+    expect(members[0].storyTitles).toEqual(['Container Insights feature'])
+    expect(members[0].bugCount).toBe(1)
   })
 })

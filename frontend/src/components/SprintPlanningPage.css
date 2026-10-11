@@ -151,18 +151,193 @@
 .sppChip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--spp-border); border-radius: 20px; padding: 1px 8px; color: var(--spp-muted); font-size: 11px; white-space: nowrap; }
 .sppChip.flag { color: var(--spp-warn); border-color: rgba(245, 158, 11, 0.5); background: var(--spp-warn-bg); }
 .sppChip.flag.blocked { color: var(--spp-bad); border-color: rgba(248, 113, 113, 0.5); background: var(--spp-bad-bg); }
+.sppChip.points { background: rgba(129, 140, 248, 0.15); color: var(--spp-accent); border-color: rgba(129, 140, 248, 0.35); font-weight: 600; }
 .sppArea, .sppNote, .sppOwner { color: var(--spp-muted); }
 .sppOwner { font-weight: 600; color: var(--spp-text); }
 .sppFoot { font-size: 11.5px; color: var(--spp-muted); margin: 0; }
+
+/* Sprint Goal Bar */
+.sppGoalBar {
+  background: var(--spp-card);
+  border: 1px solid var(--spp-border);
+  border-left: 4px solid var(--spp-accent);
+  border-radius: 10px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.sppGoalLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--spp-accent);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.sppGoalInput {
+  flex: 1;
+  background: var(--spp-field);
+  color: var(--spp-text);
+  border: 1px solid var(--spp-border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 13px;
+}
+.sppGoalInput:focus-visible { outline: 2px solid var(--spp-accent); }
+
+/* Mode Switcher */
+.sppModeSwitcher {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--spp-field);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--spp-border);
+}
+.sppModeBtn {
+  background: transparent;
+  border: none;
+  color: var(--spp-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.sppModeBtn.active {
+  background: var(--spp-card);
+  color: var(--spp-text);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+/* AI Copilot & Risk Section */
+.sppAiSection {
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(52, 211, 153, 0.05));
+  border: 1px solid rgba(129, 140, 248, 0.3);
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sppAiHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sppAiTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--spp-text);
+}
+.sppRiskBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sppRiskBadge.low { background: rgba(52, 211, 153, 0.15); color: #34d399; border: 1px solid rgba(52, 211, 153, 0.35); }
+.sppRiskBadge.medium { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.35); }
+.sppRiskBadge.high { background: rgba(248, 113, 113, 0.15); color: #f87171; border: 1px solid rgba(248, 113, 113, 0.35); }
+.sppAiRecsList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.sppAiRecItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--spp-text);
+  background: var(--spp-card);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--spp-border);
+}
+
+/* Reassign Select */
+.sppReassignSelect {
+  background: var(--spp-field);
+  color: var(--spp-text);
+  border: 1px solid var(--spp-border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: 11px;
+  margin-left: auto;
+  cursor: pointer;
+}
+
+/* Working Days & PTO inputs */
+.sppCapInput {
+  width: 55px;
+  background: var(--spp-field);
+  color: var(--spp-text);
+  border: 1px solid var(--spp-border);
+  border-radius: 6px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Modal */
+.sppModalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(3px);
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.sppModalContent {
+  background: var(--spp-card);
+  border: 1px solid var(--spp-border);
+  border-radius: 14px;
+  max-width: 540px;
+  width: 100%;
+  padding: 22px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.sppModalHead { display: flex; justify-content: space-between; align-items: center; }
+.sppModalHead h3 { margin: 0; font-size: 16px; font-weight: 700; }
+.sppModalFoot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }
 
 @media (max-width: 720px) {
   .sppPage { padding: 16px 14px 36px; }
   .sppFlaggedList, .sppPeople { grid-template-columns: 1fr; }
   .sppPickerBtn { min-width: 0; width: 100%; max-width: none; }
-  /* the people table becomes one card per person: checkbox, name, remove, then the areas on a row of their own */
   .sppTable, .sppTable tbody, .sppTable tr, .sppTable td { display: block; }
   .sppTable thead { display: none; }
   .sppTable tr { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--spp-border); }
   .sppTable td { border: 0; padding: 0; }
   .sppTable td:nth-child(3) { grid-column: 1 / -1; }
 }
+

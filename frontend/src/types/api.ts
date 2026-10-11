@@ -188,6 +188,7 @@ export type AdoWorkItem = {
   original_estimate?: number | null
   parent_id?: number | null
   state_change_date?: string | null
+  closed_date?: string | null
   changed_date?: string | null
   web_url?: string | null
   business_days_in_review?: number | null
@@ -198,6 +199,13 @@ export type AdoWorkItem = {
   area_path?: string | null
   iteration_path?: string | null
   iteration_id?: number | null
+  severity?: string | null
+  priority?: number | null
+  story_points?: number | null
+  value_area?: string | null
+  order?: number | null
+  activity?: string | null
+  tags?: string | null
 }
 
 export type AdoSprintChecksSummary = {
@@ -275,6 +283,7 @@ export type AdoSprintBoardResponse = {
   team: AdoTeam
   iteration?: AdoIteration | null
   work_items: AdoWorkItem[]
+  backlog_items?: AdoWorkItem[]
   checks_summary: AdoSprintChecksSummary
   working_days_remaining?: number | null
   milestone?: AdoSprintMilestoneSummary | null
@@ -599,7 +608,15 @@ export type SprintPlanningSetup = {
 }
 
 /** A person to plan for; areas are area paths (or "*" for any area). */
-export type PlanPerson = { name: string; unique_name: string; areas: string[] }
+export type PlanPerson = {
+  name: string
+  unique_name: string
+  areas: string[]
+  capacity_points?: number | null
+  working_days?: number | null
+  pto_days?: number | null
+  focus_factor?: number | null
+}
 
 export type SprintPlanRequest = {
   organization: string
@@ -612,6 +629,11 @@ export type SprintPlanRequest = {
   per_person: number
   active_days: number
   work_item_types?: string[]
+  sprint_goal?: string | null
+  capacity_mode?: string
+  focus_factor?: number
+  tags?: string[]
+  area_filter?: string
 }
 
 export type StoryFlag = { code: 'blocked' | 'active_too_long' | string; reason: string }
@@ -643,6 +665,17 @@ export type PlannedPerson = {
   unique_name: string
   areas: string[]
   capacity: number
+  capacity_points?: number | null
+  working_days?: number
+  pto_days?: number
+  focus_factor?: number
+  points_planned?: number
+  points_carried?: number
+  points_already_planned?: number
+  points_new?: number
+  points_capacity?: number | null
+  points_over_by?: number
+  points_open?: number
   carried: PlanStory[]
   already_planned: PlanStory[]
   new: PlanStory[]
@@ -660,6 +693,8 @@ export type SprintPlan = {
   per_person: number
   active_days: number
   work_item_types: string[]
+  sprint_goal?: string
+  capacity_mode?: string
   people: PlannedPerson[]
   flagged: PlanStory[]
   unplaced: Array<{ story: PlanStory; reason: string }>
@@ -677,8 +712,41 @@ export type SprintPlan = {
     long_active: number
     unplaced: number
     open_places: number
+    total_points_planned?: number
+    total_points_capacity?: number
+    points_carried?: number
+    points_new?: number
+    unpointed_stories?: number
+    risk_score?: string
+    risk_reasons?: string[]
+    sprint_confidence_pct?: number
   }
   notes: string[]
+  ai_recommendations?: string[]
   generated_at: string
   posted_to_ado: boolean
 }
+
+export type StoryAssignment = {
+  story_id: number
+  assigned_to?: string | null
+}
+
+export type SprintCommitRequest = {
+  organization: string
+  project: string
+  team: string
+  pat?: string
+  to_iteration_id: string
+  to_iteration_path: string
+  assignments: StoryAssignment[]
+  sprint_goal?: string | null
+}
+
+export type SprintCommitResponse = {
+  success: boolean
+  updated_count: number
+  message: string
+  errors: string[]
+}
+

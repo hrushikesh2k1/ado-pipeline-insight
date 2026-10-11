@@ -129,6 +129,7 @@ class FakeBoard:
             raise http_error(400)
         where = wiql.split(" WHERE ", 1)[1].split(" ORDER BY ", 1)[0]
         iterations = _values(re.search(r"\[System\.IterationPath\] IN \(([^)]*)\)", where).group(1)) if "[System.IterationPath] IN" in where else None
+        iterations_not = _values(re.search(r"\[System\.IterationPath\] NOT IN \(([^)]*)\)", where).group(1)) if "[System.IterationPath] NOT IN" in where else None
         kinds = _values(re.search(r"\[System\.WorkItemType\] IN \(([^)]*)\)", where).group(1))
         states_in = _values(re.search(r"\[System\.State\] IN \(([^)]*)\)", where).group(1)) if "[System.State] IN" in where else None
         states_not = _values(re.search(r"\[System\.State\] NOT IN \(([^)]*)\)", where).group(1)) if "[System.State] NOT IN" in where else None
@@ -139,6 +140,8 @@ class FakeBoard:
             if f["System.WorkItemType"] not in kinds:
                 continue
             if iterations is not None and f["System.IterationPath"] not in iterations:
+                continue
+            if iterations_not is not None and f["System.IterationPath"] in iterations_not:
                 continue
             if states_in is not None and f["System.State"] not in states_in:
                 continue

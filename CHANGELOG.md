@@ -22,8 +22,21 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   - The plan is shown on screen only: nothing is written to Azure DevOps. The token needs Work Items (read) and Project and Team (read).
   - API: `GET /api/v1/ado/sprint-planning/setup` (sprints, members, areas, story types) and `POST /api/v1/ado/sprint-planning/plan`. Work item states come from
     Azure DevOps itself (the state categories of each type), so the page also fits processes that do not use `Active` and `Closed`.
+- **Sprint Deliverables & Email Draft Center:**
+  - **Context-aware email draft:** Clicking the email report button automatically generates the appropriate draft depending on your view: sends the Sprint Health Report when viewing the Taskboard, and sends the Team Deliverables / Handover Report when viewing the Deliverables tab.
+  - **Sprint capacity metrics:** Member effort displays each person's configured sprint capacity rather than task hours logged.
+  - **Active blade highlighting:** Clearly indicates which tab/blade (Taskboard, Deliverables, Planning) is currently selected.
 
 ### Fixed
+- **Sprint Deliverables: stories closed in sprint dates missing when assigned to another iteration path.**
+  - *Context & Problem:* Stories closed during a sprint's active calendar dates were omitted from Deliverables and the Email Draft if their `System.IterationPath` field remained set to an older sprint or backlog path (e.g. user stories closed in September 2026 whose iteration path pointed to an earlier year's iteration).
+  - *Root Cause:* The WIQL query for closed work items in `routes.py` formatted date bounds with ISO-8601 timestamps (e.g. `'2026-09-30T23:59:59Z'`). Azure DevOps WIQL enforces date precision on `ClosedDate` and rejected the query with `HTTP 400 Bad Request` ("You cannot supply a time with the date when running a query using date precision"), causing the query to fail silently and fetch 0 closed items outside the iteration path.
+  - *Fix:*
+    1. Formatted WIQL date boundaries with strict date-only precision (`YYYY-MM-DD`, using `>= 'YYYY-MM-01'` and `< 'YYYY-MM-next_day'`).
+    2. Scoped the WIQL query to the team's configured area paths (`[System.AreaPath] UNDER ...`) before querying.
+    3. Updated milestone calculation in `board_service.py` to prioritize `Microsoft.VSTS.Common.ClosedDate` before `StateChangeDate` and `ChangedDate` for accurate completion timestamps.
+    4. Enhanced Deliverables synchronization in `SprintBoardPage.tsx` to detect when cached `localStorage` reports are missing achieved items present in the fresh sprint board data, automatically rebuilding and persisting the updated Deliverables report.
+- **Sprint Deliverables: email report modal overflow.** Resolved modal layout issue where long deliverable lists overflowed outside the modal container by making the modal body scrollable.
 - **Work Item Insights: some work items lost their group after a refresh.** When a work item was edited in Azure DevOps, the refresh dropped its group and
   asked the AI again; if the AI did not answer for it, the item fell to "Not grouped" although it had a good group before. It now keeps its earlier group
   until the AI answers, says so in the notes, and is checked again at the next refresh.

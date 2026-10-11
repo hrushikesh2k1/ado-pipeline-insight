@@ -37,6 +37,10 @@ class PlanPerson(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     unique_name: str = Field(default="", max_length=320)
     areas: list[str] = Field(default_factory=list, max_length=60)  # area paths of choice; "*" means any area
+    capacity_points: float | None = Field(default=None, ge=0, le=200)
+    working_days: float | None = Field(default=10, ge=0, le=30)
+    pto_days: float | None = Field(default=0, ge=0, le=30)
+    focus_factor: float | None = Field(default=0.8, ge=0.1, le=1.0)
 
 
 class SprintPlanRequest(BaseModel):
@@ -50,6 +54,11 @@ class SprintPlanRequest(BaseModel):
     per_person: int = Field(default=6, ge=1, le=30)
     active_days: int = Field(default=10, ge=1, le=90)
     work_item_types: list[str] | None = Field(default=None, max_length=8)
+    sprint_goal: str | None = Field(default=None, max_length=500)
+    capacity_mode: str = Field(default="stories", max_length=20)  # "stories" | "points"
+    focus_factor: float = Field(default=0.8, ge=0.1, le=1.0)
+    tags: list[str] | None = Field(default=None, max_length=20)
+    area_filter: str | None = Field(default=None, max_length=256)
 
 
 class StoryFlag(BaseModel):
@@ -89,6 +98,17 @@ class PlannedPerson(BaseModel):
     unique_name: str = ""
     areas: list[str] = Field(default_factory=list)
     capacity: int
+    capacity_points: float | None = None
+    working_days: float = 10
+    pto_days: float = 0
+    focus_factor: float = 0.8
+    points_planned: float = 0.0
+    points_carried: float = 0.0
+    points_already_planned: float = 0.0
+    points_new: float = 0.0
+    points_capacity: float | None = None
+    points_over_by: float = 0.0
+    points_open: float = 0.0
     carried: list[PlanStory] = Field(default_factory=list)
     already_planned: list[PlanStory] = Field(default_factory=list)
     new: list[PlanStory] = Field(default_factory=list)
@@ -114,6 +134,14 @@ class PlanSummary(BaseModel):
     long_active: int = 0
     unplaced: int = 0
     open_places: int = 0
+    total_points_planned: float = 0.0
+    total_points_capacity: float = 0.0
+    points_carried: float = 0.0
+    points_new: float = 0.0
+    unpointed_stories: int = 0
+    risk_score: str = "Low"  # Low | Medium | High
+    risk_reasons: list[str] = Field(default_factory=list)
+    sprint_confidence_pct: int = 85
 
 
 class SprintPlan(BaseModel):
@@ -124,6 +152,8 @@ class SprintPlan(BaseModel):
     per_person: int
     active_days: int
     work_item_types: list[str] = Field(default_factory=list)
+    sprint_goal: str = ""
+    capacity_mode: str = "stories"
     people: list[PlannedPerson] = Field(default_factory=list)
     flagged: list[PlanStory] = Field(default_factory=list)
     unplaced: list[UnplacedStory] = Field(default_factory=list)
@@ -132,5 +162,30 @@ class SprintPlan(BaseModel):
     backlog_left: int = 0
     summary: PlanSummary
     notes: list[str] = Field(default_factory=list)
+    ai_recommendations: list[str] = Field(default_factory=list)
     generated_at: str
     posted_to_ado: bool = False  # the plan is shown only: nothing is written to Azure DevOps
+
+
+class StoryAssignment(BaseModel):
+    story_id: int
+    assigned_to: str | None = None  # display name or unique email
+
+
+class SprintCommitRequest(BaseModel):
+    organization: str = Field(min_length=1, max_length=256)
+    project: str = Field(min_length=1, max_length=256)
+    team: str = Field(min_length=1, max_length=256)
+    pat: str | None = Field(default=None, max_length=512)
+    to_iteration_id: str = Field(min_length=1, max_length=64)
+    to_iteration_path: str = Field(min_length=1, max_length=256)
+    assignments: list[StoryAssignment] = Field(default_factory=list)
+    sprint_goal: str | None = Field(default=None, max_length=500)
+
+
+class SprintCommitResponse(BaseModel):
+    success: bool = True
+    updated_count: int = 0
+    message: str = ""
+    errors: list[str] = Field(default_factory=list)
+

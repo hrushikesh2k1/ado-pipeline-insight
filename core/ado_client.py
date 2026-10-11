@@ -518,6 +518,22 @@ class AzureDevOpsClient:
             results.extend(self._json_response(response).get("value", []))
         return results
 
+    def update_work_item(
+        self, project: str, work_item_id: int, patch_doc: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """Update a work item using JSON patch operations."""
+        url = self._url(project, f"_apis/wit/workitems/{work_item_id}")
+        headers = {"Content-Type": "application/json-patch+json"}
+        response = self.session.patch(
+            url,
+            json=patch_doc,
+            headers=headers,
+            params={"api-version": self.api_version},
+            timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response)
+
     def list_builds(
         self,
         project: str,

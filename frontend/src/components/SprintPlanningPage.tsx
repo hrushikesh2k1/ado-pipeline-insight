@@ -1,12 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Ban, CalendarCheck, Check, ChevronDown, Clock, Copy, ExternalLink, Info, Plus, TriangleAlert, Users, X } from 'lucide-react'
+import {
+  Ban, Bot, CalendarCheck, Check, ChevronDown, Clock, Copy, ExternalLink,
+  Info, Plus, Send, ShieldAlert, Sparkles, Target, TriangleAlert, Users, X,
+} from 'lucide-react'
 import './SprintPlanningPage.css'
 import { api } from '../services/api'
-import type { AdoTeam, PlanSprint, PlanStory, PlannedPerson, SprintPlan, SprintPlanningSetup } from '../types/api'
+import type { AdoTeam, PlanSprint, PlanStory, PlannedPerson, SprintPlan, SprintPlanningSetup, StoryAssignment } from '../types/api'
 import {
   ANY_AREA, DEFAULT_ACTIVE_DAYS, DEFAULT_PER_PERSON, MAX_PER_PERSON, MIN_PER_PERSON,
   addPerson, areaLabel, commentDate, daysInState, flagText, fullness, loadPeople, mergeMembers, peopleForPlan, personKey, plural, planAsMarkdown, planProblems,
-  removePerson, savePeople, setAreas, setIncluded, sprintLabel, storyCount,
+  removePerson, savePeople, setAreas, setIncluded, setPtoDays, setWorkingDays, sprintLabel, storyCount,
   type PlanningPerson,
 } from '../utils/sprintPlanning'
 
@@ -90,28 +93,62 @@ const FlagChips: React.FC<{ story: PlanStory }> = ({ story }) => (
   </>
 )
 
-const StoryRow: React.FC<{ story: PlanStory; project: string; note?: string }> = ({ story, project, note }) => (
+const StoryRow: React.FC<{
+  story: PlanStory
+  project: string
+  note?: string
+  people?: PlannedPerson[]
+  currentOwner?: string
+  onReassign?: (storyId: number, targetPersonName: string) => void
+}> = ({ story, project, note, people, currentOwner, onReassign }) => (
   <li className="sppStory" data-testid={`spp-story-${story.id}`}>
-    <a href={workItemUrl(story)} target="_blank" rel="noreferrer" className="sppStoryTitle">
-      <span className="sppId">#{story.id}</span> {story.title}<ExternalLink size={10} />
-    </a>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+      <a href={workItemUrl(story)} target="_blank" rel="noreferrer" className="sppStoryTitle">
+        <span className="sppId">#{story.id}</span> {story.title}<ExternalLink size={10} />
+      </a>
+      {people && onReassign && (
+        <select
+          className="sppReassignSelect"
+          value={currentOwner ?? ''}
+          onChange={e => onReassign(story.id, e.target.value)}
+          aria-label={`Reassign story ${story.id}`}
+        >
+          <option value="">(Unassigned / Backlog)</option>
+          {people.map(p => (
+            <option key={p.name} value={p.name}>{p.name}</option>
+          ))}
+        </select>
+      )}
+    </div>
     <div className="sppStoryMeta">
       <span className="sppChip">{story.state}</span>
       <FlagChips story={story} />
-      {story.points !== null && <span className="sppChip">{story.points} pts</span>}
+      {story.points !== null && <span className="sppChip points">{story.points} pts</span>}
       <span className="sppArea" title={story.area_path}>{areaLabel(story.area_path, project)}</span>
       {note && <span className="sppNote">{note}</span>}
     </div>
   </li>
 )
 
-const FlaggedCard: React.FC<{ story: PlanStory; project: string }> = ({ story, project }) => (
+const FlaggedCard: React.FC<{
+  story: PlanStory
+  project: string
+  onDrop?: (storyId: number) => void
+}> = ({ story, project, onDrop }) => (
   <article className="sppFlagged" data-testid={`spp-flagged-${story.id}`}>
     <div className="sppFlaggedHead">
-      <a href={workItemUrl(story)} target="_blank" rel="noreferrer" className="sppStoryTitle"><span className="sppId">#{story.id}</span> {story.title}<ExternalLink size={10} /></a>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+        <a href={workItemUrl(story)} target="_blank" rel="noreferrer" className="sppStoryTitle"><span className="sppId">#{story.id}</span> {story.title}<ExternalLink size={10} /></a>
+        {onDrop && (
+          <button type="button" className="sppGhost" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={() => onDrop(story.id)}>
+            Return to Backlog
+          </button>
+        )}
+      </div>
       <div className="sppStoryMeta">
         <span className="sppOwner">{story.assigned_to || 'Nobody'}</span>
         <span className="sppChip">{story.state}{daysInState(story) ? ` · ${daysInState(story)}` : ''}</span>
+        {story.points !== null && <span className="sppChip points">{story.points} pts</span>}
         <FlagChips story={story} />
         <span className="sppArea" title={story.area_path}>{areaLabel(story.area_path, project)}</span>
       </div>
@@ -131,29 +168,69 @@ const FlaggedCard: React.FC<{ story: PlanStory; project: string }> = ({ story, p
   </article>
 )
 
-const PersonCard: React.FC<{ person: PlannedPerson; sprintName: string; project: string }> = ({ person, sprintName, project }) => {
+const PersonCard: React.FC<{
+  person: PlannedPerson
+  sprintName: string
+  project: string
+  mode: 'stories' | 'points'
+  allPeople?: PlannedPerson[]
+  onReassign?: (storyId: number, targetPersonName: string) => void
+}> = ({ person, sprintName, project, mode, allPeople, onReassign }) => {
   const key = personKey(person)
-  const percent = Math.min(100, Math.round((person.total / Math.max(1, person.capacity)) * 100))
-  const state = person.over_by ? 'over' : person.open_places ? 'short' : 'full'
+  const percent = mode === 'points' && person.points_capacity
+    ? Math.min(100, Math.round(((person.points_planned ?? 0) / Math.max(1, person.points_capacity)) * 100))
+    : Math.min(100, Math.round((person.total / Math.max(1, person.capacity)) * 100))
+
+  const isOver = mode === 'points' && person.points_capacity
+    ? (person.points_planned ?? 0) > person.points_capacity
+    : person.over_by > 0
+
+  const state = isOver ? 'over' : person.open_places ? 'short' : 'full'
+
+  const countDisplay = mode === 'points' && person.points_capacity
+    ? `${person.points_planned ?? 0} of ${person.points_capacity} pts`
+    : fullness(person)
+
   return (
     <section className={`sppPerson ${state}`} data-testid={`spp-card-${key}`}>
       <div className="sppPersonHead">
-        <div><h4>{person.name}</h4><span className="sppMuted">{person.areas.length ? person.areas.map(a => areaLabel(a, project)).join(', ') : 'No area of choice'}</span></div>
-        <div className="sppFill" title={`${person.total} stories planned of ${person.capacity}`}>
-          <b data-testid={`spp-count-${key}`}>{fullness(person)}</b>
+        <div>
+          <h4>{person.name}</h4>
+          <span className="sppMuted">
+            {person.areas.length ? person.areas.map(a => areaLabel(a, project)).join(', ') : 'No area of choice'}
+            {person.pto_days ? ` · ${person.pto_days}d PTO` : ''}
+          </span>
+        </div>
+        <div className="sppFill" title={`${countDisplay} planned`}>
+          <b data-testid={`spp-count-${key}`}>{countDisplay}</b>
           <span className="sppMeter"><span style={{ width: `${percent}%` }} /></span>
         </div>
       </div>
-      {person.carried.length > 0 && <><h5>Carried over from the current sprint <span>({person.carried.length})</span></h5><ul>{person.carried.map(s => <StoryRow key={s.id} story={s} project={project} />)}</ul></>}
-      {person.already_planned.length > 0 && <><h5>Already in {sprintName} <span>({person.already_planned.length})</span></h5><ul>{person.already_planned.map(s => <StoryRow key={s.id} story={s} project={project} />)}</ul></>}
-      {person.new.length > 0 && <><h5>New from the backlog <span>({person.new.length})</span></h5><ul>{person.new.map(s => <StoryRow key={s.id} story={s} project={project} note={s.matched_area ? `area: ${areaLabel(s.matched_area, project)}` : undefined} />)}</ul></>}
+      {person.carried.length > 0 && (
+        <>
+          <h5>Carried over from the current sprint <span>({person.carried.length})</span></h5>
+          <ul>{person.carried.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={person.name} onReassign={onReassign} />)}</ul>
+        </>
+      )}
+      {person.already_planned.length > 0 && (
+        <>
+          <h5>Already in {sprintName} <span>({person.already_planned.length})</span></h5>
+          <ul>{person.already_planned.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={person.name} onReassign={onReassign} />)}</ul>
+        </>
+      )}
+      {person.new.length > 0 && (
+        <>
+          <h5>New from the backlog <span>({person.new.length})</span></h5>
+          <ul>{person.new.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={person.name} onReassign={onReassign} note={s.matched_area ? `area: ${areaLabel(s.matched_area, project)}` : undefined} />)}</ul>
+        </>
+      )}
       {storyCount(person) === 0 && <p className="sppMuted">No stories planned.</p>}
       {person.warnings.map(w => <p key={w} className="sppWarn" data-testid="spp-person-warning"><TriangleAlert size={12} /> {w}</p>)}
     </section>
   )
 }
 
-const Kpi: React.FC<{ label: string; value: number; sub?: string; tone?: 'warn' | 'bad'; testId: string }> = ({ label, value, sub, tone, testId }) => (
+const Kpi: React.FC<{ label: string; value: string | number; sub?: string; tone?: 'warn' | 'bad'; testId: string }> = ({ label, value, sub, tone, testId }) => (
   <div className={`sppKpi ${tone ?? ''}`} data-testid={testId}><span>{label}</span><b>{value}</b>{sub && <small>{sub}</small>}</div>
 )
 
@@ -172,11 +249,18 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const [toId, setToId] = useState('')
   const [perPerson, setPerPerson] = useState(DEFAULT_PER_PERSON)
   const [activeDays, setActiveDays] = useState(DEFAULT_ACTIVE_DAYS)
+  const [sprintGoal, setSprintGoal] = useState('')
+  const [capacityMode, setCapacityMode] = useState<'stories' | 'points'>('points')
+  const [tagsFilter, setTagsFilter] = useState('Monitoring, Maintenance')
+  const [areaFilter, setAreaFilter] = useState('')
   const [types, setTypes] = useState<string[]>([])
   const [people, setPeople] = useState<PlanningPerson[]>([])
   const [newPerson, setNewPerson] = useState('')
   const [plan, setPlan] = useState<SprintPlan | null>(null)
   const [planning, setPlanning] = useState(false)
+  const [committing, setCommitting] = useState(false)
+  const [commitModalOpen, setCommitModalOpen] = useState(false)
+  const [commitResult, setCommitResult] = useState<{ success: boolean; message: string } | null>(null)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const latestSetup = useRef(0)
@@ -205,7 +289,10 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
       setActiveDays(found.active_days || DEFAULT_ACTIVE_DAYS)
       setTypes(found.default_types)
       setPeople(mergeMembers(loadPeople(org, project, team), found.members))
+      setAreaFilter('')
+      setTagsFilter('Monitoring, Maintenance')
       setPlan(null)
+      setCommitResult(null)
     } catch (e) {
       if (ticket === latestSetup.current) { setSetup(null); setSetupError(errorText(e)) }
     } finally {
@@ -215,12 +302,15 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
 
   useEffect(() => { void loadSetup() }, [loadSetup])
 
-  // the areas people chose are kept in this browser for this team
+  // the areas and capacity people chose are kept in this browser for this team
   useEffect(() => { if (setup && ready) savePeople(org, project, team, people) }, [people, setup, ready, org, project, team])
 
   const changeTeam = (value: string) => {
     setTeam(value)
+    setAreaFilter('')
+    setTagsFilter('Monitoring, Maintenance')
     setPlan(null)
+    setCommitResult(null)
     try { localStorage.setItem(teamKey(org, project), value) } catch { /* storage blocked */ }
   }
 
@@ -231,10 +321,15 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const makePlan = async () => {
     setPlanning(true)
     setError('')
+    setCommitResult(null)
     try {
+      const tagsList = tagsFilter.split(',').map(t => t.trim()).filter(Boolean)
       setPlan(await api.sprintPlan({
         organization: org, project, team, pat: pat || undefined, from_iteration_id: fromId, to_iteration_id: toId, people: peopleForPlan(people),
         per_person: perPerson, active_days: activeDays, work_item_types: types.length ? types : undefined,
+        sprint_goal: sprintGoal.trim() || undefined, capacity_mode: capacityMode,
+        tags: tagsList.length ? tagsList : undefined,
+        area_filter: areaFilter.trim() || undefined,
       }))
     } catch (e) {
       setError(errorText(e))
@@ -252,13 +347,110 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
     } catch { setError('The plan could not be copied. Select the text on the page instead.') }
   }
 
+  // Interactive Reassignment within current active Plan
+  const handleReassign = (storyId: number, targetPersonName: string) => {
+    if (!plan) return
+    let foundStory: PlanStory | null = null
+
+    // Extract story from current place
+    const updatedPeople = plan.people.map(p => {
+      const isOwner = p.carried.some(s => s.id === storyId) || p.already_planned.some(s => s.id === storyId) || p.new.some(s => s.id === storyId)
+      if (!isOwner) return p
+
+      const carried = p.carried.filter(s => { if (s.id === storyId) { foundStory = s; return false } return true })
+      const already = p.already_planned.filter(s => { if (s.id === storyId) { foundStory = s; return false } return true })
+      const nw = p.new.filter(s => { if (s.id === storyId) { foundStory = s; return false } return true })
+      const total = carried.length + already.length + nw.length
+      const pts = Math.round((carried.reduce((a, b) => a + (b.points || 0), 0) + already.reduce((a, b) => a + (b.points || 0), 0) + nw.reduce((a, b) => a + (b.points || 0), 0)) * 10) / 10
+      return {
+        ...p, carried, already_planned: already, new: nw, total,
+        points_planned: pts, open_places: Math.max(0, p.capacity - total), over_by: Math.max(0, total - p.capacity),
+      }
+    })
+
+    if (!foundStory) return
+    const movingStory: PlanStory = foundStory
+
+    // If assigned to a target person, append to their new list
+    let updatedUnplaced = plan.unplaced
+    if (targetPersonName) {
+      const targetPerson = updatedPeople.find(p => p.name === targetPersonName)
+      if (targetPerson) {
+        targetPerson.new.push(movingStory)
+        targetPerson.total += 1
+        targetPerson.points_planned = Math.round(((targetPerson.points_planned || 0) + (movingStory.points || 0)) * 10) / 10
+        targetPerson.open_places = Math.max(0, targetPerson.capacity - targetPerson.total)
+        targetPerson.over_by = Math.max(0, targetPerson.total - targetPerson.capacity)
+      }
+    } else {
+      updatedUnplaced = [...updatedUnplaced, { story: movingStory, reason: 'Unassigned manually' }]
+    }
+
+
+    setPlan({
+      ...plan,
+      people: updatedPeople,
+      unplaced: updatedUnplaced,
+      unplaced_total: updatedUnplaced.length,
+    })
+  }
+
+  // Commit Plan to Azure DevOps
+  const executeCommit = async () => {
+    if (!plan || !toSprint) return
+    setCommitting(true)
+    setError('')
+    try {
+      const assignments: StoryAssignment[] = []
+      for (const p of plan.people) {
+        for (const s of [...p.carried, ...p.already_planned, ...p.new]) {
+          assignments.push({ story_id: s.id, assigned_to: p.unique_name || p.name })
+        }
+      }
+      const res = await api.sprintCommit({
+        organization: org,
+        project,
+        team,
+        pat: pat || undefined,
+        to_iteration_id: toSprint.id,
+        to_iteration_path: toSprint.path,
+        assignments,
+        sprint_goal: sprintGoal || undefined,
+      })
+      setCommitResult({ success: res.success, message: res.message })
+      setCommitModalOpen(false)
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setCommitting(false)
+    }
+  }
+
   return (
     <div className="sppPage" data-testid="sprint-planning-page">
       <div className="sppBanner">
         <div className="sppBannerIcon"><CalendarCheck size={22} /></div>
-        <div>
-          <h2>Sprint Planning</h2>
-          <p>Every person gets the same number of stories. Stories still open in the current sprint move with their owner and are flagged when they are blocked or have been active too long, with their last 3 comments. The free places are filled from the backlog by each person's area of choice. The plan is shown here only: nothing is changed in Azure DevOps.</p>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+            <h2>Sprint Planning Studio</h2>
+            <div className="sppModeSwitcher">
+              <button
+                type="button"
+                className={`sppModeBtn ${capacityMode === 'points' ? 'active' : ''}`}
+                onClick={() => setCapacityMode('points')}
+              >
+                Points Capacity
+              </button>
+              <button
+                type="button"
+                className={`sppModeBtn ${capacityMode === 'stories' ? 'active' : ''}`}
+                onClick={() => setCapacityMode('stories')}
+              >
+                Story Count
+              </button>
+            </div>
+          </div>
+          <p>Plan work based on points velocity and individual usable capacity. Flags carry-overs with blocked status and stale dwell times. Simulate workload balancing interactively and commit directly to Azure DevOps.</p>
         </div>
       </div>
 
@@ -290,11 +482,27 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
       {setupError && <div className="sppNotice error" data-testid="spp-setup-error"><TriangleAlert size={14} /> {setupError}</div>}
       {loadingSetup && <div className="sppNotice"><Info size={14} /> Reading the team's sprints, members and areas…</div>}
       {setup?.notes.map(n => <div key={n} className="sppNotice warn" data-testid="spp-setup-note"><TriangleAlert size={14} /> {n}</div>)}
+      {commitResult && (
+        <div className={`sppNotice ${commitResult.success ? '' : 'warn'}`}>
+          <Check size={14} /> {commitResult.message}
+        </div>
+      )}
 
       {setup && (
         <>
+          <div className="sppGoalBar">
+            <span className="sppGoalLabel"><Target size={14} /> Sprint Goal</span>
+            <input
+              type="text"
+              className="sppGoalInput"
+              placeholder="e.g. Deliver OAuth 2.0 Auth Flow & Resolve High-Priority Latency Bugs"
+              value={sprintGoal}
+              onChange={e => setSprintGoal(e.target.value)}
+            />
+          </div>
+
           <section className="sppCard" data-testid="spp-settings">
-            <div className="sppCardHead"><div><h3>Sprints and rules</h3><p>Stories still open in the first sprint move to the second one.</p></div></div>
+            <div className="sppCardHead"><div><h3>Sprints and rules</h3><p>Stories still open in the first sprint move to the target sprint.</p></div></div>
             <div className="sppSettings">
               <label>Carry stories from
                 <select value={fromId} onChange={e => setFromId(e.target.value)} data-testid="spp-from">
@@ -306,12 +514,63 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
                   <option value="">Choose a sprint</option>
                   {sprints.map(s => <option key={s.id} value={s.id}>{sprintLabel(s)}</option>)}
                 </select></label>
-              <label>Stories per person
+              <label>Target stories per person
                 <input type="number" min={MIN_PER_PERSON} max={MAX_PER_PERSON} value={perPerson} data-testid="spp-per-person"
                   onChange={e => setPerPerson(Math.max(MIN_PER_PERSON, Math.min(MAX_PER_PERSON, Number(e.target.value) || DEFAULT_PER_PERSON)))} /></label>
               <label>Flag when active for more than (days)
                 <input type="number" min={1} max={90} value={activeDays} data-testid="spp-active-days"
                   onChange={e => setActiveDays(Math.max(1, Math.min(90, Number(e.target.value) || DEFAULT_ACTIVE_DAYS)))} /></label>
+              <div>
+                <label>Backlog Tags Filter
+                  <input
+                    type="text"
+                    placeholder="e.g. Monitoring, Maintenance, cloudops-monitoring"
+                    value={tagsFilter}
+                    onChange={e => setTagsFilter(e.target.value)}
+                    title="Tags to query from backlog (e.g. Monitoring, Maintenance)"
+                    data-testid="spp-tags-filter"
+                  />
+                </label>
+                <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
+                  <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px' }} onClick={() => setTagsFilter('Monitoring, Maintenance')}>
+                    + Monitoring, Maintenance
+                  </button>
+                  {team && (
+                    <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px' }} onClick={() => setTagsFilter(team)}>
+                      + {team}
+                    </button>
+                  )}
+                  {tagsFilter && (
+                    <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px', color: 'var(--spp-muted)' }} onClick={() => setTagsFilter('')}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div>
+                <label>Backlog Area Filter
+                  <input
+                    type="text"
+                    placeholder={`e.g. ${team || 'cloudops-monitoring'}`}
+                    value={areaFilter}
+                    onChange={e => setAreaFilter(e.target.value)}
+                    title="Area path or keyword to pull backlog items from"
+                    data-testid="spp-area-filter"
+                  />
+                </label>
+                {team && (
+                  <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                    <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px' }} onClick={() => setAreaFilter(team)}>
+                      Use Team Area ({team})
+                    </button>
+                    {areaFilter && (
+                      <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px', color: 'var(--spp-muted)' }} onClick={() => setAreaFilter('')}>
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
               <fieldset className="sppTypes"><legend>Work item types</legend>
                 {setup.work_item_types.map(t => (
                   <label key={t} className="sppCheck"><input type="checkbox" checked={types.includes(t)} onChange={() => setTypes(types.includes(t) ? types.filter(x => x !== t) : [...types, t])} /> {t}</label>
@@ -322,12 +581,21 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
 
           <section className="sppCard" data-testid="spp-people">
             <div className="sppCardHead">
-              <div><h3><Users size={15} /> Who is in the plan, and their areas of choice</h3>
-                <p>A person is given new stories only from the areas they choose (a story under a chosen area counts). Several people may share an area. Saved in this browser for this team.</p></div>
+              <div><h3><Users size={15} /> Team Capacity & Areas of Choice</h3>
+                <p>Configure working days, planned leave (PTO), and domain areas. Saved locally in this browser for this team.</p></div>
             </div>
             <div className="sppTableWrap">
             <table className="sppTable">
-              <thead><tr><th>In plan</th><th>Person</th><th>Areas of choice</th><th /></tr></thead>
+              <thead>
+                <tr>
+                  <th>In plan</th>
+                  <th>Person</th>
+                  <th>Days</th>
+                  <th>PTO</th>
+                  <th>Areas of choice</th>
+                  <th />
+                </tr>
+              </thead>
               <tbody>
                 {people.map(p => {
                   const key = personKey(p)
@@ -335,12 +603,34 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
                     <tr key={key} className={p.included ? '' : 'off'} data-testid={`spp-person-${key}`}>
                       <td><input type="checkbox" checked={p.included} onChange={e => setPeople(setIncluded(people, key, e.target.checked))} aria-label={`Plan ${p.name}`} /></td>
                       <td><b>{p.name}</b>{p.unique_name && <small>{p.unique_name}</small>}</td>
+                      <td>
+                        <input
+                          type="number"
+                          className="sppCapInput"
+                          min={0}
+                          max={30}
+                          value={p.working_days ?? 10}
+                          onChange={e => setPeople(setWorkingDays(people, key, Number(e.target.value) || 10))}
+                          title="Working days in sprint"
+                        />
+                      </td>
+                      <td>
+                        <input
+                          type="number"
+                          className="sppCapInput"
+                          min={0}
+                          max={30}
+                          value={p.pto_days ?? 0}
+                          onChange={e => setPeople(setPtoDays(people, key, Number(e.target.value) || 0))}
+                          title="PTO / Leave days"
+                        />
+                      </td>
                       <td><AreaPicker value={p.areas} options={setup.areas} project={project} onChange={areas => setPeople(setAreas(people, key, areas))} testId={`spp-areas-${key}`} /></td>
                       <td>{p.manual && <button type="button" className="sppIconBtn" onClick={() => setPeople(removePerson(people, key))} aria-label={`Remove ${p.name}`}><X size={13} /></button>}</td>
                     </tr>
                   )
                 })}
-                {people.length === 0 && <tr><td colSpan={4} className="sppMuted">The team has no members listed. Add people below.</td></tr>}
+                {people.length === 0 && <tr><td colSpan={6} className="sppMuted">The team has no members listed. Add people below.</td></tr>}
               </tbody>
             </table>
             </div>
@@ -356,9 +646,14 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
               <CalendarCheck size={14} /> {planning ? 'Planning…' : toSprint ? `Plan ${toSprint.name}` : 'Plan the sprint'}
             </button>
             {plan && (
-              <button type="button" className="sppGhost" onClick={() => void copyPlan()} data-testid="spp-copy">
-                {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy plan'}
-              </button>
+              <>
+                <button type="button" className="sppGhost" onClick={() => void copyPlan()} data-testid="spp-copy">
+                  {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy plan'}
+                </button>
+                <button type="button" className="sppPrimary" style={{ background: '#059669', borderColor: '#059669' }} onClick={() => setCommitModalOpen(true)}>
+                  <Send size={14} /> Commit to Azure DevOps
+                </button>
+              </>
             )}
             <div className="sppHints">
               {problems.blocking.map(b => <span key={b} className="sppMuted" data-testid="spp-blocking">{b}</span>)}
@@ -371,12 +666,51 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
 
       {plan && (
         <div className="sppResult" data-testid="spp-result">
+          {/* AI Copilot & Risk Section */}
+          <div className="sppAiSection">
+            <div className="sppAiHead">
+              <div className="sppAiTitle">
+                <Sparkles size={16} color="#818cf8" />
+                <span>AI Sprint Insights & Risk Assessment</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className={`sppRiskBadge ${(plan.summary.risk_score || 'low').toLowerCase()}`}>
+                  <ShieldAlert size={12} /> Risk: {plan.summary.risk_score || 'Low'}
+                </span>
+                <span className="sppChip" style={{ fontWeight: 600 }}>
+                  Confidence: {plan.summary.sprint_confidence_pct ?? 85}%
+                </span>
+              </div>
+            </div>
+            {plan.summary.risk_reasons && plan.summary.risk_reasons.length > 0 && (
+              <ul className="sppReasons" style={{ margin: 0 }}>
+                {plan.summary.risk_reasons.map((r, i) => <li key={i}>{r}</li>)}
+              </ul>
+            )}
+            {plan.ai_recommendations && plan.ai_recommendations.length > 0 && (
+              <ul className="sppAiRecsList">
+                {plan.ai_recommendations.map((rec, i) => (
+                  <li key={i} className="sppAiRecItem">
+                    <Bot size={15} color="#818cf8" style={{ flexShrink: 0, marginTop: '1px' }} />
+                    <span>{rec}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           <div className="sppKpis" data-testid="spp-summary">
             <Kpi label="People" value={plan.summary.people} testId="spp-kpi-people" />
-            <Kpi label="Stories planned" value={plan.summary.stories_planned} sub={`${plan.per_person} each`} testId="spp-kpi-planned" />
-            <Kpi label="Carried over" value={plan.summary.carried} testId="spp-kpi-carried" />
-            <Kpi label="New from backlog" value={plan.summary.new} testId="spp-kpi-new" />
-            <Kpi label="Need a look" value={plan.summary.flagged} sub={`${plan.summary.blocked} blocked · ${plan.summary.long_active} active > ${plan.active_days} days`} tone={plan.summary.flagged ? 'warn' : undefined} testId="spp-kpi-flagged" />
+            <Kpi
+              label="Points Planned"
+              value={`${plan.summary.total_points_planned ?? 0} pts`}
+              sub={`Cap: ${plan.summary.total_points_capacity ?? 0} pts`}
+              testId="spp-kpi-planned"
+            />
+            <Kpi label="Stories planned" value={plan.summary.stories_planned} sub={`${plan.per_person} each target`} testId="spp-kpi-stories" />
+            <Kpi label="Carried over" value={`${plan.summary.carried} (${plan.summary.points_carried ?? 0} pts)`} testId="spp-kpi-carried" />
+            <Kpi label="New from backlog" value={`${plan.summary.new} (${plan.summary.points_new ?? 0} pts)`} testId="spp-kpi-new" />
+            <Kpi label="Need a look" value={plan.summary.flagged} sub={`${plan.summary.blocked} blocked · ${plan.summary.long_active} active > ${plan.active_days}d`} tone={plan.summary.flagged ? 'warn' : undefined} testId="spp-kpi-flagged" />
             <Kpi label="Empty places" value={plan.summary.open_places} tone={plan.summary.open_places ? 'warn' : undefined} testId="spp-kpi-open" />
           </div>
 
@@ -386,20 +720,50 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
             <section className="sppCard attention" data-testid="spp-flagged">
               <div className="sppCardHead"><div><h3><TriangleAlert size={15} /> Look at these first ({plan.flagged.length})</h3>
                 <p>Carried over, and blocked or active for more than {plan.active_days} days. Their last 3 comments show where each one stands.</p></div></div>
-              <div className="sppFlaggedList">{plan.flagged.map(s => <FlaggedCard key={s.id} story={s} project={project} />)}</div>
+              <div className="sppFlaggedList">
+                {plan.flagged.map(s => (
+                  <FlaggedCard
+                    key={s.id}
+                    story={s}
+                    project={project}
+                    onDrop={id => handleReassign(id, '')}
+                  />
+                ))}
+              </div>
             </section>
           )}
 
           <section data-testid="spp-people-plan">
-            <h3 className="sppH">Plan for {plan.to_sprint.name}</h3>
-            <div className="sppPeople">{plan.people.map(p => <PersonCard key={personKey(p)} person={p} sprintName={plan.to_sprint.name} project={project} />)}</div>
+            <h3 className="sppH">Team Workload Swimlanes for {plan.to_sprint.name}</h3>
+            <div className="sppPeople">
+              {plan.people.map(p => (
+                <PersonCard
+                  key={personKey(p)}
+                  person={p}
+                  sprintName={plan.to_sprint.name}
+                  project={project}
+                  mode={capacityMode}
+                  allPeople={plan.people}
+                  onReassign={handleReassign}
+                />
+              ))}
+            </div>
           </section>
 
           {plan.unplaced_total > 0 && (
             <section className="sppCard" data-testid="spp-unplaced">
-              <div className="sppCardHead"><div><h3>Not placed ({plan.unplaced_total})</h3><p>Backlog stories nobody could take.</p></div></div>
+              <div className="sppCardHead"><div><h3>Not placed ({plan.unplaced_total})</h3><p>Backlog stories nobody could take. Select an assignee to allocate.</p></div></div>
               <ul className="sppUnplaced">
-                {plan.unplaced.map(u => <li key={u.story.id}><StoryRow story={u.story} project={project} note={u.reason} /></li>)}
+                {plan.unplaced.map(u => (
+                  <StoryRow
+                    key={u.story.id}
+                    story={u.story}
+                    project={project}
+                    note={u.reason}
+                    people={plan.people}
+                    onReassign={handleReassign}
+                  />
+                ))}
               </ul>
               {plan.unplaced_total > plan.unplaced.length && <p className="sppMuted">Showing the first {plan.unplaced.length} of {plan.unplaced_total}.</p>}
             </section>
@@ -412,9 +776,36 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
             </section>
           )}
 
-          <p className="sppFoot" data-testid="spp-foot">Made {plan.generated_at.replace('T', ' ').replace('Z', ' UTC')}. Shown here only: nothing was changed in Azure DevOps.</p>
+          <p className="sppFoot" data-testid="spp-foot">Made {plan.generated_at.replace('T', ' ').replace('Z', ' UTC')}. Use "Commit to Azure DevOps" to write assignments to ADO.</p>
+        </div>
+      )}
+
+      {/* Commit Confirmation Modal */}
+      {commitModalOpen && plan && toSprint && (
+        <div className="sppModalBackdrop" onClick={() => setCommitModalOpen(false)}>
+          <div className="sppModalContent" onClick={e => e.stopPropagation()}>
+            <div className="sppModalHead">
+              <h3>Commit Sprint Plan to Azure DevOps</h3>
+              <button type="button" className="sppIconBtn" onClick={() => setCommitModalOpen(false)}><X size={15} /></button>
+            </div>
+            <p style={{ margin: 0, fontSize: '13px', color: 'var(--spp-muted)' }}>
+              This will update <b>{plan.people.reduce((a, b) => a + b.total, 0)}</b> work items directly in Azure DevOps to iteration <b>{toSprint.name}</b> (`{toSprint.path}`) and assign them to their respective team members.
+            </p>
+            {sprintGoal && (
+              <div style={{ background: 'var(--spp-field)', padding: '8px 12px', borderRadius: '8px', fontSize: '12px' }}>
+                <b>Sprint Goal:</b> {sprintGoal}
+              </div>
+            )}
+            <div className="sppModalFoot">
+              <button type="button" className="sppGhost" onClick={() => setCommitModalOpen(false)}>Cancel</button>
+              <button type="button" className="sppPrimary" onClick={() => void executeCommit()} disabled={committing}>
+                {committing ? 'Committing…' : 'Confirm & Commit'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
   )
 }
+
