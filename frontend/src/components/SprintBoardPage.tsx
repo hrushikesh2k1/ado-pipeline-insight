@@ -1671,8 +1671,8 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         </div>
       </div>
 
-      {/* 4. Sprint Compliance & Health Checks Bar (Controlled by Plugins) */}
-      {(showClosedWithoutHours || showStaleInReview || showEmailReport) && (
+      {/* 4. Sprint Compliance & Health Checks Bar (Controlled by Plugins & only visible on Taskboard tab) */}
+      {activeSubTab === 'Taskboard' && (showClosedWithoutHours || showStaleInReview || showEmailReport) && (
         <div className="sprintChecksBar">
           <div className="sprintChecksBarLeft">
             <div className="sprintChecksTitle">
@@ -2138,6 +2138,21 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
             </div>
 
             <div className="adoDeliverablesStatusRight">
+              {showEmailReport && (
+                <button
+                  type="button"
+                  className="sprintEmailBtn"
+                  style={{ marginRight: '8px' }}
+                  onClick={() => {
+                    setEmailSentSuccess(false)
+                    setShowEmailModal(true)
+                  }}
+                  title="Send Sprint Deliverables Handover Email"
+                >
+                  <Mail size={14} />
+                  <span>Send Deliverables Email</span>
+                </button>
+              )}
               <button
                 type="button"
                 className="adoRegenerateBtn"
