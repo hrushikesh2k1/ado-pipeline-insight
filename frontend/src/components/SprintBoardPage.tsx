@@ -67,6 +67,7 @@ import type {
   AdoWorkItem,
   AdoSprintChecksSummary,
   AdoSprintBoardResponse,
+  AdoCapacityMember,
   AdoSprintMilestoneSummary,
   AdoMilestoneItem,
   MilestoneAiSummaryResponse
@@ -98,6 +99,7 @@ interface SprintBoardPageProps {
 
 type SubTab = 'Taskboard' | 'Deliverables' | 'Milestone' | 'Backlog' | 'Capacity' | 'Analytics'
 type FilterMode = 'all' | 'closed_without_hours' | 'stale_in_review'
+type CapacityMember = AdoCapacityMember & { avatar?: string }
 
 // In-memory module cache so sprint board data persists across navigation transitions and tab switches
 const sprintBoardCache = new Map<string, AdoSprintBoardResponse>()
@@ -110,6 +112,45 @@ const SPRINT_CACHE_KEY = (org: string, project: string, teamId: string, iteratio
 
 const TEAMS_CACHE_KEY = (org: string, project: string): string => {
   return `${(org || '').toLowerCase()}:${(project || '').toLowerCase()}`
+}
+
+const normalizePersonName = (name: string): string => name.trim().toLowerCase()
+
+const capacityStorageKey = (teamId: string, iterationId?: string): string =>
+  `ado_sprint_capacity_${teamId || 'default'}_${iterationId || 'current'}`
+
+function mergeCapacityMembers(adoMembers: CapacityMember[], savedMembers: CapacityMember[], assignees: string[]): CapacityMember[] {
+  const byName = new Map<string, CapacityMember>()
+  adoMembers.forEach(member => {
+    byName.set(normalizePersonName(member.name), { ...member, source: member.source || 'ado' })
+  })
+
+  assignees.forEach((name, idx) => {
+    const key = normalizePersonName(name)
+    if (!byName.has(key)) {
+      byName.set(key, {
+        id: `cap-assignee-${idx}-${key.replace(/\s+/g, '-')}`,
+        name,
+        activity: 'Development',
+        capacity_per_day: 8,
+        days_off: 0,
+        source: 'manual',
+      })
+    }
+  })
+
+  savedMembers.forEach(member => {
+    const key = normalizePersonName(member.name)
+    byName.set(key, {
+      ...byName.get(key),
+      ...member,
+      id: byName.get(key)?.id || member.id,
+      name: byName.get(key)?.name || member.name,
+      source: member.source || byName.get(key)?.source || 'manual',
+    })
+  })
+
+  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name))
 }
 
 function getStoredBoardData(org: string, project: string, teamId: string, iterationId?: string): AdoSprintBoardResponse | null {
@@ -229,14 +270,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
   const [backlogTagFilter, setBacklogTagFilter] = useState<string>('all')
 
   // Capacity Planning State
-  const [capacityMembers, setCapacityMembers] = useState<{
-    id: string
-    name: string
-    avatar?: string
-    activity: string
-    capacity_per_day: number
-    days_off: number
-  }[]>([])
+  const [capacityMembers, setCapacityMembers] = useState<CapacityMember[]>([])
   const [newMemberName, setNewMemberName] = useState<string>('')
   const [capacitySavedNotice, setCapacitySavedNotice] = useState<boolean>(false)
 
@@ -998,37 +1032,32 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
 
   // Initialize capacity members
   useEffect(() => {
-    const key = `ado_sprint_capacity_${selectedTeamId || 'default'}_${selectedIterationId || 'current'}`
+    const key = capacityStorageKey(selectedTeamId, selectedIterationId)
+    let savedMembers: CapacityMember[] = []
     try {
       const saved = localStorage.getItem(key)
       if (saved) {
         const parsed = JSON.parse(saved)
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setCapacityMembers(parsed)
-          return
+          savedMembers = parsed
         }
       }
     } catch {
       // ignore
     }
 
-    if (uniqueAssignees.length > 0) {
-      const initial = uniqueAssignees.map((name, idx) => ({
-        id: `cap-${idx}-${name.toLowerCase().replace(/\s+/g, '-')}`,
-        name,
-        activity: 'Development',
-        capacity_per_day: 6,
-        days_off: 0
-      }))
-      setCapacityMembers(initial)
-    } else {
-      setCapacityMembers([])
-    }
-  }, [uniqueAssignees, selectedTeamId, selectedIterationId])
+    const adoMembers = (boardData?.capacity_members || []).map(member => ({
+      ...member,
+      capacity_per_day: Number(member.capacity_per_day || 0),
+      days_off: Number(member.days_off || 0),
+      source: member.source || 'ado',
+    }))
+    setCapacityMembers(mergeCapacityMembers(adoMembers, savedMembers, uniqueAssignees))
+  }, [uniqueAssignees, selectedTeamId, selectedIterationId, boardData?.capacity_members])
 
-  const saveCapacitySettings = (updated: typeof capacityMembers) => {
+  const saveCapacitySettings = (updated: CapacityMember[]) => {
     setCapacityMembers(updated)
-    const key = `ado_sprint_capacity_${selectedTeamId || 'default'}_${selectedIterationId || 'current'}`
+    const key = capacityStorageKey(selectedTeamId, selectedIterationId)
     try {
       localStorage.setItem(key, JSON.stringify(updated))
       setCapacitySavedNotice(true)
@@ -1055,8 +1084,9 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       id: `cap-custom-${Date.now()}`,
       name,
       activity: 'Development',
-      capacity_per_day: 6,
-      days_off: 0
+      capacity_per_day: 8,
+      days_off: 0,
+      source: 'manual'
     }
     const updated = [...capacityMembers, newMember]
     saveCapacitySettings(updated)
@@ -1220,7 +1250,13 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       if (isDone) completedPoints += pts
     })
 
-    const workingDays = Math.max(1, boardData?.working_days_remaining || 10)
+    const workingDays = Math.max(
+      1,
+      boardData?.sprint_working_days ||
+        calculateSprintBusinessDays(boardData?.iteration?.start_date || currentIteration?.start_date, boardData?.iteration?.finish_date || currentIteration?.finish_date) ||
+        boardData?.working_days_remaining ||
+        10
+    )
     const requiredDailyBurn = Math.round((totalRemaining / workingDays) * 10) / 10
     const totalSprintWork = totalCompleted + totalRemaining
     const percentDelivered = totalSprintWork > 0 ? Math.round((totalCompleted / totalSprintWork) * 100) : 0
@@ -1244,11 +1280,17 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       typeDistribution,
       memberEffort,
     }
-  }, [boardData, userStories])
+  }, [boardData, userStories, currentIteration])
 
   // Capacity Stats Computation
   const capacityStats = useMemo(() => {
-    const workingDays = Math.max(1, boardData?.working_days_remaining || 10)
+    const workingDays = Math.max(
+      1,
+      boardData?.sprint_working_days ||
+        calculateSprintBusinessDays(boardData?.iteration?.start_date || currentIteration?.start_date, boardData?.iteration?.finish_date || currentIteration?.finish_date) ||
+        boardData?.working_days_remaining ||
+        10
+    )
     let totalTeamCapacity = 0
     let totalAssignedHours = 0
 
@@ -1266,9 +1308,20 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       const individualCap = Math.round(availableDays * (m.capacity_per_day || 6) * 10) / 10
       totalTeamCapacity += individualCap
 
-      const assignedTasks = (boardData?.work_items || []).filter(w => w.assigned_to_name?.toLowerCase() === m.name.toLowerCase())
-      const assignedHours = Math.round(assignedTasks.reduce((sum, t) => sum + (t.remaining_work || 0), 0) * 10) / 10
-      const completedHours = Math.round(assignedTasks.reduce((sum, t) => sum + (t.completed_work || 0), 0) * 10) / 10
+      const assignedTasks = (boardData?.work_items || []).filter(w => {
+        const samePerson = normalizePersonName(w.assigned_to_name || '') === normalizePersonName(m.name)
+        const isOpen = !['done', 'closed', 'completed', 'resolved'].includes(w.state.toLowerCase())
+        return samePerson && isOpen
+      })
+      const assignedHours = Math.round(assignedTasks.reduce((sum, t) => {
+        if (t.remaining_work != null) return sum + t.remaining_work
+        if (t.original_estimate != null) return sum + Math.max(0, t.original_estimate - (t.completed_work || 0))
+        return sum
+      }, 0) * 10) / 10
+      const missingEstimateCount = assignedTasks.filter(t => t.remaining_work == null && t.original_estimate == null).length
+      const completedHours = Math.round((boardData?.work_items || [])
+        .filter(w => normalizePersonName(w.assigned_to_name || '') === normalizePersonName(m.name))
+        .reduce((sum, t) => sum + (t.completed_work || 0), 0) * 10) / 10
       totalAssignedHours += assignedHours
 
       const act = m.activity || 'Development'
@@ -1285,6 +1338,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         individualCap,
         assignedHours,
         completedHours,
+        missingEstimateCount,
         utilization,
         isOverloaded,
       }
@@ -1300,7 +1354,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       activityCapacity,
       memberDetails,
     }
-  }, [capacityMembers, boardData])
+  }, [capacityMembers, boardData, currentIteration])
 
   // Burndown Data Points Computation
   const burndownData = useMemo(() => {
@@ -3169,7 +3223,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                     <th style={{ width: '130px' }}>Capacity / Day</th>
                     <th style={{ width: '120px' }}>Days Off (PTO)</th>
                     <th style={{ width: '130px', textAlign: 'right' }}>Total Cap (h)</th>
-                    <th style={{ width: '130px', textAlign: 'right' }}>Assigned (h)</th>
+                    <th style={{ width: '150px', textAlign: 'right' }}>Assigned Remaining (h)</th>
                     <th style={{ width: '160px' }}>Utilization</th>
                     <th style={{ width: '60px', textAlign: 'center' }}></th>
                   </tr>
@@ -3191,6 +3245,9 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                             </div>
                             <span style={{ fontWeight: 600, color: '#f4f4f5' }}>
                               {member.name}
+                            </span>
+                            <span style={{ fontSize: '10px', color: member.source === 'ado' ? '#38bdf8' : '#fbbf24' }}>
+                              {member.source === 'ado' ? 'ADO' : 'Manual'}
                             </span>
                           </div>
                         </td>
@@ -3241,6 +3298,11 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                         </td>
                         <td style={{ textAlign: 'right', fontWeight: 600, color: member.isOverloaded ? '#ef4444' : '#38bdf8' }}>
                           {member.assignedHours}h
+                          {member.missingEstimateCount > 0 && (
+                            <div style={{ fontSize: '10px', color: '#fbbf24', fontWeight: 500 }}>
+                              {member.missingEstimateCount} without estimate
+                            </div>
+                          )}
                         </td>
                         <td>
                           <div className="adoProgressBarWrap">
@@ -3867,7 +3929,12 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         const sprintTitle = currentIteration ? formatSprintName(currentIteration.name, currentIteration.path) : 'Current Sprint'
         const teamTitle = teams.find(t => t.id === selectedTeamId)?.name || selectedTeamId
         const sprintLabel = formatSprintMonthYear(currentIteration?.start_date, currentIteration?.finish_date, currentIteration?.name)
-        const sprintWorkingDays = calculateSprintBusinessDays(currentIteration?.start_date, currentIteration?.finish_date)
+        const sprintWorkingDays = Math.max(
+          1,
+          boardData?.sprint_working_days ||
+            calculateSprintBusinessDays(currentIteration?.start_date, currentIteration?.finish_date) ||
+            10
+        )
         const capacityPerPerson = sprintWorkingDays * 8
 
         const memberCapacityMap: Record<string, number> = {}

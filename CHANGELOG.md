@@ -26,8 +26,14 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   - **Context-aware email draft:** Clicking the email report button automatically generates the appropriate draft depending on your view: sends the Sprint Health Report when viewing the Taskboard, and sends the Team Deliverables / Handover Report when viewing the Deliverables tab.
   - **Sprint capacity metrics:** Member effort displays each person's configured sprint capacity rather than task hours logged.
   - **Active blade highlighting:** Clearly indicates which tab/blade (Taskboard, Deliverables, Planning) is currently selected.
+- **ADO-backed sprint capacity planning:**
+  - The Capacity tab now pulls each sprint member's capacity/day and days off from Azure DevOps iteration capacity data when available.
+  - Manual edits still override the ADO values for the selected team and sprint, and those effective values are reused by Deliverables email capacity/person lines.
+  - Assigned remaining effort is calculated from open assigned work using Remaining Work, with Original Estimate minus Completed Work as a fallback when Remaining Work is blank.
 
 ### Fixed
+- **Capacity tab: incorrect working days and inactive utilization.** Sprint working days now come from the sprint start/finish dates and count weekdays across the full sprint instead of falling back to 10 days. Assigned hours and utilization now populate from the same effective capacity model used by the Capacity tab and Deliverables report.
+- **Deliverables email: cross-sprint closure clarity.** The team Deliverables email now labels work items that were tracked under another sprint or outside the selected sprint board but closed during the selected sprint date range, so carried-over closures are visible instead of looking like ordinary in-sprint items.
 - **Sprint Deliverables: stories closed in sprint dates missing when assigned to another iteration path.**
   - *Context & Problem:* Stories closed during a sprint's active calendar dates were omitted from Deliverables and the Email Draft if their `System.IterationPath` field remained set to an older sprint or backlog path (e.g. user stories closed in September 2026 whose iteration path pointed to an earlier year's iteration).
   - *Root Cause:* The WIQL query for closed work items in `routes.py` formatted date bounds with ISO-8601 timestamps (e.g. `'2026-09-30T23:59:59Z'`). Azure DevOps WIQL enforces date precision on `ClosedDate` and rejected the query with `HTTP 400 Bad Request` ("You cannot supply a time with the date when running a query using date precision"), causing the query to fail silently and fetch 0 closed items outside the iteration path.

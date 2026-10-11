@@ -56,6 +56,55 @@ def calculate_remaining_work_days(finish_date: datetime | None, now: datetime | 
     return remaining_days
 
 
+def calculate_sprint_working_days(start_date: datetime | None, finish_date: datetime | None) -> int | None:
+    """Calculate all Monday-Friday working days in a sprint date range, inclusive."""
+    if not start_date or not finish_date:
+        return None
+    if start_date.tzinfo is None:
+        start_date = start_date.replace(tzinfo=timezone.utc)
+    if finish_date.tzinfo is None:
+        finish_date = finish_date.replace(tzinfo=timezone.utc)
+
+    start = start_date.date()
+    finish = finish_date.date()
+    if finish < start:
+        return 0
+
+    days = 0
+    cur = start
+    while cur <= finish:
+        if cur.weekday() < 5:
+            days += 1
+        cur += timedelta(days=1)
+    return days
+
+
+def calculate_weekday_overlap_days(
+    start_date: datetime | None,
+    finish_date: datetime | None,
+    range_start: datetime | None,
+    range_finish: datetime | None,
+) -> int:
+    """Count weekdays where a days-off range overlaps the sprint date range."""
+    if not start_date or not finish_date or not range_start or not range_finish:
+        return 0
+    sprint_start = start_date.date()
+    sprint_finish = finish_date.date()
+    off_start = range_start.date()
+    off_finish = range_finish.date()
+    start = max(sprint_start, off_start)
+    finish = min(sprint_finish, off_finish)
+    if finish < start:
+        return 0
+    days = 0
+    cur = start
+    while cur <= finish:
+        if cur.weekday() < 5:
+            days += 1
+        cur += timedelta(days=1)
+    return days
+
+
 def parse_ado_date(val: str | None) -> datetime | None:
     if not val:
         return None
@@ -567,6 +616,7 @@ def calculate_sprint_milestones(
             "assigned_to_avatar": avatar,
             "completed_date": completed_date,
             "web_url": web_url,
+            "iteration_path": item.get("iteration_path"),
             "category": category,
             "milestone_stream": milestone_stream,
             "hours_delivered": item_delivered_hours,

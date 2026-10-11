@@ -218,6 +218,16 @@ export type AdoSprintChecksSummary = {
   flagged_item_ids: number[]
 }
 
+export type AdoCapacityMember = {
+  id: string
+  name: string
+  unique_name?: string | null
+  activity: string
+  capacity_per_day: number
+  days_off: number
+  source?: 'ado' | 'manual' | string
+}
+
 export type AdoMilestoneItem = {
   id: number
   title: string
@@ -227,6 +237,7 @@ export type AdoMilestoneItem = {
   assigned_to_avatar?: string | null
   completed_date?: string | null
   web_url?: string | null
+  iteration_path?: string | null
   category: string
   milestone_stream?: string
   hours_delivered: number
@@ -286,6 +297,8 @@ export type AdoSprintBoardResponse = {
   backlog_items?: AdoWorkItem[]
   checks_summary: AdoSprintChecksSummary
   working_days_remaining?: number | null
+  sprint_working_days?: number | null
+  capacity_members?: AdoCapacityMember[]
   milestone?: AdoSprintMilestoneSummary | null
 }
 

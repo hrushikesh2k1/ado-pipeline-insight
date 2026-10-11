@@ -258,6 +258,16 @@ class AdoSprintChecksSummary(BaseModel):
     flagged_item_ids: list[int] = Field(default_factory=list)
 
 
+class AdoCapacityMember(BaseModel):
+    id: str
+    name: str
+    unique_name: str | None = None
+    activity: str = "Development"
+    capacity_per_day: float = 0.0
+    days_off: float = 0.0
+    source: str = "ado"
+
+
 class AdoMilestoneItem(BaseModel):
     id: int
     title: str
@@ -267,6 +277,7 @@ class AdoMilestoneItem(BaseModel):
     assigned_to_avatar: str | None = None
     completed_date: str | None = None
     web_url: str | None = None
+    iteration_path: str | None = None
     category: str = "Feature & Business Value"
     milestone_stream: str = "Alert Creation & Telemetry"
     hours_delivered: float = 0.0
@@ -317,6 +328,8 @@ class AdoSprintBoardResponse(BaseModel):
     backlog_items: list[AdoWorkItem] = Field(default_factory=list)
     checks_summary: AdoSprintChecksSummary
     working_days_remaining: int | None = None
+    sprint_working_days: int | None = None
+    capacity_members: list[AdoCapacityMember] = Field(default_factory=list)
     milestone: AdoSprintMilestoneSummary | None = None
 
 

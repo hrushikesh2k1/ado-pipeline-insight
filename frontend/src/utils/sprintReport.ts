@@ -100,6 +100,8 @@ export interface MemberDeliverableItem {
   hoursDelivered: number
   storyTitles: string[]
   bugCount: number
+  crossSprintCount?: number
+  crossSprintBugCount?: number
 }
 
 export interface TeamDeliverablesReportInput {
@@ -118,6 +120,25 @@ export function isSamePerson(nameA?: string | null, nameB?: string | null): bool
   if (cleanA === cleanB) return true
   if (cleanA.includes(cleanB) || cleanB.includes(cleanA)) return true
   return false
+}
+
+function normalizeIterationPath(path?: string | null): string {
+  return (path || '').trim().replace(/\//g, '\\').replace(/\\+$/g, '').toLowerCase()
+}
+
+function iterationLeaf(path?: string | null): string {
+  const clean = (path || '').trim().replace(/\//g, '\\')
+  return clean.split('\\').filter(Boolean).pop() || clean || 'another sprint'
+}
+
+function crossSprintNote(itemIterationPath?: string | null, sprintPath?: string | null, sourceFound = true, hasCompletionEvidence = false): string {
+  const itemPath = normalizeIterationPath(itemIterationPath)
+  const currentPath = normalizeIterationPath(sprintPath)
+  if (!itemPath) {
+    return !sourceFound && hasCompletionEvidence ? ' (closed in this sprint; tracked outside selected sprint)' : ''
+  }
+  if (!currentPath || itemPath === currentPath) return ''
+  return ` (closed in this sprint; tracked under ${iterationLeaf(itemIterationPath)})`
 }
 
 /** Formats sprint date range or name into a concise month and 2-digit year (e.g. "Sep '26"). */
@@ -191,12 +212,14 @@ export function buildTeamDeliverablesReport(
     'Hi,',
     '',
     `Below are the high-level details of the work delivered in ${input.sprintLabel}.`,
+    'Note: Items marked as tracked under another sprint were assigned to a different iteration path in Azure DevOps, but were closed during this sprint date range.',
     `Capacity/person – ${input.capacityPerPersonHours} hrs.`,
   ]
 
   const htmlSections: string[] = [
     '<p style="margin: 0 0 12px 0;">Hi,</p>',
     `<p style="margin: 0 0 4px 0;">Below are the high-level details of the <u>work delivered</u> in <b>${escapeHtml(input.sprintLabel)}</b>.</p>`,
+    '<p style="margin: 0 0 4px 0; color: #475569;">Note: Items marked as tracked under another sprint were assigned to a different iteration path in Azure DevOps, but were closed during this sprint date range.</p>',
     `<p style="margin: 0 0 16px 0;">Capacity/person – <b>${input.capacityPerPersonHours} hrs.</b></p>`,
   ]
 
@@ -208,7 +231,8 @@ export function buildTeamDeliverablesReport(
       textLines.push(`• ${st}`)
     })
     if (m.bugCount > 0) {
-      textLines.push(`• Bug fixes (${m.bugCount} nos.)`)
+      const crossSprintBugText = m.crossSprintBugCount ? `; ${m.crossSprintBugCount} tracked under another sprint` : ''
+      textLines.push(`• Bug fixes (${m.bugCount} nos.${crossSprintBugText})`)
     }
 
     // HTML section
@@ -217,7 +241,8 @@ export function buildTeamDeliverablesReport(
       itemsHtml.push(`<li>${escapeHtml(st)}</li>`)
     })
     if (m.bugCount > 0) {
-      itemsHtml.push(`<li>Bug fixes (${m.bugCount} nos.)</li>`)
+      const crossSprintBugText = m.crossSprintBugCount ? `; ${m.crossSprintBugCount} tracked under another sprint` : ''
+      itemsHtml.push(`<li>Bug fixes (${m.bugCount} nos.${escapeHtml(crossSprintBugText)})</li>`)
     }
 
     htmlSections.push(
@@ -241,6 +266,8 @@ export function prepareMemberDeliverables(
     category?: string
     assigned_to_name?: string | null
     hours_delivered?: number
+    iteration_path?: string | null
+    completed_date?: string | null
   }[],
   memberContributions: {
     name: string
@@ -257,12 +284,14 @@ export function prepareMemberDeliverables(
     closed_date?: string | null
     state_change_date?: string | null
     changed_date?: string | null
+    iteration_path?: string | null
   }[] = [],
   memberCapacities: Record<string, number> = {},
   defaultCapacity: number = 168,
   iteration?: {
     start_date?: string | null
     finish_date?: string | null
+    path?: string | null
   } | null
 ): MemberDeliverableItem[] {
   const closedStates = ['closed', 'done', 'completed', 'resolved']
@@ -278,6 +307,8 @@ export function prepareMemberDeliverables(
     hours: number
     stories: string[]
     bugCount: number
+    crossSprintCount: number
+    crossSprintBugCount: number
     taskFallbacks: string[]
   }> = {}
 
@@ -288,6 +319,8 @@ export function prepareMemberDeliverables(
         hours: mc.completedHours,
         stories: [],
         bugCount: 0,
+        crossSprintCount: 0,
+        crossSprintBugCount: 0,
         taskFallbacks: [],
       }
     }
@@ -324,16 +357,31 @@ export function prepareMemberDeliverables(
         hours: item.hours_delivered || 0,
         stories: [],
         bugCount: 0,
+        crossSprintCount: 0,
+        crossSprintBugCount: 0,
         taskFallbacks: [],
       }
     }
 
     if (matchedMember) {
+      const sourceItem = workItems.find(w => w.id === item.id)
+      const note = crossSprintNote(
+        item.iteration_path || sourceItem?.iteration_path,
+        iteration?.path,
+        Boolean(sourceItem),
+        Boolean(item.completed_date)
+      )
       if (isBug) {
         memberDeliverablesMap[matchedMember].bugCount += 1
+        if (note) {
+          memberDeliverablesMap[matchedMember].crossSprintBugCount += 1
+          memberDeliverablesMap[matchedMember].crossSprintCount += 1
+        }
       } else {
-        if (!memberDeliverablesMap[matchedMember].stories.includes(item.title)) {
-          memberDeliverablesMap[matchedMember].stories.push(item.title)
+        const storyTitle = `${item.title}${note}`
+        if (!memberDeliverablesMap[matchedMember].stories.includes(storyTitle)) {
+          memberDeliverablesMap[matchedMember].stories.push(storyTitle)
+          if (note) memberDeliverablesMap[matchedMember].crossSprintCount += 1
         }
       }
     }
@@ -384,6 +432,8 @@ export function prepareMemberDeliverables(
       hoursDelivered: getPersonCapacity(name),
       storyTitles: data.stories.length > 0 ? data.stories : data.taskFallbacks,
       bugCount: data.bugCount,
+      crossSprintCount: data.crossSprintCount,
+      crossSprintBugCount: data.crossSprintBugCount,
     }))
     .sort((a, b) => b.hoursDelivered - a.hoursDelivered || b.storyTitles.length - a.storyTitles.length)
 }

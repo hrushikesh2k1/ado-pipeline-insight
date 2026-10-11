@@ -162,4 +162,84 @@ describe('buildTeamDeliverablesReport & team deliverable helpers', () => {
     expect(members[0].storyTitles).toEqual(['Container Insights feature'])
     expect(members[0].bugCount).toBe(1)
   })
+
+  it('labels work items that were tracked under another sprint but closed in the selected sprint', () => {
+    const members = prepareMemberDeliverables(
+      [
+        {
+          id: 101,
+          title: 'Finish carried-over monitor rules',
+          work_item_type: 'User Story',
+          assigned_to_name: 'BADONI Sachin',
+          hours_delivered: 16,
+          iteration_path: 'CloudOps\\26-08',
+        },
+        {
+          id: 102,
+          title: 'Fix carried-over alert bug',
+          work_item_type: 'Bug',
+          assigned_to_name: 'BADONI Sachin',
+          hours_delivered: 4,
+          iteration_path: 'CloudOps\\26-08',
+        },
+      ],
+      [{ name: 'BADONI Sachin', completedHours: 20 }],
+      [
+        {
+          id: 101,
+          title: 'Finish carried-over monitor rules',
+          work_item_type: 'User Story',
+          state: 'Closed',
+          assigned_to_name: 'BADONI Sachin',
+          iteration_path: 'CloudOps\\26-08',
+        },
+        {
+          id: 102,
+          title: 'Fix carried-over alert bug',
+          work_item_type: 'Bug',
+          state: 'Closed',
+          assigned_to_name: 'BADONI Sachin',
+          iteration_path: 'CloudOps\\26-08',
+        },
+      ],
+      { 'BADONI Sachin': 160 },
+      168,
+      { path: 'CloudOps\\26-09', start_date: '2026-09-01T00:00:00Z', finish_date: '2026-09-30T00:00:00Z' }
+    )
+
+    expect(members[0].storyTitles[0]).toContain('closed in this sprint; tracked under 26-08')
+    expect(members[0].crossSprintCount).toBe(2)
+    expect(members[0].crossSprintBugCount).toBe(1)
+
+    const report = buildTeamDeliverablesReport({
+      sprintLabel: "Sep '26",
+      capacityPerPersonHours: 168,
+      teamTitle: 'CloudOps-Monitoring',
+      members,
+    })
+    expect(report.text).toContain('assigned to a different iteration path')
+    expect(report.text).toContain('Bug fixes (1 nos.; 1 tracked under another sprint)')
+  })
+
+  it('labels old saved deliverables that are absent from the current sprint board list', () => {
+    const members = prepareMemberDeliverables(
+      [
+        {
+          id: 201,
+          title: 'Create informational alert from saved report',
+          work_item_type: 'User Story',
+          assigned_to_name: 'BOORA Hrushikesh',
+          hours_delivered: 8,
+          completed_date: '2026-09-10T12:00:00Z',
+        },
+      ],
+      [{ name: 'BOORA Hrushikesh', completedHours: 8 }],
+      [],
+      { 'BOORA Hrushikesh': 160 },
+      168,
+      { path: 'CloudOps\\26-09', start_date: '2026-09-01T00:00:00Z', finish_date: '2026-09-30T00:00:00Z' }
+    )
+
+    expect(members[0].storyTitles[0]).toContain('closed in this sprint; tracked outside selected sprint')
+  })
 })

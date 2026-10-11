@@ -67,6 +67,8 @@ from app.services.board_service import (
     is_in_team_areas,
     parse_team_area_scopes,
     calculate_remaining_work_days,
+    calculate_sprint_working_days,
+    calculate_weekday_overlap_days,
     parse_ado_date,
     calculate_sprint_milestones,
 )
@@ -113,6 +115,53 @@ def _resolve_pat(organization: str, supplied: str | None) -> str:
 service = PipelineService()
 repo = PipelineRepository()
 ai_service = AIService()
+
+
+def _normalize_capacity_members(raw_capacities: list[dict[str, Any]], start_dt: datetime | None, finish_dt: datetime | None) -> list[dict[str, Any]]:
+    members: list[dict[str, Any]] = []
+    for idx, row in enumerate(raw_capacities):
+        person = row.get("teamMember") or row.get("member") or {}
+        name = str(person.get("displayName") or person.get("name") or "").strip()
+        unique_name = str(person.get("uniqueName") or person.get("unique_name") or "").strip() or None
+        member_id = str(person.get("id") or unique_name or name or f"capacity-{idx}")
+        if not name:
+            continue
+
+        activities = row.get("activities") or []
+        activity_names: list[str] = []
+        capacity_per_day = 0.0
+        for activity in activities:
+            if not isinstance(activity, dict):
+                continue
+            activity_name = str(activity.get("name") or activity.get("activity") or "").strip()
+            if activity_name:
+                activity_names.append(activity_name)
+            try:
+                capacity_per_day += float(activity.get("capacityPerDay") or activity.get("capacity_per_day") or 0)
+            except (TypeError, ValueError):
+                pass
+
+        days_off = 0
+        for day_range in row.get("daysOff") or row.get("days_off") or []:
+            if not isinstance(day_range, dict):
+                continue
+            days_off += calculate_weekday_overlap_days(
+                start_dt,
+                finish_dt,
+                parse_ado_date(day_range.get("start")),
+                parse_ado_date(day_range.get("end")),
+            )
+
+        members.append({
+            "id": member_id,
+            "name": name,
+            "unique_name": unique_name,
+            "activity": ", ".join(dict.fromkeys(activity_names)) or "Development",
+            "capacity_per_day": round(capacity_per_day, 2),
+            "days_off": days_off,
+            "source": "ado",
+        })
+    return members
 
 @router.get("/health")
 def health():
@@ -1349,8 +1398,22 @@ def get_ado_sprint_board(
         except Exception as e_parent:
             logging.info("Could not resolve parent Feature/Epic titles for milestone streams: %s", e_parent)
 
+    start_dt = parse_ado_date(selected_iteration.start_date) if selected_iteration else None
     finish_dt = parse_ado_date(selected_iteration.finish_date) if selected_iteration else None
     remaining_days = calculate_remaining_work_days(finish_dt, now)
+    sprint_working_days = calculate_sprint_working_days(start_dt, finish_dt)
+
+    capacity_members: list[dict[str, Any]] = []
+    if selected_iteration and token:
+        try:
+            raw_capacities = AzureDevOpsClient(org_clean, token).get_iteration_capacities(
+                proj_clean,
+                effective_team,
+                selected_iteration.id,
+            )
+            capacity_members = _normalize_capacity_members(raw_capacities, start_dt, finish_dt)
+        except Exception as e_capacity:
+            logging.info("Could not load ADO iteration capacities: %s", e_capacity)
 
     milestone_data = calculate_sprint_milestones(parsed_items, parent_lookup, iteration=selected_iteration)
 
@@ -1361,6 +1424,8 @@ def get_ado_sprint_board(
         backlog_items=[AdoWorkItem(**item) for item in uncommitted_backlog],
         checks_summary=AdoSprintChecksSummary(**checks_summary),
         working_days_remaining=remaining_days,
+        sprint_working_days=sprint_working_days,
+        capacity_members=capacity_members,
         milestone=AdoSprintMilestoneSummary(**milestone_data),
     )
 

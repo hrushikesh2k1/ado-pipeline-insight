@@ -380,6 +380,15 @@ class AzureDevOpsClient:
             return data["value"]
         return []
 
+    def get_iteration_capacities(
+        self, project: str, team: str, iteration_id: str
+    ) -> list[dict[str, Any]]:
+        """Get team member capacities and days off for a sprint iteration."""
+        url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/iterations/{quote(iteration_id, safe='')}/capacities"
+        response = self.session.get(url, params={"api-version": self.api_version}, timeout=30)
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
     def query_wiql(self, project: str, wiql_query: str, top: int | None = None) -> list[int]:
         """Execute a WIQL query and return a list of matching work item IDs (at most `top`, when given)."""
         url = self._url(project, "_apis/wit/wiql")

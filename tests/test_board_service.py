@@ -2,6 +2,8 @@ from datetime import datetime, timezone, timedelta
 from app.services.board_service import (
     calculate_business_days,
     calculate_remaining_work_days,
+    calculate_sprint_working_days,
+    calculate_weekday_overlap_days,
     evaluate_sprint_work_items,
 )
 
@@ -34,6 +36,20 @@ def test_calculate_remaining_work_days():
     # Tue, Wed = 2 work days remaining
     remaining = calculate_remaining_work_days(finish, now)
     assert remaining == 2
+
+
+def test_calculate_sprint_working_days_inclusive():
+    start = datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)  # Tuesday
+    finish = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)  # Wednesday
+    assert calculate_sprint_working_days(start, finish) == 22
+
+
+def test_calculate_weekday_overlap_days_for_days_off():
+    sprint_start = datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)
+    sprint_finish = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+    off_start = datetime(2026, 9, 11, 0, 0, tzinfo=timezone.utc)  # Friday
+    off_finish = datetime(2026, 9, 14, 23, 59, tzinfo=timezone.utc)  # Monday
+    assert calculate_weekday_overlap_days(sprint_start, sprint_finish, off_start, off_finish) == 2
 
 
 def test_evaluate_sprint_work_items_checks():
