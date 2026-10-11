@@ -388,6 +388,15 @@ def evaluate_sprint_work_items(
                         if item_id not in flagged_item_ids:
                             flagged_item_ids.append(item_id)
 
+        # Check 3: Blocked work (tag, state, or blocked field)
+        is_blocked = (
+            "blocked" in tags_raw.lower()
+            or "impediment" in tags_raw.lower()
+            or state.lower() == "blocked"
+            or str(fields.get("Microsoft.VSTS.CMMI.Blocked") or "").lower() == "yes"
+            or str(fields.get("Custom.Blocked") or "").lower() == "yes"
+        )
+
         # Extract severity & priority for quality gates & defect burden
         severity_raw = fields.get("Microsoft.VSTS.Common.Severity") or fields.get("Severity")
         priority_raw = fields.get("Microsoft.VSTS.Common.Priority") or fields.get("Priority")
@@ -438,6 +447,7 @@ def evaluate_sprint_work_items(
             "business_days_in_review": business_days_in_review,
             "is_closed_without_hours": is_closed_without_hours,
             "is_stale_in_review": is_stale_in_review,
+            "is_blocked": is_blocked,
             "description": description or None,
             "acceptance_criteria": acceptance_criteria or None,
             "tags": tags_raw,

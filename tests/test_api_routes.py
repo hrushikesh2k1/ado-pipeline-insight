@@ -569,3 +569,31 @@ def test_sprint_board_current_sprint_keeps_its_dates(api, monkeypatch):
     client, _ = api
     body = client.get("/api/v1/ado/sprints/board?organization=myorg&project=proj&team=T").json()  # no iteration chosen: current
     assert (body["iteration"]["start_date"], body["iteration"]["finish_date"]) == ("2026-10-01T00:00:00Z", "2026-10-31T00:00:00Z")
+
+
+def test_ado_work_item_comments(api, monkeypatch):
+    class FakeAdo:
+        def __init__(self, *a, **k):
+            pass
+
+        def get_work_item_comments(self, project, work_item_id, top=5):
+            return [
+                {
+                    "id": 1,
+                    "text": "<p>Blocked by missing API credentials from security team.</p>",
+                    "createdDate": "2026-10-10T14:30:00Z",
+                    "createdBy": {"displayName": "Bob Dev"},
+                }
+            ]
+
+    monkeypatch.setattr(routes, "AzureDevOpsClient", FakeAdo)
+    monkeypatch.setattr(routes, "_resolve_pat", lambda org, pat=None: "token")
+    client, _ = api
+    r = client.get("/api/v1/ado/work-items/9001/comments?organization=myorg&project=myproj")
+    assert r.status_code == 200
+    comments = r.json()
+    assert len(comments) == 1
+    assert comments[0]["author"] == "Bob Dev"
+    assert "Blocked by missing API credentials" in comments[0]["text"]
+    assert "<p>" not in comments[0]["text"]  # HTML stripped!
+

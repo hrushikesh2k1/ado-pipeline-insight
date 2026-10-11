@@ -194,6 +194,7 @@ export type AdoWorkItem = {
   business_days_in_review?: number | null
   is_closed_without_hours: boolean
   is_stale_in_review: boolean
+  is_blocked?: boolean
   description?: string | null
   acceptance_criteria?: string | null
   area_path?: string | null
@@ -206,6 +207,52 @@ export type AdoWorkItem = {
   order?: number | null
   activity?: string | null
   tags?: string | null
+}
+
+export interface StandupBlockedItem {
+  id: number
+  title: string
+  work_item_type: string
+  state: string
+  assigned_to_name?: string | null
+  assigned_to_avatar?: string | null
+  web_url?: string | null
+  reason: string
+  tags?: string | null
+  remaining_work?: number | null
+  story_points?: number | null
+  area_path?: string | null
+  comments?: Array<{ author: string; date: string; text: string }> | null
+}
+
+export interface StandupReviewBottleneck {
+  id: number
+  title: string
+  work_item_type: string
+  state: string
+  assigned_to_name?: string | null
+  assigned_to_avatar?: string | null
+  web_url?: string | null
+  business_days_in_review: number
+  remaining_work?: number | null
+  story_points?: number | null
+  area_path?: string | null
+}
+
+export interface StandupWorkloadGap {
+  member_name: string
+  avatar?: string | null
+  capacity_per_day?: number
+  in_progress_count: number
+  to_do_count: number
+  next_up_items: Array<{ id: number; title: string; work_item_type: string; web_url?: string | null }>
+}
+
+export interface StandupSummary {
+  total_attention_count: number
+  blocked_items: StandupBlockedItem[]
+  review_bottlenecks: StandupReviewBottleneck[]
+  workload_gaps: StandupWorkloadGap[]
 }
 
 export type AdoSprintChecksSummary = {

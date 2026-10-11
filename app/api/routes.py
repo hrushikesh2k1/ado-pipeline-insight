@@ -71,6 +71,7 @@ from app.services.board_service import (
     calculate_weekday_overlap_days,
     parse_ado_date,
     calculate_sprint_milestones,
+    strip_html_tags,
 )
 from core.validation import validate_organization, validate_project
 from core.ado_client import AzureDevOpsClient
@@ -1428,6 +1429,34 @@ def get_ado_sprint_board(
         capacity_members=capacity_members,
         milestone=AdoSprintMilestoneSummary(**milestone_data),
     )
+
+
+@router.get("/ado/work-items/{work_item_id}/comments")
+def get_work_item_comments_endpoint(
+    work_item_id: int,
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    top: int = Query(3, ge=1, le=10),
+    pat: str | None = Query(None),
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
+):
+    """Retrieve the newest comments of a work item, cleaned of HTML tags."""
+    try:
+        org_clean = validate_organization(organization)
+        proj_clean = validate_project(project)
+        resolved_pat = _resolve_pat(org_clean, pat or x_ado_pat)
+        ado = AzureDevOpsClient(org_clean, resolved_pat)
+        raw_comments = ado.get_work_item_comments(proj_clean, work_item_id, top=top)
+        cleaned = []
+        for c in raw_comments:
+            author = str((c.get("createdBy") or {}).get("displayName") or "Unknown")
+            date = str(c.get("createdDate") or "")
+            text = strip_html_tags(c.get("text") or "")
+            cleaned.append({"author": author, "date": date, "text": text})
+        return cleaned
+    except Exception as exc:
+        logging.warning("Could not read comments for work item %s: %s", work_item_id, exc)
+        return []
 
 
 @router.post("/sprint-board/milestone-ai-summary", response_model=MilestoneAiSummaryResponse)

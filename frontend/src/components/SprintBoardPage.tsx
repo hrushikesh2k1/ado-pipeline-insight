@@ -85,6 +85,8 @@ import {
   loadSavedDeliverablesReport,
   saveDeliverablesReportToStorage
 } from '../utils/deliverablesReport'
+import { SmartStandupView } from './SmartStandupView'
+import { buildStandupSummary } from '../utils/standupInsights'
 
 interface SprintBoardPageProps {
   organization: string
@@ -97,7 +99,7 @@ interface SprintBoardPageProps {
   theme?: 'dark' | 'light'
 }
 
-type SubTab = 'Taskboard' | 'Deliverables' | 'Milestone' | 'Backlog' | 'Capacity' | 'Analytics'
+type SubTab = 'Taskboard' | 'Standup' | 'Deliverables' | 'Milestone' | 'Backlog' | 'Capacity' | 'Analytics'
 type FilterMode = 'all' | 'closed_without_hours' | 'stale_in_review'
 type CapacityMember = AdoCapacityMember & { avatar?: string }
 
@@ -628,6 +630,26 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
     })
     return Array.from(set).sort()
   }, [boardData])
+
+  // Current selected team
+  const currentTeam = teams.find(t => t.id === selectedTeamId)
+
+  // Standup Insights Summary for Smart Standup Mode
+  const standupSummary = useMemo(() => {
+    if (!boardData) {
+      return {
+        blocked_items: [],
+        review_bottlenecks: [],
+        workload_gaps: [],
+        total_attention_count: 0
+      }
+    }
+    const membersList = (capacityMembers && capacityMembers.length > 0)
+      ? capacityMembers.map(m => ({ name: m.name, capacity_per_day: m.capacity_per_day }))
+      : uniqueAssignees.map(name => ({ name }))
+
+    return buildStandupSummary(boardData.work_items, membersList)
+  }, [boardData, capacityMembers, uniqueAssignees])
 
   // Clean sprint name helper to prevent GUIDs from ever displaying
   const formatSprintName = (nameOrGuid?: string, path?: string): string => {
@@ -1516,13 +1538,15 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         </div>
       </div>
 
-      {/* 2. Sub Navigation Tabs: Taskboard, Deliverables, Backlog, Capacity, Analytics */}
+      {/* 2. Sub Navigation Tabs: Taskboard, Standup, Deliverables, Backlog, Capacity, Analytics */}
       <div className="adoSubNavTabs">
-        {(['Taskboard', 'Deliverables', 'Backlog', 'Capacity', 'Analytics'] as SubTab[])
+        {(['Taskboard', 'Standup', 'Deliverables', 'Backlog', 'Capacity', 'Analytics'] as SubTab[])
           .filter(tab => tab !== 'Deliverables' || showMilestone)
           .map(tab => {
             const count = tab === 'Deliverables'
               ? deliverablesReport?.capacityEffortSummary?.closedStoriesCount ?? computedMilestone?.closed_stories_count ?? 0
+              : tab === 'Standup'
+              ? standupSummary.total_attention_count
               : 0
             const isActive = activeSubTab === tab || (tab === 'Deliverables' && (activeSubTab as any) === 'Milestone')
             return (
@@ -1533,9 +1557,13 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                 onClick={() => setActiveSubTab(tab)}
               >
                 {tab === 'Deliverables' && <Trophy size={13} style={{ marginRight: '5px' }} />}
+                {tab === 'Standup' && <ShieldAlert size={13} style={{ marginRight: '5px', color: count > 0 ? '#ef4444' : undefined }} />}
                 {tab}
                 {tab === 'Deliverables' && count > 0 && (
                   <span className="adoTabBadge">{count}</span>
+                )}
+                {tab === 'Standup' && count > 0 && (
+                  <span className="adoTabBadge" style={{ background: '#ef4444', color: '#ffffff' }}>{count}</span>
                 )}
               </button>
             )
@@ -1734,6 +1762,40 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       {/* 5. Main Taskboard or Other SubTabs */}
       {activeSubTab === 'Taskboard' ? (
         <div className="adoTaskboardWrapper">
+          {/* Smart Standup Quick Teaser Banner on Taskboard */}
+          {boardData && (
+            <div className="adoTaskboardStandupBanner" onClick={() => setActiveSubTab('Standup')}>
+              <div className="adoStandupBannerLeft">
+                <div className="adoStandupBannerIcon">🚨</div>
+                <div className="adoStandupBannerInfo">
+                  <span className="adoStandupBannerTitle">
+                    <b>Smart Standup Mode</b> &bull; Who needs help today?
+                  </span>
+                  <span className="adoStandupBannerStats">
+                    {standupSummary.total_attention_count > 0 ? (
+                      <>
+                        {standupSummary.blocked_items.length > 0 && (
+                          <span className="standupBadge critical">{standupSummary.blocked_items.length} blocked</span>
+                        )}
+                        {standupSummary.review_bottlenecks.length > 0 && (
+                          <span className="standupBadge warning">{standupSummary.review_bottlenecks.length} review bottlenecks</span>
+                        )}
+                        {standupSummary.workload_gaps.length > 0 && (
+                          <span className="standupBadge info">{standupSummary.workload_gaps.length} available</span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="standupBadge success">All clear &mdash; 0 blockers</span>
+                    )}
+                  </span>
+                </div>
+              </div>
+              <button type="button" className="adoStandupLaunchBtn">
+                Start 2-Min Standup &rarr;
+              </button>
+            </div>
+          )}
+
           {/* Deliverables Quick Teaser Banner on Taskboard */}
           {(deliverablesReport || (computedMilestone && computedMilestone.total_stories > 0)) && (
             <div className="adoTaskboardMilestoneBar" onClick={() => setActiveSubTab('Deliverables')}>
@@ -2011,6 +2073,18 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
             </div>
           )}
         </div>
+      ) : activeSubTab === 'Standup' ? (
+        <SmartStandupView
+          organization={organization}
+          project={project}
+          teamName={currentTeam?.name || ''}
+          sprintName={formatSprintName(boardData?.iteration?.name || currentIteration?.name, boardData?.iteration?.path || currentIteration?.path)}
+          workItems={boardData?.work_items || []}
+          capacityMembers={capacityMembers}
+          uniqueAssignees={uniqueAssignees}
+          pat={pat}
+          onSwitchToTaskboard={() => setActiveSubTab('Taskboard')}
+        />
       ) : (activeSubTab === 'Deliverables' || (activeSubTab as any) === 'Milestone') ? (
         <div className="adoMilestoneContainer">
           {/* Deliverables Status Line with Saved/Fresh/Failed Status & Regenerate Button */}

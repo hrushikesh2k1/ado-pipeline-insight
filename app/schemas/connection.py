@@ -234,6 +234,7 @@ class AdoWorkItem(BaseModel):
     business_days_in_review: int | None = None
     is_closed_without_hours: bool = False
     is_stale_in_review: bool = False
+    is_blocked: bool = False
     description: str | None = None
     acceptance_criteria: str | None = None
     area_path: str | None = None

@@ -146,6 +146,11 @@ export const api = {
     if (pat) p.set('pat', pat)
     return request<AdoSprintBoardResponse>(`/api/v1/ado/sprints/board?${p.toString()}`)
   },
+  workItemComments:(organization:string,project:string,workItemId:number,top = 3,pat?:string)=>{
+    const p = new URLSearchParams({ organization, project, top: String(top) })
+    if (pat) p.set('pat', pat)
+    return request<Array<{ author: string; date: string; text: string }>>(`/api/v1/ado/work-items/${workItemId}/comments?${p.toString()}`)
+  },
   /** The sprints, members and areas the planning page starts from. */
   sprintPlanningSetup:(organization:string,project:string,team:string,pat?:string)=>{
     const p = new URLSearchParams({ organization, project, team })

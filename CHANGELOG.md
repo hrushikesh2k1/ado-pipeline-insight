@@ -6,6 +6,17 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+### Added
+- **Smart Standup Mode ("Who Needs Help Today?"):**
+  - **Dedicated 2-minute daily standup view:** Replaces round-robin card reading with an exception-based attention dashboard highlighting only items requiring immediate team attention.
+  - **🚨 Blocked Work & Impediments:** Surfaces stories tagged `Blocked`, in a `Blocked` or `Impediment` state, or with the `Blocked` flag set to `Yes`. Includes one-click expandable Azure DevOps comment drawers showing recent discussion context directly without leaving the board.
+  - **⏳ Review Bottlenecks:** Detects stories sitting in review statuses (e.g. `In Review`, `Review`) with business-day aging badges, surfacing stale reviews before they slip the sprint.
+  - **⚠️ Workload Gaps & Availability:** Identifies team members with 0 active in-progress tasks today, listing their queued to-do items and availability to pair or pull unblocked work.
+  - **Interactive Standup Timer:** Configurable 2-minute / 5-minute countdown clock with visual progress fill and warning color transitions to keep daily standups crisp and within timeboxes.
+  - **Teams / Slack Digest Export:** One-click copy formats the standup exceptions into a clean Markdown summary for Microsoft Teams or Slack standup channels.
+  - **Quick Launch Banner:** Taskboard view features an attention count teaser banner with one-click transition into Smart Standup mode.
+  - **API:** Added `GET /api/v1/ado/work-items/{work_item_id}/comments` endpoint with HTML tag stripping.
+
 ## [1.11.0] - 2026-10-11
 
 ### Added

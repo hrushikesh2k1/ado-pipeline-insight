@@ -457,3 +457,43 @@ def test_calculate_sprint_milestones_scoped_to_sprint_dates():
     assert len(achieved) == 1
     assert achieved[0]["id"] == 101
 
+
+def test_evaluate_sprint_work_items_blocked_detection():
+    items = [
+        {
+            "id": 201,
+            "fields": {
+                "System.Id": 201,
+                "System.Title": "Blocked Story via tag",
+                "System.WorkItemType": "User Story",
+                "System.State": "Active",
+                "System.Tags": "frontend; blocked",
+            },
+        },
+        {
+            "id": 202,
+            "fields": {
+                "System.Id": 202,
+                "System.Title": "Blocked Story via state",
+                "System.WorkItemType": "User Story",
+                "System.State": "Blocked",
+            },
+        },
+        {
+            "id": 203,
+            "fields": {
+                "System.Id": 203,
+                "System.Title": "Normal Active Story",
+                "System.WorkItemType": "User Story",
+                "System.State": "Active",
+                "System.Tags": "frontend; feature",
+            },
+        },
+    ]
+    parsed, summary = evaluate_sprint_work_items(items, "myorg", "myproj")
+    by_id = {item["id"]: item for item in parsed}
+    assert by_id[201]["is_blocked"] is True
+    assert by_id[202]["is_blocked"] is True
+    assert by_id[203]["is_blocked"] is False
+
+
