@@ -48,7 +48,7 @@ class SprintPlanRequest(BaseModel):
     project: str = Field(min_length=1, max_length=256)
     team: str = Field(min_length=1, max_length=256)
     pat: str | None = Field(default=None, max_length=512)
-    from_iteration_id: str = Field(min_length=1, max_length=64)  # the sprint stories are carried from
+    from_iteration_id: str | None = Field(default=None, min_length=1, max_length=64)  # the sprint stories are carried from (optional: auto-derived from to_iteration_id if omitted)
     to_iteration_id: str = Field(min_length=1, max_length=64)  # the sprint being planned
     people: list[PlanPerson] = Field(min_length=1, max_length=40)
     per_person: int = Field(default=6, ge=1, le=30)

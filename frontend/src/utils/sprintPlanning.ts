@@ -124,11 +124,11 @@ export const peopleForPlan = (people: PlanningPerson[]): PlanPerson[] =>
   })
 
 /** What stops a plan being made (the button stays off), and what is only worth a warning. */
-export function planProblems(people: PlanningPerson[], fromId: string, toId: string): { blocking: string[]; warnings: string[] } {
+export function planProblems(people: PlanningPerson[], toId: string, fromId?: string): { blocking: string[]; warnings: string[] } {
   const chosen = people.filter(p => p.included)
   const blocking: string[] = []
-  if (!fromId || !toId) blocking.push('Choose the sprint to carry stories from and the sprint to plan.')
-  else if (fromId === toId) blocking.push('The sprint to plan must be a different sprint than the one stories are carried from.')
+  if (!toId) blocking.push('Choose the sprint to plan.')
+  else if (fromId && fromId === toId) blocking.push('The sprint to plan must be a different sprint than the one stories are carried from.')
   if (!chosen.length) blocking.push('Add at least one person to plan for.')
   const without = chosen.filter(p => !p.areas.length)
   const warnings = without.length

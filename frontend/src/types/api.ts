@@ -683,7 +683,7 @@ export type SprintPlanRequest = {
   project: string
   team: string
   pat?: string
-  from_iteration_id: string
+  from_iteration_id?: string
   to_iteration_id: string
   people: PlanPerson[]
   per_person: number

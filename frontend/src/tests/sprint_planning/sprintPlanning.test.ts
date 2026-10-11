@@ -73,18 +73,18 @@ describe('who is in the plan', () => {
 })
 
 describe('what stops a plan', () => {
-  it('needs two different sprints and someone to plan for', () => {
-    expect(planProblems([ava], 's2', 's3').blocking).toEqual([])
-    expect(planProblems([ava], '', 's3').blocking[0]).toContain('Choose the sprint')
+  it('needs the sprint to plan and someone to plan for', () => {
+    expect(planProblems([ava], 's3').blocking).toEqual([])
+    expect(planProblems([ava], '').blocking[0]).toContain('Choose the sprint')
     expect(planProblems([ava], 's2', 's2').blocking[0]).toContain('different sprint')
-    expect(planProblems([], 's2', 's3').blocking).toEqual(['Add at least one person to plan for.'])
-    expect(planProblems(setIncluded([ava], personKey(ava), false), 's2', 's3').blocking).toEqual(['Add at least one person to plan for.'])
+    expect(planProblems([], 's3').blocking).toEqual(['Add at least one person to plan for.'])
+    expect(planProblems(setIncluded([ava], personKey(ava), false), 's3').blocking).toEqual(['Add at least one person to plan for.'])
   })
 
   it('only warns about people with no area of choice', () => {
-    expect(planProblems([ava, ben], 's2', 's3')).toEqual({ blocking: [], warnings: ['Ben Ortiz has no area of choice, so no new story can be given.'] })
-    expect(planProblems([ben, { ...ben, name: 'Dan', unique_name: 'dan@x.test' }], 's2', 's3').warnings[0]).toBe('Ben Ortiz, Dan have no area of choice, so no new stories can be given.')
-    expect(planProblems(setIncluded([ben], personKey(ben), false), 's2', 's3').warnings).toEqual([])
+    expect(planProblems([ava, ben], 's3')).toEqual({ blocking: [], warnings: ['Ben Ortiz has no area of choice, so no new story can be given.'] })
+    expect(planProblems([ben, { ...ben, name: 'Dan', unique_name: 'dan@x.test' }], 's3').warnings[0]).toBe('Ben Ortiz, Dan have no area of choice, so no new stories can be given.')
+    expect(planProblems(setIncluded([ben], personKey(ben), false), 's3').warnings).toEqual([])
   })
 })
 

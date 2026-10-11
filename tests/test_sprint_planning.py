@@ -581,4 +581,55 @@ class TestSprintPlanningEnhancements:
         assert sp.area_matches("Demo\\Alpha", ["Monitoring"], tags=["Monitoring", "TeamName"]) == "Monitoring"
         assert sp.area_matches("Demo\\Alpha\\Other", ["cloudops-monitoring"], tags=["CloudOps-Monitoring"]) == "cloudops-monitoring"
 
+    def test_plan_sprint_auto_detects_previous_sprint_when_from_id_omitted(self):
+        # When from_iteration_id is None, it should automatically find Sprint 2 (s2) as predecessor of Sprint 3 (s3)
+        result, board = run(from_iteration_id=None)
+        assert result["from_sprint"]["id"] == "s2"
+        assert result["to_sprint"]["id"] == "s3"
+        # Carried stories from s2 are still found
+        assert result["summary"]["carried"] == 4
+
+    def test_carryovers_assigned_to_same_persons_and_capacity_decremented(self):
+        # Ava has 2 carryovers (stories 10, 11) from Sprint 2, Ben has 1 (story 12)
+        # Ava's total limit is 3 stories: with 2 carryovers and 1 already planned (20), her capacity is full (0 new).
+        # Ben has 1 carryover, so Ben gets 2 new stories to reach 3.
+        # Cara has 1 carryover, so Cara gets 2 new stories to reach 3.
+        result, _ = run(from_iteration_id=None, per_person=3)
+        by = {r["name"]: r for r in result["people"]}
+        # Ava: 2 carried, 1 already planned, 0 new
+        assert ids(by["Ava Stone"]["carried"]) == [10, 11]
+        assert by["Ava Stone"]["new"] == []
+        assert by["Ava Stone"]["total"] == 3
+
+        # Ben: 1 carried (12), 2 new (30, 31)
+        assert ids(by["Ben Ortiz"]["carried"]) == [12]
+        assert ids(by["Ben Ortiz"]["new"]) == [30, 31]
+        assert by["Ben Ortiz"]["total"] == 3
+
+        # Cara: 1 carried (14), 2 new (15, 32)
+        assert ids(by["Cara Lin"]["carried"]) == [14]
+        assert ids(by["Cara Lin"]["new"]) == [15, 32]
+        assert by["Cara Lin"]["total"] == 3
+
+    def test_priority_areas_given_in_filter_orders_backlog_assignments(self):
+        # CaraLin and Ben both chose Frontend & Backend
+        # area_filter specifies priority areas "Demo\Alpha\Frontend, Demo\Alpha\Backend"
+        board = FakeBoard([
+            story(201, "Backend Item", area=BACKEND, rank=1),
+            story(202, "Frontend Item", area=FRONTEND, rank=2),
+        ])
+        result = sp.plan_sprint(
+            board,
+            organization="myorg",
+            project=PROJECT,
+            team=TEAM,
+            to_iteration_id="s3",
+            people=[BEN],
+            per_person=2,
+            area_filter="Demo\\Alpha\\Frontend, Demo\\Alpha\\Backend",
+        )
+        ben_row = result["people"][0]
+        # Frontend item prioritized before Backend item
+        assert [s["id"] for s in ben_row["new"]] == [202, 201]
+
 

@@ -305,12 +305,31 @@ def area_matches(area_path: str, chosen: list[str], tags: list[str] | None = Non
 
 
 def _owner(people: list[dict[str, Any]], story: dict[str, Any]) -> dict[str, Any] | None:
-    unique, name = story["assigned_unique"].lower(), story["assigned_to"].lower()
+    unique = (story.get("assigned_unique") or "").strip().lower()
+    name = (story.get("assigned_to") or "").strip().lower()
+    if not unique and not name:
+        return None
     for person in people:
-        if unique and person["unique_name"].lower() == unique:
+        p_unique = (person.get("unique_name") or "").strip().lower()
+        p_name = (person.get("name") or "").strip().lower()
+        if unique and p_unique and unique == p_unique:
             return person
-        if name and person["name"].lower() == name:
+        if name and p_name and name == p_name:
             return person
+        if unique and p_name and unique == p_name:
+            return person
+        if name and p_unique and name == p_unique:
+            return person
+        if unique and "@" in unique:
+            user = unique.split("@")[0]
+            if p_unique and user == p_unique.split("@")[0]:
+                return person
+            if p_name and (user == p_name or user in p_name):
+                return person
+        if p_unique and "@" in p_unique:
+            user = p_unique.split("@")[0]
+            if name and (user == name or user in name):
+                return person
     return None
 
 
@@ -320,8 +339,8 @@ def _sum_points(stories: list[dict[str, Any]]) -> float:
     return round(sum(s.get("points") or 0.0 for s in stories), 1)
 
 
-def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], planned: list[dict[str, Any]], backlog: list[dict[str, Any]], per_person: int) -> dict[str, Any]:
-    """Who takes what. `carried` are the open stories of the current sprint, `planned` those already in the next sprint, `backlog` the unassigned stories
+def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], planned: list[dict[str, Any]], backlog: list[dict[str, Any]], per_person: int, capacity_mode: str = "stories") -> dict[str, Any]:
+    """Who takes what. `carried` are the open stories of the previous sprint, `planned` those already in the next sprint, `backlog` the unassigned stories
     that may be taken (in the order they should be taken). Pure: no calls to Azure DevOps."""
     rows = []
     for p in people:
@@ -344,14 +363,18 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
     leftovers: list[dict[str, Any]] = []
     outside: list[dict[str, Any]] = []
     outside_planned = 0
+
+    # 1. Carryovers: Assigned to same persons whoever it was assigned previously
     for story in carried:
         owner = _owner(people, story)
         if owner:
             by_key[id(owner)]["carried"].append(story)
-        elif story["assigned_to"]:
+        elif story.get("assigned_to"):
             outside.append(story)
         else:
-            leftovers.append(story)  # open in the current sprint with nobody on it: it is taken first
+            leftovers.append(story)  # open in the previous sprint with nobody on it: it is taken first
+
+    # 2. Already planned stories in target iteration
     for story in planned:
         owner = _owner(people, story)
         if owner:
@@ -359,31 +382,58 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
         else:
             outside_planned += 1
 
-    def free(row: dict[str, Any]) -> int:
+    # 3. Capacity calculation and backlog placement
+    def free_stories(row: dict[str, Any]) -> int:
         return per_person - len(row["carried"]) - len(row["already_planned"]) - len(row["new"])
+
+    def current_points(row: dict[str, Any]) -> float:
+        return sum(s.get("points") or 0.0 for s in row["carried"] + row["already_planned"] + row["new"])
+
+    def free_points(row: dict[str, Any]) -> float:
+        cap = row.get("points_capacity") or row.get("capacity_points") or 0.0
+        return max(0.0, round(cap - current_points(row), 1)) if cap > 0 else 0.0
+
+    def can_take_story(row: dict[str, Any], story: dict[str, Any]) -> bool:
+        if free_stories(row) <= 0:
+            return False
+        if capacity_mode == "points":
+            cap = row.get("points_capacity") or row.get("capacity_points") or 0.0
+            if cap > 0:
+                s_pts = story.get("points") or 0.0
+                curr = current_points(row)
+                if curr >= cap:
+                    return False
+                if s_pts > 0 and curr + s_pts > cap * 1.15:
+                    return False
+        return True
 
     unplaced: list[dict[str, Any]] = []
     unplaced_total = 0
     pool = leftovers + backlog
     taken = 0
+
     for story in pool:
-        if not any(free(r) > 0 and r["areas"] for r in rows):  # nobody who can still take a story
+        if not any(can_take_story(r, story) for r in rows):
             break
         taken += 1
-        candidates = [(r, area_matches(story["area_path"], r["areas"], story.get("tags"))) for r in rows if free(r) > 0 and r["areas"]]
+
+        candidates = [(r, area_matches(story["area_path"], r["areas"], story.get("tags"))) for r in rows if can_take_story(r, story) and r["areas"]]
         candidates = [(r, area) for r, area in candidates if area]
+
         if candidates:
-            # If story already has an owner who is among candidate team members, prioritize assigning to them
             orig_owner = _owner([c[0] for c in candidates], story) if story.get("assigned_to") else None
-            if orig_owner:
-                chosen_candidate = next((c for c in candidates if c[0]["name"] == orig_owner["name"]), None)
-                if not chosen_candidate:
-                    chosen_candidate = min(candidates, key=lambda c: (-free(c[0]), len(c[0]["areas"]), rows.index(c[0])))
-            else:
-                chosen_candidate = min(candidates, key=lambda c: (-free(c[0]), len(c[0]["areas"]), rows.index(c[0])))
-            row, area = chosen_candidate
+            chosen = next((c for c in candidates if c[0]["name"] == orig_owner["name"]), None) if orig_owner else None
+
+            if not chosen:
+                if capacity_mode == "points":
+                    chosen = max(candidates, key=lambda c: (free_points(c[0]), free_stories(c[0]), -len(c[0]["areas"]), -rows.index(c[0])))
+                else:
+                    chosen = max(candidates, key=lambda c: (free_stories(c[0]), -len(c[0]["areas"]), -rows.index(c[0])))
+
+            row, area = chosen
             row["new"].append({**story, "matched_area": area})
             continue
+
         unplaced_total += 1
         anyone = any(area_matches(story["area_path"], r["areas"], story.get("tags")) for r in rows if r["areas"])
         if len(unplaced) < MAX_UNPLACED_LISTED:
@@ -505,7 +555,8 @@ def _calculate_risks(people_rows: list[dict[str, Any]], flagged: list[dict[str, 
     return risk_score, reasons, confidence, recommendations
 
 
-def plan_sprint(client: Any, *, organization: str, project: str, team: str, from_iteration_id: str, to_iteration_id: str, people: list[dict[str, Any]],
+def plan_sprint(client: Any, *, organization: str, project: str, team: str, to_iteration_id: str,
+                from_iteration_id: str | None = None, people: list[dict[str, Any]],
                 per_person: int = DEFAULT_PER_PERSON, active_days: int = DEFAULT_ACTIVE_DAYS, work_item_types: list[str] | None = None,
                 sprint_goal: str | None = None, capacity_mode: str = "stories", focus_factor: float = 0.8,
                 tags: list[str] | None = None, area_filter: str | None = None,
@@ -520,12 +571,26 @@ def plan_sprint(client: Any, *, organization: str, project: str, team: str, from
         raise PlanningError(f"Stories per person must be between 1 and {MAX_PER_PERSON}.")
     if not 1 <= active_days <= MAX_ACTIVE_DAYS:
         raise PlanningError(f"The days in an active state must be between 1 and {MAX_ACTIVE_DAYS}.")
-    sprints = {s["id"]: s for s in list_sprints(client, project, team)}
-    source, target = sprints.get(str(from_iteration_id)), sprints.get(str(to_iteration_id))
-    if source is None or target is None:
+
+    sprints_list = list_sprints(client, project, team)
+    sprints = {s["id"]: s for s in sprints_list}
+    target = sprints.get(str(to_iteration_id))
+    if target is None:
         raise PlanningError("Choose the sprint to carry stories from and the sprint to plan: one of them is not a sprint of this team.")
-    if source["id"] == target["id"]:
-        raise PlanningError("The sprint to plan must be a different sprint than the one stories are carried from.")
+
+    source = None
+    if from_iteration_id and str(from_iteration_id).strip():
+        source = sprints.get(str(from_iteration_id))
+        if source is None:
+            raise PlanningError("Choose the sprint to carry stories from and the sprint to plan: one of them is not a sprint of this team.")
+        if source["id"] == target["id"]:
+            raise PlanningError("The sprint to plan must be a different sprint than the one stories are carried from.")
+    else:
+        # Automatically find the preceding sprint chronologically right before target
+        target_idx = next((i for i, s in enumerate(sprints_list) if s["id"] == target["id"]), None)
+        if target_idx is not None and target_idx > 0:
+            source = sprints_list[target_idx - 1]
+
     wanted = [t.strip() for t in (work_item_types or list(DEFAULT_TYPES)) if t.strip()] or list(DEFAULT_TYPES)
     types = usable_types(client, project, wanted)
     if not types:
@@ -537,69 +602,83 @@ def plan_sprint(client: Any, *, organization: str, project: str, team: str, from
     states = load_state_map(client, project)
     finished = states.finished_state_names()
 
-    backlog_areas = written
-    if area_filter and area_filter.strip():
-        filt = area_filter.strip()
-        if filt == project or filt.lower().startswith(f"{project.lower()}\\"):
-            backlog_areas = [(filt, True)]
-        else:
-            try:
-                all_areas = area_choices(client, project, [])
-                matched = next((a for a in all_areas if a.lower() == filt.lower() or a.lower().endswith("\\" + filt.lower()) or a.lower() == f"{project.lower()}\\{filt.lower()}"), None)
-                if matched:
-                    backlog_areas = [(matched, True)]
-                else:
-                    backlog_areas = [(f"{project}\\{filt}", True)]
-            except Exception:
-                backlog_areas = [(f"{project}\\{filt}", True)]
+    # Parse priority areas from area_filter text box
+    priority_areas = [a.strip() for a in area_filter.split(",") if a.strip()] if area_filter and area_filter.strip() else []
 
-    carried_ids = read_ids(client, project, types=types, areas=written, iterations=[source["path"]], states_not=finished)
+    backlog_areas = written
+    if priority_areas:
+        all_tree_areas = []
+        try:
+            all_tree_areas = area_choices(client, project, [])
+        except Exception:
+            pass
+
+        resolved_areas = []
+        for filt in priority_areas:
+            if filt == project or filt.lower().startswith(f"{project.lower()}\\"):
+                resolved_areas.append((filt, True))
+            else:
+                matched = next((a for a in all_tree_areas if a.lower() == filt.lower() or a.lower().endswith("\\" + filt.lower()) or a.lower() == f"{project.lower()}\\{filt.lower()}"), None)
+                if matched:
+                    resolved_areas.append((matched, True))
+                else:
+                    resolved_areas.append((f"{project}\\{filt}", True))
+        if resolved_areas:
+            backlog_areas = resolved_areas
+
+    carried_ids = read_ids(client, project, types=types, areas=written, iterations=[source["path"]], states_not=finished) if source else []
     planned_ids = read_ids(client, project, types=types, areas=written, iterations=[target["path"]], states_not=finished)
+
+    source_iterations = [source["path"]] if source else None
 
     # 1. Primary query: unassigned candidate stories in backlog areas not in source sprint, not finished
     backlog_ids = read_ids(
         client, project, top=MAX_BACKLOG, types=types, areas=backlog_areas,
-        iterations_not=[source["path"]], states_not=finished, unassigned=True, tags=tags
+        iterations_not=source_iterations, states_not=finished, unassigned=True, tags=tags
     )
 
     # 2. Fallback: If 0 found with unassigned=True, query all open backlog stories (assigned or unassigned)
     if not backlog_ids:
         backlog_ids = read_ids(
             client, project, top=MAX_BACKLOG, types=types, areas=backlog_areas,
-            iterations_not=[source["path"]], states_not=finished, tags=tags
+            iterations_not=source_iterations, states_not=finished, tags=tags
         )
 
     # 3. Fallback: If still 0 and tags were specified in WIQL, relax tags in query
     if not backlog_ids and tags:
         backlog_ids = read_ids(
             client, project, top=MAX_BACKLOG, types=types, areas=backlog_areas,
-            iterations_not=[source["path"]], states_not=finished
+            iterations_not=source_iterations, states_not=finished
         )
 
     # 4. Fallback: If still 0 and area_filter differed from written scopes, try written scopes
-    if not backlog_ids and area_filter and backlog_areas != written:
+    if not backlog_ids and priority_areas and backlog_areas != written:
         backlog_ids = read_ids(
             client, project, top=MAX_BACKLOG, types=types, areas=written,
-            iterations_not=[source["path"]], states_not=finished
+            iterations_not=source_iterations, states_not=finished
         )
 
     # 5. Fallback: If still 0, query project-level open stories
     if not backlog_ids and (written or backlog_areas):
         backlog_ids = read_ids(
             client, project, top=MAX_BACKLOG, types=types,
-            iterations_not=[source["path"]], states_not=finished
+            iterations_not=source_iterations, states_not=finished
         )
 
     all_backlog_ids = backlog_ids
     raw = read_items(client, project, list(dict.fromkeys(carried_ids + planned_ids + all_backlog_ids)))
 
     def matches_team_item(s: dict[str, Any]) -> bool:
-        if not scopes and not area_filter and not tags:
+        if not scopes and not priority_areas and not tags:
             return True
         if is_in_team_areas(s["area_path"], scopes):
             return True
-        if area_filter and (area_filter.lower() in s.get("area_path", "").lower() or s.get("area_path", "").lower() in area_filter.lower()):
-            return True
+        if priority_areas:
+            s_area = s.get("area_path", "").lower()
+            for pa in priority_areas:
+                pa_l = pa.lower()
+                if pa_l in s_area or s_area.endswith("\\" + pa_l):
+                    return True
         story_tags_lower = [t.lower() for t in s.get("tags", [])]
         if tags:
             check_kws = [k.lower().strip() for k in tags if k.strip()]
@@ -618,9 +697,22 @@ def plan_sprint(client: Any, *, organization: str, project: str, team: str, from
     planned = [s for s in stories(planned_ids) if s["assigned_to"]]  # a story in the next sprint that nobody has yet is offered like the backlog (it is in the backlog query)
     taken = {s["id"] for s in carried} | {s["id"] for s in planned}
     backlog = [s for s in stories(all_backlog_ids) if s["id"] not in taken]
+
+    # Prioritize backlog according to priority areas given in the text box
+    if priority_areas:
+        def priority_rank(s: dict[str, Any]) -> int:
+            s_area = s.get("area_path", "").lower()
+            for idx, pa in enumerate(priority_areas):
+                pa_l = pa.lower()
+                if s_area == pa_l or s_area.startswith(pa_l + "\\") or s_area.endswith("\\" + pa_l) or pa_l in s_area:
+                    return idx
+            return len(priority_areas)
+
+        backlog.sort(key=priority_rank)
+
     if not backlog:
         notes.append(f"No backlog stories were found matching team criteria in '{project}'.")
-    result = make_plan(people=crew, carried=carried, planned=planned, backlog=backlog, per_person=per_person)
+    result = make_plan(people=crew, carried=carried, planned=planned, backlog=backlog, per_person=per_person, capacity_mode=capacity_mode)
 
 
     flagged = [s for s in carried if s["flags"]]

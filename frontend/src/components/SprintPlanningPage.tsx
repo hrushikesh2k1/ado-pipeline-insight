@@ -283,8 +283,15 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
       const found = await api.sprintPlanningSetup(org, project, team, pat || undefined)
       if (ticket !== latestSetup.current) return
       setSetup(found)
-      setFromId(found.default_from_id ?? '')
-      setToId(found.default_to_id ?? '')
+      const targetToId = found.default_to_id ?? ''
+      setToId(targetToId)
+      const allSprints = found.sprints ?? []
+      const tIdx = allSprints.findIndex(s => s.id === targetToId)
+      if (tIdx > 0) {
+        setFromId(allSprints[tIdx - 1].id)
+      } else {
+        setFromId(found.default_from_id ?? '')
+      }
       setPerPerson(found.per_person || DEFAULT_PER_PERSON)
       setActiveDays(found.active_days || DEFAULT_ACTIVE_DAYS)
       setTypes(found.default_types)
@@ -314,9 +321,21 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
     try { localStorage.setItem(teamKey(org, project), value) } catch { /* storage blocked */ }
   }
 
-  const problems = useMemo(() => planProblems(people, fromId, toId), [people, fromId, toId])
   const sprints: PlanSprint[] = setup?.sprints ?? []
   const toSprint = sprints.find(s => s.id === toId)
+  const fromSprint = sprints.find(s => s.id === fromId)
+
+  const handlePlanSprintChange = (newToId: string) => {
+    setToId(newToId)
+    const idx = sprints.findIndex(s => s.id === newToId)
+    if (idx > 0) {
+      setFromId(sprints[idx - 1].id)
+    } else {
+      setFromId('')
+    }
+  }
+
+  const problems = useMemo(() => planProblems(people, toId, fromId), [people, toId, fromId])
 
   const makePlan = async () => {
     setPlanning(true)
@@ -502,18 +521,19 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
           </div>
 
           <section className="sppCard" data-testid="spp-settings">
-            <div className="sppCardHead"><div><h3>Sprints and rules</h3><p>Stories still open in the first sprint move to the target sprint.</p></div></div>
+            <div className="sppCardHead"><div><h3>Sprints and rules</h3><p>Stories still open in the previous sprint move to the planned sprint with their previous assignees.</p></div></div>
             <div className="sppSettings">
-              <label>Carry stories from
-                <select value={fromId} onChange={e => setFromId(e.target.value)} data-testid="spp-from">
-                  <option value="">Choose a sprint</option>
-                  {sprints.map(s => <option key={s.id} value={s.id}>{sprintLabel(s)}</option>)}
-                </select></label>
               <label>Plan sprint
-                <select value={toId} onChange={e => setToId(e.target.value)} data-testid="spp-to">
+                <select value={toId} onChange={e => handlePlanSprintChange(e.target.value)} data-testid="spp-to">
                   <option value="">Choose a sprint</option>
                   {sprints.map(s => <option key={s.id} value={s.id}>{sprintLabel(s)}</option>)}
-                </select></label>
+                </select>
+                {fromSprint && (
+                  <span style={{ fontSize: '11px', color: 'var(--spp-muted)', marginTop: '4px', display: 'block' }}>
+                    Auto-checking carryovers from: <b>{fromSprint.name}</b>
+                  </span>
+                )}
+              </label>
               <label>Target stories per person
                 <input type="number" min={MIN_PER_PERSON} max={MAX_PER_PERSON} value={perPerson} data-testid="spp-per-person"
                   onChange={e => setPerPerson(Math.max(MIN_PER_PERSON, Math.min(MAX_PER_PERSON, Number(e.target.value) || DEFAULT_PER_PERSON)))} /></label>
