@@ -6,6 +6,8 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-11
+
 ### Added
 - **A Sprint Planning page.** Pick a team and two sprints (the current sprint and the one after it are proposed) and the page plans the next sprint:
   - **Six stories for everyone.** Every person is planned for the same number of stories (6 by default; you can change it). The stories a person still has
