@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     auth_password: str = ""
     auth_session_secret: str = ""
     session_hours: int = 8
+    azure_storage_connection_string: str = ""
+    azure_storage_container: str = "innersource-data"
     model_config = SettingsConfigDict(
         env_file=(PROJECT_ROOT / ".env",),
         case_sensitive=False,

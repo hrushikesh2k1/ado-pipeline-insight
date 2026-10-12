@@ -15,6 +15,7 @@ import { SprintPlanningPage } from './components/SprintPlanningPage'
 import { ReleaseReadinessPage } from './components/ReleaseReadinessPage'
 import { IncidentResponsePage } from './components/IncidentResponsePage'
 import { WorkItemInsightsPage } from './components/WorkItemInsightsPage'
+import { InnerSourceLeaderboardPage } from './components/InnerSourceLeaderboardPage'
 import { PluginManagerModal } from './components/PluginManagerModal'
 import octaveLogo from './assets/octave-logo.png'
 import type { Recommendation } from './types/api'
@@ -1317,6 +1318,24 @@ function App() {
           />
         ) : activePage === 'insights' ? (
           <WorkItemInsightsPage
+            organization={adoOrg || org}
+            project={project}
+            pat={adoPat}
+            projects={adoProjects.length > 0 ? adoProjects : projects.map(p => ({ id: p, name: p }))}
+            onOrganizationChange={v => {
+              updateOrg(v)
+              setAdoOrg(v)
+              localStorage.setItem('ado_connected_org', v)
+            }}
+            onProjectChange={updateProject}
+            onPatChange={v => {
+              setAdoPat(v)
+              sessionStorage.setItem('ado_session_pat', v)
+            }}
+            theme={theme}
+          />
+        ) : activePage === 'innersource' ? (
+          <InnerSourceLeaderboardPage
             organization={adoOrg || org}
             project={project}
             pat={adoPat}

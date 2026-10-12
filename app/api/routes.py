@@ -53,11 +53,12 @@ from app.schemas.connection import (
     IrpGenerateResponse,
     IrpPublishRequest,
     IrpPublishResponse,
+    InnerSourceLeaderboardResponse,
 )
 from app.repositories.release_repository import ReleaseRepository
 from app.services.release_service import ReleaseService
 from app.services.irp_service import IrpService
-from app.services import pr_knowledge, pr_review, pr_review_jobs
+from app.services import pr_knowledge, pr_review, pr_review_jobs, innersource_service
 from app.schemas.insights import AlertInventoryUpload, InsightsRefreshRequest
 from app.services.work_item_insights import WorkItemInsightsService
 from app.repositories import work_item_insights_repository as insights_store
@@ -2207,3 +2208,48 @@ def delete_alert_inventory(
     except Exception as exc:
         raise _unavailable(exc, "Work item insights are unavailable.") from exc
     return {"status": "removed"}
+
+
+@router.get(
+    "/ado/innersource/leaderboard",
+    response_model=InnerSourceLeaderboardResponse,
+    tags=["ado"],
+    operation_id="get_innersource_leaderboard",
+)
+def get_innersource_leaderboard(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    year: int = Query(2026, ge=2015, le=2050),
+    quarter: int = Query(2, ge=1, le=4),
+    tag: str | None = Query(None),
+    refresh: bool = Query(False, description="Force refresh / incremental sync from Azure DevOps"),
+    pat: str | None = Query(None),
+    x_ado_pat: str | None = Header(None, alias="X-ADO-PAT"),
+) -> InnerSourceLeaderboardResponse:
+    """Calculate InnerSource Story Points leaderboard by person for the selected quarter and year-to-date."""
+    org_clean = validate_organization(organization.strip())
+    proj_clean = validate_project(project.strip())
+    token = None
+    try:
+        token = _resolve_pat(org_clean, pat or x_ado_pat)
+    except Exception:
+        token = None
+
+    if token:
+        try:
+            client = AzureDevOpsClient(org_clean, token)
+            data = innersource_service.fetch_innersource_leaderboard(
+                client=client,
+                organization=org_clean,
+                project=proj_clean,
+                year=year,
+                quarter=quarter,
+                tag=tag,
+                force_refresh=refresh,
+            )
+            return InnerSourceLeaderboardResponse(**data)
+        except Exception as exc:
+            logging.error("Failed to fetch InnerSource leaderboard from ADO: %s", exc)
+
+    data = innersource_service.get_mock_innersource_leaderboard(year, quarter, org_clean, proj_clean)
+    return InnerSourceLeaderboardResponse(**data)

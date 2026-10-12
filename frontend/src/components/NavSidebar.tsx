@@ -1,8 +1,8 @@
 import React from 'react'
-import { Activity, CalendarCheck, ChartColumn, GitPullRequest, FolderKanban, Puzzle, Rocket, ShieldAlert } from 'lucide-react'
+import { Activity, CalendarCheck, ChartColumn, GitPullRequest, FolderKanban, Puzzle, Rocket, ShieldAlert, Trophy } from 'lucide-react'
 import { usePlugins } from '../context/PluginContext'
 
-export type NavPage = 'pipelines' | 'pull-requests' | 'sprints' | 'sprint-planning' | 'releases' | 'irp' | 'insights'
+export type NavPage = 'pipelines' | 'pull-requests' | 'sprints' | 'sprint-planning' | 'releases' | 'irp' | 'insights' | 'innersource'
 
 interface NavSidebarProps {
   activePage: NavPage
@@ -104,6 +104,19 @@ export const NavSidebar: React.FC<NavSidebarProps> = ({ activePage, onSelectPage
             <ChartColumn size={20} strokeWidth={2.2} />
           </div>
           <span className="navTooltip">Work Item Insights</span>
+        </button>
+
+        <button
+          type="button"
+          className={`navSidebarBtn ${activePage === 'innersource' ? 'active' : ''}`}
+          onClick={() => onSelectPage('innersource')}
+          aria-label="InnerSource Leaderboard"
+        >
+          <div className="navSidebarActiveIndicator" />
+          <div className="navIconWrapper">
+            <Trophy size={20} strokeWidth={2.2} />
+          </div>
+          <span className="navTooltip">InnerSource Leaderboard</span>
         </button>
       </div>
 

@@ -528,3 +528,44 @@ class IrpPublishResponse(BaseModel):
     page_details: dict[str, Any] = Field(default_factory=dict)
 
 
+class InnerSourceStory(BaseModel):
+    id: int
+    title: str
+    type: str
+    state: str
+    points: float
+    closed_date: str
+    quarter: int
+    url: str
+    iteration_path: str | None = None
+
+
+class InnerSourcePerson(BaseModel):
+    name: str
+    unique_name: str | None = None
+    quarter_points: float
+    year_total: float
+    q1_points: float = 0.0
+    q2_points: float = 0.0
+    q3_points: float = 0.0
+    q4_points: float = 0.0
+    stories_count: int = 0
+    quarter_stories_count: int = 0
+    stories: list[InnerSourceStory] = Field(default_factory=list)
+
+
+class InnerSourceLeaderboardResponse(BaseModel):
+    year: int
+    quarter: int
+    total_quarter_points: float
+    total_year_points: float
+    total_contributors: int
+    leader: InnerSourcePerson | None = None
+    leaderboard: list[InnerSourcePerson] = Field(default_factory=list)
+    stories_evaluated: int = 0
+    storage_blob_name: str | None = None
+    last_synced_at: str | None = None
+    cached: bool = False
+    total_cached_items: int = 0
+
+

@@ -810,3 +810,44 @@ export type SprintCommitResponse = {
   errors: string[]
 }
 
+export interface InnerSourceStory {
+  id: number
+  title: string
+  type: string
+  state: string
+  points: number
+  closed_date: string
+  quarter: number
+  url: string
+  iteration_path?: string | null
+}
+
+export interface InnerSourcePerson {
+  name: string
+  unique_name?: string | null
+  quarter_points: number
+  year_total: number
+  q1_points: number
+  q2_points: number
+  q3_points: number
+  q4_points: number
+  stories_count: number
+  quarter_stories_count: number
+  stories: InnerSourceStory[]
+}
+
+export interface InnerSourceLeaderboardResponse {
+  year: number
+  quarter: number
+  total_quarter_points: number
+  total_year_points: number
+  total_contributors: number
+  leader?: InnerSourcePerson | null
+  leaderboard: InnerSourcePerson[]
+  stories_evaluated: number
+  storage_blob_name?: string | null
+  last_synced_at?: string | null
+  cached?: boolean
+  total_cached_items?: number
+}
+

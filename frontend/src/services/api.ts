@@ -40,6 +40,7 @@ import type {
   SprintPlan,
   SprintPlanRequest,
   SprintPlanningSetup,
+  InnerSourceLeaderboardResponse,
 } from '../types/api'
 
 
@@ -311,6 +312,18 @@ export const api = {
   },
   deleteAlertInventory: (scope: InsightScope) => {
     return request<{ status: string }>(`/api/v1/insights/work-items/inventory?${insightQuery(scope)}`, { method: 'DELETE' })
+  },
+  innersourceLeaderboard: (organization: string, project: string, year = 2026, quarter = 2, tag?: string, pat?: string, refresh?: boolean) => {
+    const p = new URLSearchParams({
+      organization,
+      project,
+      year: String(year),
+      quarter: String(quarter),
+    })
+    if (tag) p.set('tag', tag)
+    if (pat) p.set('pat', pat)
+    if (refresh) p.set('refresh', 'true')
+    return request<InnerSourceLeaderboardResponse>(`/api/v1/ado/innersource/leaderboard?${p.toString()}`)
   },
 }
 
