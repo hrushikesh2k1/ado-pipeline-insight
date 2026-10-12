@@ -24,6 +24,16 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   - The Sprint Health Checks bar (Check 1, Check 2, and View Health Report) is now strictly scoped and visible only on the Taskboard tab, keeping secondary tabs (Standup, Deliverables, Backlog, Capacity, Analytics) clean and focused.
   - Added a dedicated "Send Deliverables Email" button directly inside the Deliverables status bar to preserve quick email reporting when on the Deliverables tab.
 
+### Fixed
+- **Pull Requests Page: Approved count showed 0 despite approved reviewers:**
+  - *Problem:* In the Pull Requests dashboard, the `APPROVED` stat card and filter pill showed `0`, and approved pull requests were categorized under `NEEDS REVIEW` (11/11).
+  - *Root Cause:* The filter logic strictly checked `r.vote === 10` (Approved). In Azure DevOps, reviewers frequently vote `5` ("Approved with suggestions"), which rendered with a green checkmark icon in the reviewer list but was ignored by the approval counter. Furthermore, if any other assigned reviewer had not voted yet (`vote === 0`), the pending reviewer check forced the PR into the `NEEDS REVIEW` bucket.
+  - *Fix:*
+    - Added `isPrApproved` helper recognizing positive Azure DevOps votes (`10` Approved and `5` Approved with suggestions) with no rejections (`-10`), and non-draft status.
+    - Updated `stats` and `filteredPRs` to cleanly partition PRs into `APPROVED`, `NEEDS REVIEW`, and `DRAFT PRs`.
+    - Made summary stat cards interactive with hover effects and active indicators to quickly filter PRs by status with a single click.
+    - Added an `Approved` badge to approved PR cards for instant visual confirmation.
+
 ## [1.11.0] - 2026-10-11
 
 ### Added

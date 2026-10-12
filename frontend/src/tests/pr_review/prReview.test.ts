@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { PullRequestChecklistCheck, PullRequestReviewComment, PullRequestReviewResponse } from '../../types/api'
 import {
-  QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, allCommentsAsMarkdown, checklistCounts, commentAsMarkdown, filesCounts, isAboutQueries, lineLabel,
+  QUERY_NOT_RUN, SECOND_CHECK_AGREED, SECOND_CHECK_NOT_RUN, SECOND_CHECK_TIP, allCommentsAsMarkdown, checklistCounts, commentAsMarkdown, filesCounts, isAboutQueries, isPrApproved, lineLabel,
   reviewIsStale, scoreLabel, shortCommit, verdictLabel,
 } from '../../utils/prReview'
 
@@ -108,5 +108,34 @@ describe('counts', () => {
   it('count the files reviewed and skipped', () => {
     const file = (status: 'reviewed' | 'skipped') => ({ path: status, language: null, change_type: 'edit', status, reason: null, findings: 0, purpose: null })
     expect(filesCounts([file('reviewed'), file('skipped'), file('skipped')])).toEqual({ reviewed: 1, skipped: 2 })
+  })
+})
+
+describe('isPrApproved', () => {
+  it('returns false when no reviewers or empty reviewers', () => {
+    expect(isPrApproved({ reviewers: null })).toBe(false)
+    expect(isPrApproved({ reviewers: [] })).toBe(false)
+  })
+
+  it('returns true when a reviewer has vote 10 (Approved)', () => {
+    expect(isPrApproved({ reviewers: [{ vote: 10 }, { vote: 0 }] })).toBe(true)
+  })
+
+  it('returns true when a reviewer has vote 5 (Approved with suggestions)', () => {
+    expect(isPrApproved({ reviewers: [{ vote: 5 }, { vote: 0 }] })).toBe(true)
+    expect(isPrApproved({ reviewers: [{ vote: '5' }] })).toBe(true)
+  })
+
+  it('returns false when any reviewer has rejected (-10)', () => {
+    expect(isPrApproved({ reviewers: [{ vote: 10 }, { vote: -10 }] })).toBe(false)
+    expect(isPrApproved({ reviewers: [{ vote: 5 }, { vote: -10 }] })).toBe(false)
+  })
+
+  it('returns false when all reviewers are pending (0) or waiting for author (-5)', () => {
+    expect(isPrApproved({ reviewers: [{ vote: 0 }, { vote: -5 }] })).toBe(false)
+  })
+
+  it('returns false when PR is marked as draft even if votes exist', () => {
+    expect(isPrApproved({ is_draft: true, reviewers: [{ vote: 10 }] })).toBe(false)
   })
 })

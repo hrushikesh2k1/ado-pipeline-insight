@@ -193,3 +193,21 @@ export function filesCounts(files: PullRequestReviewedFile[]): { reviewed: numbe
   const reviewed = files.filter(f => f.status === 'reviewed').length
   return { reviewed, skipped: files.length - reviewed }
 }
+
+/**
+ * Determines whether a pull request is approved:
+ * In Azure DevOps, votes are:
+ *   10: Approved
+ *   5: Approved with suggestions
+ *   0: No vote
+ *   -5: Waiting for author
+ *   -10: Rejected
+ * A PR is approved if it is not a draft, has at least one positive vote (10 or 5), and no rejections (-10).
+ */
+export function isPrApproved(pr: { reviewers?: { vote: number | string }[] | null; is_draft?: boolean }): boolean {
+  if (pr.is_draft) return false
+  if (!pr.reviewers || !pr.reviewers.length) return false
+  const hasApproval = pr.reviewers.some(r => Number(r.vote) === 10 || Number(r.vote) === 5)
+  const hasRejection = pr.reviewers.some(r => Number(r.vote) === -10)
+  return hasApproval && !hasRejection
+}

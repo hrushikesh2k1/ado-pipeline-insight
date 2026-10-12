@@ -20,7 +20,7 @@ import type { AdoRepository, AdoPullRequest, AdoReviewer, PullRequestReviewModel
 import { PrReviewDrawer } from './PrReviewDrawer'
 import { PrKnowledgeBase } from './PrKnowledgeBase'
 import { PrModelSelect } from './PrModelSelect'
-import { chosenModel, knowledgeChanged, loadKnowledge, modelChanged, progressText, reviewIsStale, saveKnowledge } from '../utils/prReview'
+import { chosenModel, isPrApproved, knowledgeChanged, loadKnowledge, modelChanged, progressText, reviewIsStale, saveKnowledge } from '../utils/prReview'
 import { usePlugins } from '../context/PluginContext'
 
 interface PullRequestsPageProps {
@@ -57,8 +57,9 @@ function cleanBranchName(refName: string): string {
   return refName.replace(/^refs\/heads\//, '')
 }
 
-function getVoteBadge(vote: number): { label: string; className: string; icon: React.ReactNode } {
-  switch (vote) {
+function getVoteBadge(vote: number | string): { label: string; className: string; icon: React.ReactNode } {
+  const numericVote = Number(vote)
+  switch (numericVote) {
     case 10:
       return {
         label: 'Approved',
@@ -264,9 +265,9 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
   // Summary counts
   const stats = useMemo(() => {
     const total = pullRequests.length
-    const approved = pullRequests.filter(pr => pr.reviewers?.some(r => r.vote === 10)).length
-    const waiting = pullRequests.filter(pr => !pr.reviewers?.length || pr.reviewers.some(r => r.vote === 0 || r.vote === -5)).length
     const drafts = pullRequests.filter(pr => pr.is_draft).length
+    const approved = pullRequests.filter(pr => isPrApproved(pr)).length
+    const waiting = pullRequests.filter(pr => !pr.is_draft && !isPrApproved(pr)).length
     return { total, approved, waiting, drafts }
   }, [pullRequests])
 
@@ -274,8 +275,8 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
   const filteredPRs = useMemo(() => {
     return pullRequests.filter((pr) => {
       // Review filter
-      if (reviewFilter === 'approved' && !pr.reviewers?.some(r => r.vote === 10)) return false
-      if (reviewFilter === 'waiting' && pr.reviewers?.some(r => r.vote === 10)) return false
+      if (reviewFilter === 'approved' && !isPrApproved(pr)) return false
+      if (reviewFilter === 'waiting' && (isPrApproved(pr) || pr.is_draft)) return false
       if (reviewFilter === 'drafts' && !pr.is_draft) return false
 
       // Search query
@@ -416,7 +417,13 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
         <>
           {/* Stats Summary Cards */}
           <div className="prStatsGrid">
-            <div className="prStatCard">
+            <div
+              className={`prStatCard ${reviewFilter === 'all' ? 'prStatCardActive' : ''}`}
+              onClick={() => setReviewFilter('all')}
+              role="button"
+              tabIndex={0}
+              title="Show all pull requests"
+            >
               <div className="prStatIcon prIconCyan">
                 <GitPullRequest size={18} />
               </div>
@@ -427,7 +434,13 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
               </div>
             </div>
 
-            <div className="prStatCard">
+            <div
+              className={`prStatCard ${reviewFilter === 'approved' ? 'prStatCardActive' : ''}`}
+              onClick={() => setReviewFilter(reviewFilter === 'approved' ? 'all' : 'approved')}
+              role="button"
+              tabIndex={0}
+              title="Filter by approved pull requests"
+            >
               <div className="prStatIcon prIconGreen">
                 <CheckCircle2 size={18} />
               </div>
@@ -438,7 +451,13 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
               </div>
             </div>
 
-            <div className="prStatCard">
+            <div
+              className={`prStatCard ${reviewFilter === 'waiting' ? 'prStatCardActive' : ''}`}
+              onClick={() => setReviewFilter(reviewFilter === 'waiting' ? 'all' : 'waiting')}
+              role="button"
+              tabIndex={0}
+              title="Filter by pull requests needing review"
+            >
               <div className="prStatIcon prIconAmber">
                 <Clock3 size={18} />
               </div>
@@ -449,7 +468,13 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
               </div>
             </div>
 
-            <div className="prStatCard">
+            <div
+              className={`prStatCard ${reviewFilter === 'drafts' ? 'prStatCardActive' : ''}`}
+              onClick={() => setReviewFilter(reviewFilter === 'drafts' ? 'all' : 'drafts')}
+              role="button"
+              tabIndex={0}
+              title="Filter by draft pull requests"
+            >
               <div className="prStatIcon prIconPurple">
                 <GitMerge size={18} />
               </div>
@@ -571,6 +596,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
                           )}
                         </h3>
                         {pr.is_draft && <span className="prTagDraft">Draft</span>}
+                        {isPrApproved(pr) && <span className="prTagApproved">Approved</span>}
                         {pr.merge_status === 'conflicts' && (
                           <span className="prTagConflict">Conflicts</span>
                         )}
