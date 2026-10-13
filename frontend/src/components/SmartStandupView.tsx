@@ -135,6 +135,50 @@ export const SmartStandupView: React.FC<SmartStandupViewProps> = ({
     }
   }
 
+  const renderRecentComments = (workItemId: number) => {
+    const isExpanded = expandedComments[workItemId]
+    const comments = commentsCache[workItemId]
+    const isLoadingComments = commentsLoading[workItemId]
+
+    return (
+      <div className="standupCommentsSection">
+        <button
+          type="button"
+          className="standupCommentsToggle"
+          onClick={() => toggleComments(workItemId)}
+        >
+          <MessageSquare size={13} />
+          <span>{isExpanded ? 'Hide Recent Comments' : 'View Recent Comments'}</span>
+          {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+        </button>
+
+        {isExpanded && (
+          <div className="standupCommentsDrawer">
+            {isLoadingComments && (
+              <p className="standupCommentsMuted">Loading latest comments from Azure DevOps...</p>
+            )}
+            {!isLoadingComments && comments && comments.length === 0 && (
+              <p className="standupCommentsMuted">No comments recorded on this item.</p>
+            )}
+            {!isLoadingComments && comments && comments.length > 0 && (
+              <div className="standupCommentsList">
+                {comments.map((c, idx) => (
+                  <div key={idx} className="standupCommentBubble">
+                    <div className="standupCommentHead">
+                      <b>{c.author}</b>
+                      <span>{c.date ? new Date(c.date).toLocaleDateString() : ''}</span>
+                    </div>
+                    <p>{c.text}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="standupContainer" data-testid="smart-standup-view">
       {/* Header & Standup Mission Control */}
@@ -293,10 +337,6 @@ export const SmartStandupView: React.FC<SmartStandupViewProps> = ({
           ) : (
             <div className="standupCardsGrid">
               {summary.blocked_items.map((item: StandupBlockedItem) => {
-                const isExpanded = expandedComments[item.id]
-                const comments = commentsCache[item.id]
-                const isLoadingComments = commentsLoading[item.id]
-
                 return (
                   <article key={item.id} className="standupCard blocked" data-testid={`standup-blocked-${item.id}`}>
                     <div className="standupCardTop">
@@ -345,41 +385,7 @@ export const SmartStandupView: React.FC<SmartStandupViewProps> = ({
                     </div>
 
                     {/* Expandable Recent Comments from ADO */}
-                    <div className="standupCommentsSection">
-                      <button
-                        type="button"
-                        className="standupCommentsToggle"
-                        onClick={() => toggleComments(item.id)}
-                      >
-                        <MessageSquare size={13} />
-                        <span>{isExpanded ? 'Hide Recent Comments' : 'View Recent Comments'}</span>
-                        {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                      </button>
-
-                      {isExpanded && (
-                        <div className="standupCommentsDrawer">
-                          {isLoadingComments && (
-                            <p className="standupCommentsMuted">Loading latest comments from Azure DevOps...</p>
-                          )}
-                          {!isLoadingComments && comments && comments.length === 0 && (
-                            <p className="standupCommentsMuted">No comments recorded on this item.</p>
-                          )}
-                          {!isLoadingComments && comments && comments.length > 0 && (
-                            <div className="standupCommentsList">
-                              {comments.map((c, idx) => (
-                                <div key={idx} className="standupCommentBubble">
-                                  <div className="standupCommentHead">
-                                    <b>{c.author}</b>
-                                    <span>{c.date ? new Date(c.date).toLocaleDateString() : ''}</span>
-                                  </div>
-                                  <p>{c.text}</p>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                    {renderRecentComments(item.id)}
                   </article>
                 )
               })}
@@ -456,6 +462,9 @@ export const SmartStandupView: React.FC<SmartStandupViewProps> = ({
                         )}
                       </div>
                     </div>
+
+                    {/* Expandable Recent Comments from ADO */}
+                    {renderRecentComments(item.id)}
                   </article>
                 )
               })}

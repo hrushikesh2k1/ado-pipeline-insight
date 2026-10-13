@@ -6,6 +6,13 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.12.5] - 2026-10-13
+
+### Fixed
+- **Smart Standup review bottlenecks now support recent Azure DevOps comments:**
+  - Added the same "View Recent Comments" drawer used by blocked work items to review bottleneck cards.
+  - Reused the existing comments cache/loading behavior so comments are fetched on demand and not reloaded repeatedly for the same work item.
+
 ## [1.12.4] - 2026-10-13
 
 ### Fixed
