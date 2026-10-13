@@ -6,6 +6,17 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.12.2] - 2026-10-13
+
+### Fixed
+- **InnerSource leaderboard cache now uses partitioned Blob Storage instead of one large yearly JSON file:**
+  - *Problem:* The raw InnerSource work item cache was written into a single `{year}_workitems.json` blob. For active projects this grew beyond Azure Portal's inline edit/view limit, making the file hard to inspect and risking slower dashboard reads over time.
+  - *Fix:*
+    - Added a partitioned cache layout under `innersource/{org}/{project}/{year}/` with `manifest.json`, per-quarter raw item blobs (`items/q1.json` through `items/q4.json`), and precomputed summary blobs (`summary/q1.json` through `summary/q4.json`, plus `summary/ytd.json`).
+    - The InnerSource page now serves from the selected quarter's summary blob first, so the dashboard can load quickly without downloading every stored work item.
+    - Refresh continues to use Azure DevOps incrementally from `last_synced_at`, updates moved/changed work items across partitions, rebuilds summaries, and preserves raw work item data for drilldown/history.
+    - Existing single yearly blobs are migrated automatically into the new partitioned layout the next time the leaderboard reads that year.
+
 ## [1.12.1] - 2026-10-12
 
 ### Fixed

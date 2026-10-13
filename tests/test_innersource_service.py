@@ -4,6 +4,7 @@ from app.services.innersource_service import (
     extract_story_points,
     extract_closed_date,
     calculate_leaderboard,
+    fetch_innersource_leaderboard,
     get_mock_innersource_leaderboard,
 )
 
@@ -121,16 +122,12 @@ def test_mock_leaderboard():
 
 
 def test_innersource_route(monkeypatch):
-    from fastapi.testclient import TestClient
-    from app.main import create_app
+    import app.api.routes as routes
 
-    monkeypatch.setenv("REQUIRE_LOGIN", "false")
-    app = create_app()
-    client = TestClient(app)
+    monkeypatch.setattr(routes, "_resolve_pat", lambda org, pat=None: (_ for _ in ()).throw(RuntimeError("no token")))
 
-    response = client.get("/api/v1/ado/innersource/leaderboard?organization=hex-org&project=cloud-proj&year=2026&quarter=2")
-    assert response.status_code == 200
-    data = response.json()
+    response = routes.get_innersource_leaderboard(organization="hex-org", project="cloud-proj", year=2026, quarter=2)
+    data = response.model_dump()
     assert data["year"] == 2026
     assert data["quarter"] == 2
     assert "leaderboard" in data
@@ -171,3 +168,140 @@ def test_blob_storage_service(tmp_path, monkeypatch):
     assert service.put_json("test_blob.json", test_data) is True
     loaded = service.get_json("test_blob.json")
     assert loaded == test_data
+
+
+def test_fetch_innersource_leaderboard_writes_partitioned_blobs(monkeypatch):
+    import app.services.innersource_service as service
+
+    class FakeBlob:
+        def __init__(self):
+            self.data = {}
+
+        def get_json(self, name):
+            return self.data.get(name)
+
+        def put_json(self, name, data):
+            self.data[name] = data
+            return True
+
+    class FakeAdo:
+        def query_wiql(self, project, wiql, top=None):
+            return [101, 102]
+
+        def get_work_items_batch(self, project, ids, fields=None):
+            return [
+                {
+                    "id": 101,
+                    "fields": {
+                        "System.Id": 101,
+                        "System.Title": "Q2 contribution",
+                        "System.WorkItemType": "User Story",
+                        "System.State": "Closed",
+                        "System.AssignedTo": {"displayName": "Ava Stone", "uniqueName": "ava@example.test"},
+                        "Microsoft.VSTS.Scheduling.StoryPoints": 8,
+                        "Microsoft.VSTS.Common.ClosedDate": "2026-05-10T12:00:00Z",
+                    },
+                },
+                {
+                    "id": 102,
+                    "fields": {
+                        "System.Id": 102,
+                        "System.Title": "Q3 contribution",
+                        "System.WorkItemType": "Bug",
+                        "System.State": "Resolved",
+                        "System.AssignedTo": {"displayName": "Ava Stone", "uniqueName": "ava@example.test"},
+                        "Microsoft.VSTS.Scheduling.StoryPoints": 5,
+                        "Microsoft.VSTS.Common.ClosedDate": "2026-08-10T12:00:00Z",
+                    },
+                },
+            ]
+
+    blob = FakeBlob()
+    monkeypatch.setattr(service, "get_blob_storage_service", lambda: blob)
+
+    result = fetch_innersource_leaderboard(
+        FakeAdo(),
+        organization="hexagon-si-gpc",
+        project="cloud technologies",
+        year=2026,
+        quarter=2,
+        force_refresh=True,
+    )
+
+    assert result["total_quarter_points"] == 8
+    assert result["total_year_points"] == 13
+    assert result["storage_blob_name"].endswith("/2026/summary/q2.json")
+    assert "innersource/hexagon-si-gpc/cloud_technologies/2026/manifest.json" in blob.data
+    assert "innersource/hexagon-si-gpc/cloud_technologies/2026/items/q2.json" in blob.data
+    assert "innersource/hexagon-si-gpc/cloud_technologies/2026/items/q3.json" in blob.data
+    assert "innersource/hexagon-si-gpc/cloud_technologies/2026/summary/q2.json" in blob.data
+    assert len(blob.data["innersource/hexagon-si-gpc/cloud_technologies/2026/items/q2.json"]) == 1
+    assert len(blob.data["innersource/hexagon-si-gpc/cloud_technologies/2026/items/q3.json"]) == 1
+
+    class ShouldNotCallAdo(FakeAdo):
+        def query_wiql(self, project, wiql, top=None):
+            raise AssertionError("cached summary should avoid Azure DevOps")
+
+    cached = fetch_innersource_leaderboard(
+        ShouldNotCallAdo(),
+        organization="hexagon-si-gpc",
+        project="cloud technologies",
+        year=2026,
+        quarter=2,
+        force_refresh=False,
+    )
+    assert cached["cached"] is True
+    assert cached["total_quarter_points"] == 8
+
+
+def test_fetch_innersource_leaderboard_migrates_legacy_year_blob(monkeypatch):
+    import app.services.innersource_service as service
+
+    legacy_blob = "innersource/hexagon-si-gpc/cloud_technologies/2026_workitems.json"
+
+    class FakeBlob:
+        def __init__(self):
+            self.data = {
+                legacy_blob: {
+                    "201": {
+                        "id": 201,
+                        "fields": {
+                            "System.Id": 201,
+                            "System.Title": "Legacy item",
+                            "System.WorkItemType": "User Story",
+                            "System.State": "Closed",
+                            "System.AssignedTo": {"displayName": "Lee James"},
+                            "Microsoft.VSTS.Scheduling.StoryPoints": 3,
+                            "Microsoft.VSTS.Common.ClosedDate": "2026-02-10T12:00:00Z",
+                        },
+                    }
+                },
+                "innersource/hexagon-si-gpc/cloud_technologies/2026_meta.json": {"last_synced_at": "2026-10-01T00:00:00+00:00"},
+            }
+
+        def get_json(self, name):
+            return self.data.get(name)
+
+        def put_json(self, name, data):
+            self.data[name] = data
+            return True
+
+    class ShouldNotCallAdo:
+        def query_wiql(self, project, wiql, top=None):
+            raise AssertionError("legacy migration should serve cache without ADO")
+
+    blob = FakeBlob()
+    monkeypatch.setattr(service, "get_blob_storage_service", lambda: blob)
+
+    result = fetch_innersource_leaderboard(
+        ShouldNotCallAdo(),
+        organization="hexagon-si-gpc",
+        project="cloud technologies",
+        year=2026,
+        quarter=1,
+    )
+
+    assert result["total_quarter_points"] == 3
+    manifest = blob.data["innersource/hexagon-si-gpc/cloud_technologies/2026/manifest.json"]
+    assert manifest["layout"] == "partitioned-quarter-v1"
+    assert manifest["migrated_from_legacy"] is True

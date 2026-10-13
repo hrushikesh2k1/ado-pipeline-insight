@@ -225,12 +225,182 @@ def calculate_leaderboard(
     }
 
 
-def _get_blob_keys(organization: str, project: str, year: int) -> tuple[str, str]:
+def _get_blob_prefix(organization: str, project: str, year: int) -> str:
     clean_org = re.sub(r"[^a-zA-Z0-9_\-]", "_", organization.strip().lower())
     clean_proj = re.sub(r"[^a-zA-Z0-9_\-]", "_", project.strip().lower())
-    data_blob = f"innersource/{clean_org}/{clean_proj}/{year}_workitems.json"
-    meta_blob = f"innersource/{clean_org}/{clean_proj}/{year}_meta.json"
-    return data_blob, meta_blob
+    return f"innersource/{clean_org}/{clean_proj}/{year}"
+
+
+def _get_legacy_blob_keys(organization: str, project: str, year: int) -> tuple[str, str]:
+    prefix = _get_blob_prefix(organization, project, year).rsplit("/", 1)[0]
+    return f"{prefix}/{year}_workitems.json", f"{prefix}/{year}_meta.json"
+
+
+def _get_partitioned_blob_keys(organization: str, project: str, year: int) -> dict[str, Any]:
+    prefix = _get_blob_prefix(organization, project, year)
+    return {
+        "prefix": prefix,
+        "manifest": f"{prefix}/manifest.json",
+        "items": {q: f"{prefix}/items/q{q}.json" for q in range(1, 5)},
+        "summary": {q: f"{prefix}/summary/q{q}.json" for q in range(1, 5)} | {"ytd": f"{prefix}/summary/ytd.json"},
+    }
+
+
+def _item_id(item: dict[str, Any]) -> int:
+    fields = item.get("fields") or {}
+    try:
+        return int(item.get("id") or fields.get("System.Id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _load_items_by_id(raw: Any) -> dict[int, dict[str, Any]]:
+    items: dict[int, dict[str, Any]] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if not isinstance(value, dict):
+                continue
+            try:
+                item_id = int(key)
+            except (TypeError, ValueError):
+                item_id = _item_id(value)
+            if item_id:
+                items[item_id] = value
+    elif isinstance(raw, list):
+        for value in raw:
+            if not isinstance(value, dict):
+                continue
+            item_id = _item_id(value)
+            if item_id:
+                items[item_id] = value
+    return items
+
+
+def _partition_items_by_quarter(items: list[dict[str, Any]], year: int) -> dict[int, dict[int, dict[str, Any]]]:
+    partitions: dict[int, dict[int, dict[str, Any]]] = {q: {} for q in range(1, 5)}
+    for item in items:
+        fields = item.get("fields") or {}
+        item_year, item_quarter, _ = determine_item_quarter_and_year(fields, default_year=year)
+        item_id = _item_id(item)
+        if item_id and item_year == year and 1 <= item_quarter <= 4:
+            partitions[item_quarter][item_id] = item
+    return partitions
+
+
+def _flatten_partitions(partitions: dict[int, dict[int, dict[str, Any]]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for quarter in range(1, 5):
+        items.extend(partitions.get(quarter, {}).values())
+    return items
+
+
+def _manifest(
+    *,
+    keys: dict[str, Any],
+    organization: str,
+    project: str,
+    year: int,
+    last_synced_at: str | None,
+    partitions: dict[int, dict[int, dict[str, Any]]],
+    migrated_from_legacy: bool = False,
+) -> dict[str, Any]:
+    return {
+        "version": 2,
+        "layout": "partitioned-quarter-v1",
+        "organization": organization,
+        "project": project,
+        "year": year,
+        "last_synced_at": last_synced_at,
+        "total_items": sum(len(v) for v in partitions.values()),
+        "migrated_from_legacy": migrated_from_legacy,
+        "items": {f"q{q}": keys["items"][q] for q in range(1, 5)},
+        "summary": {**{f"q{q}": keys["summary"][q] for q in range(1, 5)}, "ytd": keys["summary"]["ytd"]},
+        "quarters": {
+            f"q{q}": {
+                "items_blob": keys["items"][q],
+                "summary_blob": keys["summary"][q],
+                "item_count": len(partitions.get(q, {})),
+            }
+            for q in range(1, 5)
+        },
+    }
+
+
+def _summary_meta(blob_name: str, manifest: dict[str, Any], cached: bool = True) -> dict[str, Any]:
+    return {
+        "blob_name": blob_name,
+        "last_synced_at": manifest.get("last_synced_at"),
+        "cached": cached,
+        "total_items": manifest.get("total_items", 0),
+    }
+
+
+def _load_partitioned_cache(blob_service: Any, keys: dict[str, Any], organization: str, project: str, year: int) -> tuple[dict[int, dict[int, dict[str, Any]]], dict[str, Any], bool]:
+    """Load the partitioned cache, migrating the old one-file-per-year cache when needed."""
+    partitions: dict[int, dict[int, dict[str, Any]]] = {q: {} for q in range(1, 5)}
+    manifest = blob_service.get_json(keys["manifest"])
+    if isinstance(manifest, dict) and manifest.get("layout") == "partitioned-quarter-v1":
+        for q in range(1, 5):
+            partitions[q] = _load_items_by_id(blob_service.get_json(keys["items"][q]))
+        return partitions, manifest, False
+
+    legacy_data_blob, legacy_meta_blob = _get_legacy_blob_keys(organization, project, year)
+    legacy_data = blob_service.get_json(legacy_data_blob)
+    legacy_meta = blob_service.get_json(legacy_meta_blob) or {}
+    legacy_items = _load_items_by_id(legacy_data)
+    if not legacy_items:
+        return partitions, {}, False
+
+    partitions = _partition_items_by_quarter(list(legacy_items.values()), year)
+    migrated_manifest = _manifest(
+        keys=keys,
+        organization=organization,
+        project=project,
+        year=year,
+        last_synced_at=legacy_meta.get("last_synced_at"),
+        partitions=partitions,
+        migrated_from_legacy=True,
+    )
+    _persist_partitioned_cache(blob_service, keys, partitions, migrated_manifest, organization, project, year)
+    return partitions, migrated_manifest, True
+
+
+def _persist_partitioned_cache(
+    blob_service: Any,
+    keys: dict[str, Any],
+    partitions: dict[int, dict[int, dict[str, Any]]],
+    manifest: dict[str, Any],
+    organization: str,
+    project: str,
+    year: int,
+) -> None:
+    """Write raw quarter partitions plus precomputed summaries for fast dashboard loads."""
+    all_items = _flatten_partitions(partitions)
+    total_items = len(all_items)
+    for q in range(1, 5):
+        blob_service.put_json(keys["items"][q], partitions.get(q, {}))
+        quarter_summary = calculate_leaderboard(
+            all_items,
+            year,
+            q,
+            organization,
+            project,
+            _summary_meta(keys["summary"][q], manifest),
+        )
+        quarter_summary["total_cached_items"] = total_items
+        blob_service.put_json(keys["summary"][q], quarter_summary)
+
+    ytd_summary = calculate_leaderboard(
+        all_items,
+        year,
+        4,
+        organization,
+        project,
+        _summary_meta(keys["summary"]["ytd"], manifest),
+    )
+    ytd_summary["total_cached_items"] = total_items
+    blob_service.put_json(keys["summary"]["ytd"], ytd_summary)
+    blob_service.put_json(keys["manifest"], manifest)
 
 
 def fetch_innersource_leaderboard(
@@ -242,37 +412,37 @@ def fetch_innersource_leaderboard(
     tag: str | None = None,
     force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """Execute WIQL or read from Azure Blob Storage, update cache incrementally, and build leaderboard."""
+    """Execute WIQL or read from partitioned Azure Blob Storage, update cache incrementally, and build leaderboard."""
     blob_service = get_blob_storage_service()
-    data_blob, meta_blob = _get_blob_keys(organization, project, year)
+    keys = _get_partitioned_blob_keys(organization, project, year)
 
-    # Try loading from Blob Storage cache
-    cached_data = blob_service.get_json(data_blob)
-    cached_meta = blob_service.get_json(meta_blob) or {}
+    partitions, manifest, migrated = _load_partitioned_cache(blob_service, keys, organization, project, year)
+    cached_total = sum(len(v) for v in partitions.values())
 
-    cached_items_by_id: dict[int, dict[str, Any]] = {}
-    if isinstance(cached_data, dict):
-        for k, v in cached_data.items():
-            try:
-                cached_items_by_id[int(k)] = v
-            except ValueError:
-                pass
-    elif isinstance(cached_data, list):
-        for v in cached_data:
-            item_id = int(v.get("id") or (v.get("fields") or {}).get("System.Id") or 0)
-            if item_id:
-                cached_items_by_id[item_id] = v
+    # Fast path: use the precomputed summary blob, so the dashboard does not read every raw work item.
+    if cached_total and not force_refresh:
+        summary = blob_service.get_json(keys["summary"][quarter])
+        if isinstance(summary, dict) and summary.get("year") == year and summary.get("quarter") == quarter:
+            logger.info("Serving InnerSource leaderboard from summary cache %s", keys["summary"][quarter])
+            summary["cached"] = True
+            summary["storage_blob_name"] = keys["summary"][quarter]
+            summary["total_cached_items"] = manifest.get("total_items", cached_total)
+            return summary
 
-    # Fast path: If cache exists and caller is not requesting a force refresh, return cached data
-    if cached_items_by_id and not force_refresh:
-        logger.info("Serving InnerSource leaderboard from Blob Storage cache (%s items)", len(cached_items_by_id))
-        meta_out = {
-            "blob_name": data_blob,
-            "last_synced_at": cached_meta.get("last_synced_at"),
-            "cached": True,
-            "total_items": len(cached_items_by_id),
-        }
-        return calculate_leaderboard(list(cached_items_by_id.values()), year, quarter, organization, project, meta_out)
+        logger.info("Summary cache missing; rebuilding summaries from %s partitioned items", cached_total)
+        manifest = _manifest(
+            keys=keys,
+            organization=organization,
+            project=project,
+            year=year,
+            last_synced_at=manifest.get("last_synced_at"),
+            partitions=partitions,
+            migrated_from_legacy=migrated,
+        )
+        _persist_partitioned_cache(blob_service, keys, partitions, manifest, organization, project, year)
+        rebuilt = blob_service.get_json(keys["summary"][quarter])
+        if isinstance(rebuilt, dict):
+            return rebuilt
 
     # Synchronize from Azure DevOps
     safe_project = project.replace("'", "''")
@@ -284,9 +454,9 @@ def fetch_innersource_leaderboard(
         safe_tag = tag.strip().replace("'", "''")
         tag_clause = f" AND [System.Tags] CONTAINS '{safe_tag}'"
 
-    last_synced_at = cached_meta.get("last_synced_at")
+    last_synced_at = manifest.get("last_synced_at")
 
-    if cached_items_by_id and last_synced_at:
+    if cached_total and last_synced_at:
         # Incremental sync: query work items changed since last sync
         sync_date = last_synced_at.split("T")[0]
         logger.info("Executing incremental sync for items changed since %s", sync_date)
@@ -357,24 +527,36 @@ def fetch_innersource_leaderboard(
         ]
         fetched_items = client.get_work_items_batch(project, candidate_ids, fields=_INNERSOURCE_FIELDS)
         for item in fetched_items:
-            item_id = int(item.get("id") or (item.get("fields") or {}).get("System.Id") or 0)
-            if item_id:
-                cached_items_by_id[item_id] = item
+            item_id = _item_id(item)
+            if not item_id:
+                continue
+            # A changed work item can move from one quarter/year to another, so remove it from every quarter first.
+            for q_items in partitions.values():
+                q_items.pop(item_id, None)
+            item_year, item_quarter, _ = determine_item_quarter_and_year(item.get("fields") or {}, default_year=year)
+            if item_year == year and 1 <= item_quarter <= 4:
+                partitions[item_quarter][item_id] = item
 
-    # If we have items (either newly fetched or cached), persist to Blob Storage
+    # If we have items (either newly fetched or cached), persist partitioned raw data and summaries.
     now_iso = datetime.now(timezone.utc).isoformat()
-    if cached_items_by_id:
-        new_meta = {
-            "blob_name": data_blob,
-            "last_synced_at": now_iso,
-            "total_items": len(cached_items_by_id),
-            "cached": True,
-        }
-        # Save to Azure Blob Storage
-        blob_service.put_json(data_blob, cached_items_by_id)
-        blob_service.put_json(meta_blob, new_meta)
-
-        return calculate_leaderboard(list(cached_items_by_id.values()), year, quarter, organization, project, new_meta)
+    cached_total = sum(len(v) for v in partitions.values())
+    if cached_total:
+        new_manifest = _manifest(
+            keys=keys,
+            organization=organization,
+            project=project,
+            year=year,
+            last_synced_at=now_iso,
+            partitions=partitions,
+            migrated_from_legacy=migrated,
+        )
+        _persist_partitioned_cache(blob_service, keys, partitions, new_manifest, organization, project, year)
+        summary = blob_service.get_json(keys["summary"][quarter])
+        if isinstance(summary, dict):
+            summary["cached"] = True
+            summary["storage_blob_name"] = keys["summary"][quarter]
+            summary["total_cached_items"] = cached_total
+            return summary
 
     # Fallback to demo sample data if in offline/demo mode with zero ADO results
     return get_mock_innersource_leaderboard(year, quarter, organization, project)
