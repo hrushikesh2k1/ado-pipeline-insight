@@ -791,6 +791,13 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
     return boardData?.work_items.filter(w => w.is_stale_in_review) || []
   }, [boardData])
 
+  const healthReportRecipients = useMemo(() => {
+    const people = [...closedWithoutHoursItems, ...staleInReviewItems]
+      .map(assignee)
+      .filter(name => name && name !== 'Unassigned')
+    return Array.from(new Set(people)).join('; ')
+  }, [closedWithoutHoursItems, staleInReviewItems])
+
   // Dynamic Milestone calculation
   const computedMilestone = useMemo<AdoSprintMilestoneSummary | null>(() => {
     if (boardData?.milestone) return boardData.milestone
@@ -1747,6 +1754,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                 className="sprintEmailBtn"
                 onClick={() => {
                   setEmailSentSuccess(false)
+                  setEmailRecipient(healthReportRecipients || emailRecipient)
                   setShowEmailModal(true)
                 }}
                 title="Send Sprint Health & Hygiene Report Email"
@@ -4162,13 +4170,13 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
 
               <div className="emailModalBody">
                 <div className="emailFormGroup">
-                  <label className="emailFormLabel">Recipient Email Address:</label>
+                  <label className="emailFormLabel">Recipients:</label>
                   <input
-                    type="email"
+                    type="text"
                     className="emailFormInput"
                     value={emailRecipient}
                     onChange={e => setEmailRecipient(e.target.value)}
-                    placeholder="e.g. manager@octave.com"
+                    placeholder="Assignee names or email addresses"
                   />
                 </div>
 
@@ -4215,26 +4223,23 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
                     </div>
                   ) : (
                     <div className="emailPreviewContent">
-                      <p><b>Sprint:</b> {sprintTitle}</p>
-                      <p><b>Team:</b> {teamTitle}</p>
-                      <p><b>Hygiene Check 1:</b> {checksSummary.tasks_closed_without_hours_count} closed task(s) with blank hours</p>
+                      <p>Hi Team,</p>
+                      <p>Below are our team members who closed the task without filling hours</p>
                       {closedWithoutHoursItems.map(item => (
                         <p key={`c1-${item.id}`} style={{ paddingLeft: 14 }}>
-                          • <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - Assigned to: {assignee(item)}
+                          <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - {assignee(item)}
                         </p>
                       ))}
-                      <p><b>Hygiene Check 2:</b> {checksSummary.stories_in_review_stale_count} user story(s) in review &gt; 4 working days</p>
+                      {closedWithoutHoursItems.length === 0 && <p style={{ paddingLeft: 14 }}>.....</p>}
+                      <p>Below are our team members whose work items are in review more than 4 days</p>
                       {staleInReviewItems.map(item => (
                         <p key={`c2-${item.id}`} style={{ paddingLeft: 14 }}>
-                          • <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - Assigned to: {assignee(item)}
+                          <a href={workItemUrl(item, organization, project)} target="_blank" rel="noreferrer">{item.id}</a> - {assignee(item)}
                         </p>
                       ))}
-                      {computedMilestone && (
-                        <>
-                          <p><b>Milestone Completion:</b> {computedMilestone.closed_stories_count}/{computedMilestone.total_stories} stories ({computedMilestone.completion_rate_pct}%)</p>
-                          <p><b>Verified Delivered Effort:</b> {computedMilestone.total_delivered_hours} hrs</p>
-                        </>
-                      )}
+                      {staleInReviewItems.length === 0 && <p style={{ paddingLeft: 14 }}>.....</p>}
+                      <p>please let me know the reason for this miss also let us know if any process improvements needed.</p>
+                      <p>Thanks,<br />Lalit</p>
                     </div>
                   )}
                 </div>

@@ -6,6 +6,15 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.12.8] - 2026-10-13
+
+### Fixed
+- **Sprint Health & Hygiene Outlook email now matches the requested escalation format:**
+  - Replaced the old broad sprint summary email with the short body listing only tasks closed without hours and work items in review for more than 4 days.
+  - Removed the misleading active work item count, milestone/capacity section, and generated footer from the health email.
+  - Fixed saved deliverables hygiene items showing as `Unassigned` by reading both `assigned_to_name` and saved `assignee` fields.
+  - Prefills the recipient field with the unique assignee names from the flagged work items so Outlook can resolve the team members.
+
 ## [1.12.7] - 2026-10-13
 
 ### Added

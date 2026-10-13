@@ -33,32 +33,31 @@ describe('buildSprintReport', () => {
   const lines = text.split('\n')
 
   it('lists each flagged item directly under its own check, with who it is assigned to', () => {
-    const c1 = lines.findIndex(l => l.startsWith('• Check 1'))
-    const c2 = lines.findIndex(l => l.startsWith('• Check 2'))
-    expect(lines[c1 + 1]).toBe('   • https://dev.azure.com/org/proj/_workitems/edit/1001 - Assigned to: Asha Rao')
-    expect(lines[c1 + 2].startsWith('• Check 2')).toBe(true)
-    expect(lines[c2 + 1]).toBe('   • https://dev.azure.com/my%20org/Cloud%20Tech/_workitems/edit/2002 - Assigned to: Ravi <Dev>')
-    expect(lines[c2 + 2]).toBe('   • https://dev.azure.com/my%20org/Cloud%20Tech/_workitems/edit/2003 - Assigned to: Unassigned')
+    const c1 = lines.findIndex(l => l.startsWith('Below are our team members who closed'))
+    const c2 = lines.findIndex(l => l.startsWith('Below are our team members whose work items'))
+    expect(lines[c1 + 2]).toBe('https://dev.azure.com/org/proj/_workitems/edit/1001 - Asha Rao')
+    expect(lines[c2 + 2]).toBe('https://dev.azure.com/my%20org/Cloud%20Tech/_workitems/edit/2002 - Ravi <Dev>')
+    expect(lines[c2 + 3]).toBe('https://dev.azure.com/my%20org/Cloud%20Tech/_workitems/edit/2003 - Unassigned')
   })
 
-  it('leaves every other section exactly as before', () => {
-    expect(text).toContain('📌 SPRINT SUMMARY\n• Sprint: 26-10 (Oct Work) Sprint\n• Team: CloudOps-Monitoring\n• Active Work Items: 25\n')
-    expect(text).toContain('• Check 1 (Closed Tasks without Completed Hours): 1 violation(s)')
-    expect(text).toContain('• Check 2 (User Stories In Review > 4 Work Days): 2 violation(s)')
-    expect(text).toContain('🎯 MILESTONE & CAPACITY BREAKDOWN\n• Milestone Story Progress: 0/9 completed (0%)\n• Verified Delivered Hours: 0.5 hrs\n• Features Delivered: 0 | Bug Fixes: 0\n')
-    expect(text).toContain('Generated via ADO Pipeline Insight & Azure Boards Extension\nDashboard URL: https://app.example\n')
+  it('uses the requested short email body and omits the old sprint summary metrics', () => {
+    expect(text).toContain('Hi Team,\n\nBelow are our team members who closed the task without filling hours')
+    expect(text).toContain('Below are our team members whose work items are in review more than 4 days')
+    expect(text).toContain('please let me know the reason for this miss also let us know if any process improvements needed.\n\nThanks,\nLalit\n')
+    expect(text).not.toContain('Active Work Items')
+    expect(text).not.toContain('MILESTONE')
+    expect(text).not.toContain('Generated via ADO Pipeline Insight')
   })
 
   it('makes the work item number the hyperlink in the HTML version and escapes names', () => {
-    expect(html).toContain('<a href="https://dev.azure.com/org/proj/_workitems/edit/1001">1001</a> - Assigned to: Asha Rao')
+    expect(html).toContain('<a href="https://dev.azure.com/org/proj/_workitems/edit/1001">1001</a> - Asha Rao')
     expect(html).toContain('Ravi &lt;Dev&gt;')
     expect(html).not.toContain('Ravi <Dev>')
   })
 
-  it('prints nothing under a check that has no violations and omits the milestone block when absent', () => {
+  it('prints placeholder dots under a section that has no items', () => {
     const clean = buildSprintReport({ ...base, closedWithoutHours: [], closedWithoutHoursCount: 0, staleInReview: [], staleInReviewCount: 0, milestone: null }).text
-    expect(clean).toContain('• Check 1 (Closed Tasks without Completed Hours): 0 violation(s)\n• Check 2 (User Stories In Review > 4 Work Days): 0 violation(s)\n')
-    expect(clean).not.toContain('MILESTONE')
+    expect(clean).toContain('Below are our team members who closed the task without filling hours\n\n.....\n\nBelow are our team members whose work items are in review more than 4 days\n\n.....')
   })
 })
 
@@ -68,6 +67,7 @@ describe('helpers', () => {
   })
   it('names unassigned items and escapes html', () => {
     expect(assignee({ id: 1, assigned_to_name: '  ' })).toBe('Unassigned')
+    expect(assignee({ id: 1, assignee: 'Saved Report Name' })).toBe('Saved Report Name')
     expect(escapeHtml('<a href="x">&')).toBe('&lt;a href=&quot;x&quot;&gt;&amp;')
   })
 })
