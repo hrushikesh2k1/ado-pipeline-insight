@@ -2176,6 +2176,24 @@ def get_work_item_insights_status(
     return wi_insights.status(insights_store.scope_key(org, proj, team_name, tag_name))
 
 
+@router.get("/insights/work-items/executive-summary", tags=["insights"])
+def get_work_item_executive_summary(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    team: str = Query("", max_length=256),
+    tag: str = Query("", max_length=256),
+    days: int = Query(2, ge=1, le=30),
+) -> dict[str, Any]:
+    """Summarize recent team work from the saved Work Item Insights data, using AI when configured."""
+    org, proj, team_name, tag_name = _insights_scope(organization, project, team, tag)
+    try:
+        return wi_insights.executive_summary(org, proj, team_name, tag_name, days)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise _unavailable(exc, "The executive summary is unavailable.") from exc
+
+
 @router.post("/insights/work-items/inventory", tags=["insights"])
 def upload_alert_inventory(payload: AlertInventoryUpload) -> dict[str, Any]:
     """Save the uploaded alert inventory (.xlsx, .csv, .tsv, .md or .txt) for a scope."""

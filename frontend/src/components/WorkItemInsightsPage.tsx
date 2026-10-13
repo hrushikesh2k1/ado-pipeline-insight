@@ -3,13 +3,14 @@ import ReactECharts from 'echarts-for-react'
 import { ChartColumn, ChevronDown, ExternalLink, Info, RefreshCw, Search, Sparkles, Trash2, TriangleAlert, Upload, X } from 'lucide-react'
 import './WorkItemInsightsPage.css'
 import { api } from '../services/api'
-import type { AdoTeam, InsightItem, InsightScope, WorkItemInsights } from '../types/api'
+import type { AdoTeam, InsightItem, InsightScope, WorkItemExecutiveSummary, WorkItemInsights } from '../types/api'
 import {
   MAX_LISTED,
   OTHER_AREAS_LABEL,
   alertScope,
   areaSummary,
   bugsByArea,
+  closedByMonth,
   closedBySprint,
   closers,
   isClosed,
@@ -230,9 +231,14 @@ export const WorkItemInsightsPage: React.FC<WorkItemInsightsPageProps> = ({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
+  const [summaryDays, setSummaryDays] = useState(2)
+  const [summaryLoading, setSummaryLoading] = useState(false)
+  const [executiveSummary, setExecutiveSummary] = useState<WorkItemExecutiveSummary | null>(null)
+  const [summaryError, setSummaryError] = useState('')
 
   const [closedPersons, setClosedPersons] = useState<string[]>([])
   const [closedTypes, setClosedTypes] = useState<string[]>([])
+  const [closedGrouping, setClosedGrouping] = useState<'month' | 'sprint'>('month')
   const [areaTypes, setAreaTypes] = useState<string[]>([])
   const [bugTypeChoice, setBugTypeChoice] = useState<string[] | null>(null)
   const [bugView, setBugView] = useState<'area' | 'month'>('area')
@@ -260,6 +266,8 @@ export const WorkItemInsightsPage: React.FC<WorkItemInsightsPageProps> = ({
     setClosedPersons([])
     setClosedTypes([])
     setAreaTypes([])
+    setExecutiveSummary(null)
+    setSummaryError('')
   }, [org, project, ready])
 
   useEffect(() => {
@@ -307,6 +315,8 @@ export const WorkItemInsightsPage: React.FC<WorkItemInsightsPageProps> = ({
   const startRefresh = async (regroup = false) => {
     setError('')
     setInfo('')
+    setExecutiveSummary(null)
+    setSummaryError('')
     try {
       await api.refreshWorkItemInsights(scope, { regroup, months: WINDOW_MONTHS }, pat || undefined)
       // Reload now, whatever state the job is in: a refresh with nothing new can finish before anything starts watching it.
@@ -321,12 +331,29 @@ export const WorkItemInsightsPage: React.FC<WorkItemInsightsPageProps> = ({
     if (next !== tag) {
       setTag(next)
       saveScope(org, project, team, next)
+      setExecutiveSummary(null)
+      setSummaryError('')
     }
   }
 
   const changeTeam = (value: string) => {
     setTeam(value)
     saveScope(org, project, value, tag)
+    setExecutiveSummary(null)
+    setSummaryError('')
+  }
+
+  const generateExecutiveSummary = async () => {
+    setSummaryError('')
+    setSummaryLoading(true)
+    try {
+      const result = await api.workItemExecutiveSummary(scope, summaryDays)
+      setExecutiveSummary(result)
+    } catch (e) {
+      setSummaryError(errorText(e))
+    } finally {
+      setSummaryLoading(false)
+    }
   }
 
   // ---- what the four sections show
@@ -334,8 +361,13 @@ export const WorkItemInsightsPage: React.FC<WorkItemInsightsPageProps> = ({
   const months = useMemo(() => windowMonths(new Date(), data?.scope.months ?? WINDOW_MONTHS), [data?.scope.months])
   const bugTypes = bugTypeChoice ?? data?.bug_types ?? []
 
-  const sprintBars = useMemo(() => closedBySprint(items, { persons: closedPersons, types: closedTypes }), [items, closedPersons, closedTypes])
-  const shownPersons = useMemo(() => personSeries(sprintBars).map(s => s.name), [sprintBars])
+  const closedBars = useMemo(
+    () => closedGrouping === 'month'
+      ? closedByMonth(items, { persons: closedPersons, types: closedTypes }, months)
+      : closedBySprint(items, { persons: closedPersons, types: closedTypes }),
+    [items, closedPersons, closedTypes, closedGrouping, months],
+  )
+  const shownPersons = useMemo(() => personSeries(closedBars).map(s => s.name), [closedBars])
   const areaRows = useMemo(() => areaSummary(items, areaTypes), [items, areaTypes])
   const bugs = useMemo(() => bugsByArea(items, bugTypes, months), [items, bugTypes, months])
   const alerts = useMemo(() => alertScope(items, months), [items, months])
@@ -349,15 +381,16 @@ export const WorkItemInsightsPage: React.FC<WorkItemInsightsPageProps> = ({
     setDrawer({ title, items: list })
   }
 
-  const onSprintClick = (p: { name?: string; seriesName?: string }) => {
-    const bar = sprintBars.find(b => b.label === p.name)
+  const onClosedBarClick = (p: { name?: string; seriesName?: string }) => {
+    const bar = closedBars.find(b => b.label === p.name)
     if (!bar) return
     const person = p.seriesName
+    const inBar = (i: InsightItem) => closedGrouping === 'month' ? monthKey(i.closed) === bar.sprint : i.sprint === bar.sprint
     const matches = (i: InsightItem) =>
-      isClosed(i) && i.sprint === bar.sprint && (!closedTypes.length || closedTypes.includes(i.type)) &&
+      isClosed(i) && inBar(i) && (!closedTypes.length || closedTypes.includes(i.type)) &&
       (!closedPersons.length || closedPersons.includes(i.assigned_to)) &&
       (!person ? true : person === 'Others' ? !shownPersons.includes(i.assigned_to) : i.assigned_to === person)
-    openList(`Closed in ${bar.label}${person ? ` · ${person}` : ''}`, matches)
+    openList(`${closedGrouping === 'month' ? 'Closed in' : 'Closed under'} ${bar.label}${person ? ` · ${person}` : ''}`, matches)
   }
 
   const onAreaClick = (p: { name?: string; seriesName?: string }) => {
@@ -550,19 +583,65 @@ export const WorkItemInsightsPage: React.FC<WorkItemInsightsPageProps> = ({
             <Kpi testId="wii-kpi-refreshed" label="Last refreshed" value={data.refreshed_at ? new Date(data.refreshed_at).toLocaleDateString() : '—'} sub={data.refreshed_at ? new Date(data.refreshed_at).toLocaleTimeString() : ''} />
           </div>
 
+          <section className="wiiExecutive" data-testid="wii-executive-summary">
+            <div className="wiiExecutiveHead">
+              <div>
+                <h3>Executive summary</h3>
+                <p>Generate an AI-written briefing from the saved work items in this scope.</p>
+              </div>
+              <div className="wiiExecutiveControls">
+                <label>
+                  Lookback
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={summaryDays}
+                    onChange={e => setSummaryDays(Math.max(1, Math.min(30, Number(e.target.value) || 1)))}
+                    data-testid="wii-summary-days"
+                  />
+                  days
+                </label>
+                <button type="button" className="prRefreshBtn" onClick={() => void generateExecutiveSummary()} disabled={summaryLoading || running} data-testid="wii-generate-summary">
+                  <Sparkles size={14} /> {summaryLoading ? 'Generating…' : 'Generate summary'}
+                </button>
+              </div>
+            </div>
+            {summaryError && <div className="wiiNotice error"><TriangleAlert size={14} /> {summaryError}</div>}
+            {executiveSummary ? (
+              <div className="wiiExecutiveBody">
+                <div className="wiiSummaryMeta">
+                  <span>{executiveSummary.generated_by_ai ? 'Azure OpenAI generated' : 'Deterministic fallback'}</span>
+                  <span>{executiveSummary.counts.closed} closed</span>
+                  <span>{executiveSummary.counts.created} new</span>
+                  <span>{executiveSummary.counts.active_open} active/open</span>
+                </div>
+                <div className="wiiSummaryText">{executiveSummary.summary}</div>
+              </div>
+            ) : (
+              <p className="wiiNone">Default is the last 2 days. Change the lookback if you want a broader team update.</p>
+            )}
+          </section>
+
           <Section
             id="wii-section-closed"
-            title="1 · Work items closed per sprint"
-            hint="Each bar is a sprint; each colour is a person. Click a bar to see the work items."
+            title={closedGrouping === 'month' ? '1 · Work items closed by month' : '1 · Work items closed by sprint path'}
+            hint={closedGrouping === 'month'
+              ? 'Each bar is the month the work item was closed; each colour is a person. Click a bar to see the work items.'
+              : 'Each bar is the Azure DevOps Iteration Path on the work item; each colour is a person. Use this to audit old or stale sprint assignments.'}
             controls={
               <>
+                <div className="wiiToggle" role="group" aria-label="Closed work grouping">
+                  <button type="button" className={closedGrouping === 'month' ? 'active' : ''} onClick={() => setClosedGrouping('month')} data-testid="wii-closed-by-month">Close month</button>
+                  <button type="button" className={closedGrouping === 'sprint' ? 'active' : ''} onClick={() => setClosedGrouping('sprint')} data-testid="wii-closed-by-sprint">Sprint path</button>
+                </div>
                 <FilterMenu label="People" options={closers(items, closedTypes)} selected={closedPersons} onChange={setClosedPersons} testId="wii-filter-persons" />
                 <FilterMenu label="Types" options={typeOptions} selected={closedTypes} onChange={setClosedTypes} testId="wii-filter-closed-types" />
               </>
             }
           >
-            {sprintBars.length === 0 ? <p className="wiiNone">No closed work items for this selection.</p> : (
-              <ReactECharts option={closedBySprintOption(sprintBars, chartTheme)} style={{ height: 340 }} notMerge onEvents={{ click: onSprintClick }} />
+            {closedBars.reduce((sum, bar) => sum + bar.total, 0) === 0 ? <p className="wiiNone">No closed work items for this selection.</p> : (
+              <ReactECharts option={closedBySprintOption(closedBars, chartTheme)} style={{ height: 340 }} notMerge onEvents={{ click: onClosedBarClick }} />
             )}
           </Section>
 

@@ -137,6 +137,48 @@
 .wiiKpiValue { font-size: 24px; line-height: 1.2; }
 .wiiKpiSub { font-size: 11px; color: var(--wii-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.wiiExecutive {
+  background: linear-gradient(135deg, var(--wii-card), var(--wii-card-2));
+  border: 1px solid var(--wii-border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.wiiExecutiveHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.wiiExecutive h3 { margin: 0; font-size: 14px; font-weight: 700; }
+.wiiExecutive p { margin: 3px 0 0; font-size: 11.5px; color: var(--wii-muted); line-height: 1.45; }
+.wiiExecutiveControls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.wiiExecutiveControls label { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--wii-muted); }
+.wiiExecutiveControls input {
+  width: 56px;
+  background: var(--wii-field);
+  color: var(--wii-text);
+  border: 1px solid var(--wii-border);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+.wiiExecutiveBody { display: flex; flex-direction: column; gap: 10px; }
+.wiiSummaryMeta { display: flex; gap: 8px; flex-wrap: wrap; }
+.wiiSummaryMeta span {
+  border: 1px solid var(--wii-border);
+  background: var(--wii-field);
+  color: var(--wii-muted);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.wiiSummaryText {
+  white-space: pre-wrap;
+  color: var(--wii-text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .wiiCard {
   background: var(--wii-card);
   border: 1px solid var(--wii-border);

@@ -6,6 +6,7 @@ import {
   alertScope,
   areaSummary,
   bugsByArea,
+  closedByMonth,
   closedBySprint,
   closers,
   monthLabel,
@@ -79,6 +80,27 @@ describe('section 1: closed work per sprint, by person', () => {
   it('a total of the bars equals the number of closed items', () => {
     const bars = closedBySprint(items, { persons: [], types: [] })
     expect(bars.reduce((s, b) => s + b.total, 0)).toBe(items.filter(i => i.state_category === 'completed').length)
+  })
+  it('can group by close month instead of sprint path', () => {
+    const bars = closedByMonth([
+      closed({ sprint: '26-09', assigned_to: 'Asha', closed: '2026-10-01T00:00:00Z' }),
+      closed({ sprint: '22-09', assigned_to: 'Ben', closed: '2026-10-03T00:00:00Z' }),
+      closed({ sprint: '26-09', assigned_to: 'Asha', closed: '2026-09-28T00:00:00Z' }),
+    ], { persons: [], types: [] }, ['2026-09', '2026-10'])
+    expect(bars.map(b => [b.sprint, b.label, b.total])).toEqual([
+      ['2026-09', 'Sep 2026', 1],
+      ['2026-10', 'Oct 2026', 2],
+    ])
+    expect(bars[1].byPerson).toEqual({ Asha: 1, Ben: 1 })
+  })
+  it('keeps empty close months visible and applies filters', () => {
+    const bars = closedByMonth([
+      closed({ assigned_to: 'Asha', type: 'Bug', closed: '2026-10-01T00:00:00Z' }),
+      closed({ assigned_to: 'Ben', type: 'Task', closed: '2026-10-03T00:00:00Z' }),
+      closed({ assigned_to: 'Asha', type: 'Bug', closed: '2026-08-01T00:00:00Z' }),
+    ], { persons: ['Asha'], types: ['Bug'] }, ['2026-09', '2026-10'])
+    expect(bars.map(b => [b.sprint, b.total])).toEqual([['2026-09', 0], ['2026-10', 1]])
+    expect(bars[1].byPerson).toEqual({ Asha: 1 })
   })
 
   describe('stacked series', () => {

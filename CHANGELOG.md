@@ -6,6 +6,26 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.12.7] - 2026-10-13
+
+### Added
+- **Work Item Insights now has an Executive Summary generator:**
+  - Added a configurable lookback window, defaulting to 2 days, so the team can generate a recent-work briefing directly from the Work Item Insights page.
+  - Added a backend summary endpoint that uses saved work item data and Azure OpenAI when configured, with a deterministic fallback when AI is unavailable.
+  - The summary reports recently closed work, new work, active/open attention items, and whether the text came from Azure OpenAI or fallback logic.
+
+## [1.12.6] - 2026-10-13
+
+### Added
+- **Work Item Insights closed-work chart now has a Close Month / Sprint Path switch:**
+  - Close Month is the default so October closures show under October even when the work item still has an older Azure DevOps Iteration Path.
+  - Sprint Path remains available as a diagnostic view to find stale or legacy iteration assignments such as old September sprint paths.
+
+### Fixed
+- **Closed work trends no longer depend only on sprint path naming:**
+  - The previous chart grouped by `System.IterationPath`, which could make current-month completions appear under September or another older sprint label.
+  - Close-month grouping uses the actual closed date, preserves empty months in the visible window, and keeps person/type filters and click-through item drawers.
+
 ## [1.12.5] - 2026-10-13
 
 ### Fixed

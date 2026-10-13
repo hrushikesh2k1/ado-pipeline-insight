@@ -39,7 +39,7 @@ export function sprintLabels(sprints: string[]): Record<string, string> {
   return Object.fromEntries(sprints.map(s => [s, (counts.get(leaf(s)) ?? 0) > 1 ? s.split('\\').join(' › ') : leaf(s)]))
 }
 
-// ---------------------------------------------------------------- section 1: closed per sprint, by person
+// ---------------------------------------------------------------- section 1: closed work, by person
 
 export type ClosedFilters = { persons: string[]; types: string[] }
 export type SprintBar = { sprint: string; label: string; total: number; byPerson: Record<string, number>; lastClosed: string }
@@ -69,6 +69,27 @@ export function closedBySprint(items: InsightItem[], filters: ClosedFilters): Sp
   const ordered = [...bars.values()].sort((a, b) => a.lastClosed.localeCompare(b.lastClosed))
   const labels = sprintLabels(ordered.map(b => b.sprint))
   return ordered.map(b => ({ ...b, label: labels[b.sprint] }))
+}
+
+/** Closed work items per close month. Empty months stay visible so the trend does not hide quiet/current months. */
+export function closedByMonth(items: InsightItem[], filters: ClosedFilters, months: string[]): SprintBar[] {
+  const monthSet = new Set(months)
+  const bars = new Map<string, SprintBar>()
+  for (const month of months) bars.set(month, { sprint: month, label: monthLabel(month), total: 0, byPerson: {}, lastClosed: '' })
+
+  for (const item of items) {
+    if (!isClosed(item)) continue
+    if (filters.types.length && !filters.types.includes(item.type)) continue
+    if (filters.persons.length && !filters.persons.includes(item.assigned_to)) continue
+    const month = monthKey(item.closed)
+    if (!monthSet.has(month)) continue
+    const bar = bars.get(month)!
+    bar.total += 1
+    bar.byPerson[item.assigned_to] = (bar.byPerson[item.assigned_to] ?? 0) + 1
+    if ((item.closed ?? '') > bar.lastClosed) bar.lastClosed = item.closed ?? ''
+  }
+
+  return months.map(month => bars.get(month)!)
 }
 
 /** One stacked series per person; with many people the biggest are kept and the rest become "Others". */

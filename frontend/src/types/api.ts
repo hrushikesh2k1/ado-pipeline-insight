@@ -633,6 +633,18 @@ export type WorkItemInsights = {
   job: InsightJob
 }
 
+export type WorkItemExecutiveSummary = {
+  days: number
+  since: string
+  generated_by_ai: boolean
+  summary: string
+  counts: { closed: number; created: number; active_open: number }
+  items: {
+    closed: Array<{ id: number; title: string; type: string; assigned_to: string; area: string; closed: string | null }>
+    created: Array<{ id: number; title: string; type: string; assigned_to: string; area: string; created: string | null }>
+  }
+}
+
 export type AlertInventoryUploadRequest = InsightScope & {
   filename: string
   content_base64: string

@@ -35,6 +35,7 @@ import type {
   InsightScope,
   AlertInventoryUploadRequest,
   WorkItemInsights,
+  WorkItemExecutiveSummary,
   SprintCommitRequest,
   SprintCommitResponse,
   SprintPlan,
@@ -293,6 +294,9 @@ export const api = {
   },
   workItemInsightsStatus: (scope: InsightScope) => {
     return request<InsightJob>(`/api/v1/insights/work-items/status?${insightQuery(scope)}`)
+  },
+  workItemExecutiveSummary: (scope: InsightScope, days = 2) => {
+    return request<WorkItemExecutiveSummary>(`/api/v1/insights/work-items/executive-summary?${insightQuery(scope)}&days=${days}`)
   },
   refreshWorkItemInsights: (scope: InsightScope, options: { regroup?: boolean; months?: number }, pat?: string) => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }

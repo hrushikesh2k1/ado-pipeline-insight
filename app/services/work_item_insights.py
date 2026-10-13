@@ -6,8 +6,9 @@ Only items that are new or have changed since the last refresh are sent to the A
 from __future__ import annotations
 
 import logging
+import json
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import requests
@@ -71,6 +72,38 @@ def describe_error(exc: Exception) -> str:
 
 def guess_bug_types(type_names: list[str]) -> list[str]:
     return [t for t in type_names if "bug" in t.lower() or "defect" in t.lower()]
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _short_item(item: dict[str, Any]) -> str:
+    return f"#{item.get('id')} {item.get('type')}: {item.get('title')} ({item.get('assigned_to') or 'Unassigned'}, {item.get('area') or NOT_GROUPED})"
+
+
+def _fallback_executive_summary(scope_label: str, days: int, closed: list[dict[str, Any]], created: list[dict[str, Any]],
+                                active: list[dict[str, Any]]) -> str:
+    lines = [f"Executive summary for {scope_label} over the last {days} day{'s' if days != 1 else ''}."]
+    if closed:
+        people = sorted({i.get("assigned_to") or "Unassigned" for i in closed})
+        areas = sorted({i.get("area") or NOT_GROUPED for i in closed})
+        lines.append(f"The team completed {len(closed)} work item{'s' if len(closed) != 1 else ''} across {len(areas)} area{'s' if len(areas) != 1 else ''}.")
+        lines.append("Completed work: " + "; ".join(_short_item(i) for i in closed[:8]) + ("." if len(closed) <= 8 else f"; plus {len(closed) - 8} more."))
+        lines.append("People involved: " + ", ".join(people[:10]) + ("." if len(people) <= 10 else f", plus {len(people) - 10} more."))
+    else:
+        lines.append("No work items in the saved scope were closed during this window.")
+    if created:
+        lines.append(f"{len(created)} new work item{'s were' if len(created) != 1 else ' was'} created in the same window, including " +
+                     "; ".join(_short_item(i) for i in created[:5]) + ("." if len(created) <= 5 else f"; plus {len(created) - 5} more."))
+    if active:
+        lines.append(f"Current attention: {len(active)} active or resolved work item{'s are' if len(active) != 1 else ' is'} still open in this scope.")
+    return "\n\n".join(lines)
 
 
 class WorkItemInsightsService:
@@ -231,6 +264,79 @@ class WorkItemInsightsService:
             "notes": record.get("notes") or [],
             "ai_configured": bool(settings.azure_openai_endpoint and settings.azure_openai_deployment),
             "job": self.status(key),
+        }
+
+    def executive_summary(self, organization: str, project: str, team: str = "", tag: str = "", days: int = 2) -> dict[str, Any]:
+        key = store.scope_key(organization, project, team, tag)
+        record = store.get(key) or {}
+        if not record.get("refreshed_at"):
+            raise ValueError("Refresh Work Item Insights first, then generate the executive summary.")
+
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(days=days)
+        items = []
+        for item in record.get("items") or []:
+            row = {k: item.get(k) for k in _KEPT_FIELDS if k != "rev"}
+            row["area"] = item.get("area") or NOT_GROUPED
+            row["alert_work"] = item.get("alert_work")
+            items.append(row)
+
+        closed = [i for i in items if i.get("state_category") == "completed" and (closed_at := _parse_iso(i.get("closed"))) and closed_at >= since]
+        created = [i for i in items if (created_at := _parse_iso(i.get("created"))) and created_at >= since]
+        active = [i for i in items if i.get("state_category") in {"inprogress", "resolved"}]
+        closed.sort(key=lambda i: i.get("closed") or "", reverse=True)
+        created.sort(key=lambda i: i.get("created") or "", reverse=True)
+
+        scope_label = team or (f"tag {tag}" if tag else project)
+        fallback = _fallback_executive_summary(scope_label, days, closed, created, active)
+        ai = self._ai()
+        generated_by_ai = False
+        summary = fallback
+        if ai is not None:
+            try:
+                payload = {
+                    "scope": {"organization": organization, "project": project, "team": team, "tag": tag},
+                    "lookback_days": days,
+                    "window_start_utc": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "counts": {"closed": len(closed), "created": len(created), "active_open": len(active)},
+                    "closed_items": closed[:25],
+                    "created_items": created[:15],
+                    "active_items_sample": active[:20],
+                }
+                resp = ai.client.chat.completions.create(
+                    model=ai.deployment,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "You write concise executive summaries for Azure DevOps team work. Use only the provided work item data. "
+                                "Do not invent causes, dates, people, commitments, percentages, or business impact. "
+                                "Write in plain language with these short sections: What got done, New work, Attention needed. "
+                                "Mention work item IDs when helpful. Keep it under 180 words."
+                            ),
+                        },
+                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                    ],
+                    max_tokens=450,
+                    temperature=0.2,
+                )
+                text = (resp.choices[0].message.content or "").strip()
+                if text:
+                    summary = text
+                    generated_by_ai = True
+            except Exception as exc:
+                logger.info("Work item executive summary AI call failed; using fallback: %s", type(exc).__name__)
+
+        return {
+            "days": days,
+            "since": since.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "generated_by_ai": generated_by_ai,
+            "summary": summary,
+            "counts": {"closed": len(closed), "created": len(created), "active_open": len(active)},
+            "items": {
+                "closed": [{"id": i["id"], "title": i["title"], "type": i["type"], "assigned_to": i["assigned_to"], "area": i["area"], "closed": i["closed"]} for i in closed[:10]],
+                "created": [{"id": i["id"], "title": i["title"], "type": i["type"], "assigned_to": i["assigned_to"], "area": i["area"], "created": i["created"]} for i in created[:10]],
+            },
         }
 
     # -------------------------------------------------------------- inventory

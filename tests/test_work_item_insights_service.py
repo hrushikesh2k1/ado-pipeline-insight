@@ -1,5 +1,6 @@
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -82,6 +83,23 @@ class TestFirstRefresh:
         refresh(svc, tag="monitoring")
         assert snap(svc, tag="platform")["has_data"] is False and snap(svc, tag="monitoring")["has_data"] is True
         assert snap(svc, tag="monitoring", team="Other team")["has_data"] is False
+
+    def test_executive_summary_uses_saved_recent_work_with_fallback(self):
+        now = datetime.now(timezone.utc)
+        recent_closed = (now - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        old_closed = (now - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        recent_created = (now - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        key = store.scope_key(ORG, PROJECT, "", TAG)
+        store.save(key, organization=ORG, project=PROJECT, tag=TAG, refreshed_at=recent_closed, items=[
+            {"id": 10, "rev": 1, "type": "Bug", "title": "Fix VPN alert", "state": "Closed", "state_category": "completed", "assigned_to": "Asha", "created": recent_created, "closed": recent_closed, "sprint": "Sprint 1", "area_path": "Proj\\Mon", "area": "VPN issues", "alert_work": None},
+            {"id": 11, "rev": 1, "type": "Task", "title": "Old closed task", "state": "Done", "state_category": "completed", "assigned_to": "Ben", "created": old_closed, "closed": old_closed, "sprint": "Sprint 1", "area_path": "Proj\\Mon", "area": "Other", "alert_work": None},
+            {"id": 12, "rev": 1, "type": "Bug", "title": "Active login bug", "state": "Active", "state_category": "inprogress", "assigned_to": "Cy", "created": recent_created, "closed": None, "sprint": "Sprint 1", "area_path": "Proj\\Mon", "area": "Login and authentication", "alert_work": None},
+        ])
+        result = service(FakeAdo([]), None).executive_summary(ORG, PROJECT, tag=TAG, days=2)
+        assert result["generated_by_ai"] is False
+        assert result["counts"] == {"closed": 1, "created": 2, "active_open": 1}
+        assert "#10 Bug: Fix VPN alert" in result["summary"]
+        assert "#11" not in result["summary"]
 
 
 class TestOnlyWhatChangedGoesToTheModel:
