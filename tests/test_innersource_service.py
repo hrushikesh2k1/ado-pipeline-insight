@@ -176,8 +176,10 @@ def test_fetch_innersource_leaderboard_writes_partitioned_blobs(monkeypatch):
     class FakeBlob:
         def __init__(self):
             self.data = {}
+            self.get_calls = []
 
         def get_json(self, name):
+            self.get_calls.append(name)
             return self.data.get(name)
 
         def put_json(self, name, data):
@@ -242,6 +244,7 @@ def test_fetch_innersource_leaderboard_writes_partitioned_blobs(monkeypatch):
         def query_wiql(self, project, wiql, top=None):
             raise AssertionError("cached summary should avoid Azure DevOps")
 
+    blob.get_calls = []
     cached = fetch_innersource_leaderboard(
         ShouldNotCallAdo(),
         organization="hexagon-si-gpc",
@@ -252,6 +255,10 @@ def test_fetch_innersource_leaderboard_writes_partitioned_blobs(monkeypatch):
     )
     assert cached["cached"] is True
     assert cached["total_quarter_points"] == 8
+    assert blob.get_calls == [
+        "innersource/hexagon-si-gpc/cloud_technologies/2026/manifest.json",
+        "innersource/hexagon-si-gpc/cloud_technologies/2026/summary/q2.json",
+    ]
 
 
 def test_fetch_innersource_leaderboard_migrates_legacy_year_blob(monkeypatch):

@@ -335,11 +335,30 @@ def _summary_meta(blob_name: str, manifest: dict[str, Any], cached: bool = True)
     }
 
 
+def _load_partitioned_manifest(blob_service: Any, keys: dict[str, Any]) -> dict[str, Any]:
+    manifest = blob_service.get_json(keys["manifest"])
+    if isinstance(manifest, dict) and manifest.get("layout") == "partitioned-quarter-v1":
+        return manifest
+    return {}
+
+
+def _load_summary_cache(blob_service: Any, keys: dict[str, Any], manifest: dict[str, Any], year: int, quarter: int) -> dict[str, Any] | None:
+    """Read only the selected summary blob for fast tab/quarter changes."""
+    summary = blob_service.get_json(keys["summary"][quarter])
+    if isinstance(summary, dict) and summary.get("year") == year and summary.get("quarter") == quarter:
+        logger.info("Serving InnerSource leaderboard from summary cache %s", keys["summary"][quarter])
+        summary["cached"] = True
+        summary["storage_blob_name"] = keys["summary"][quarter]
+        summary["total_cached_items"] = manifest.get("total_items", summary.get("total_cached_items", 0))
+        return summary
+    return None
+
+
 def _load_partitioned_cache(blob_service: Any, keys: dict[str, Any], organization: str, project: str, year: int) -> tuple[dict[int, dict[int, dict[str, Any]]], dict[str, Any], bool]:
     """Load the partitioned cache, migrating the old one-file-per-year cache when needed."""
     partitions: dict[int, dict[int, dict[str, Any]]] = {q: {} for q in range(1, 5)}
-    manifest = blob_service.get_json(keys["manifest"])
-    if isinstance(manifest, dict) and manifest.get("layout") == "partitioned-quarter-v1":
+    manifest = _load_partitioned_manifest(blob_service, keys)
+    if manifest:
         for q in range(1, 5):
             partitions[q] = _load_items_by_id(blob_service.get_json(keys["items"][q]))
         return partitions, manifest, False
@@ -416,17 +435,19 @@ def fetch_innersource_leaderboard(
     blob_service = get_blob_storage_service()
     keys = _get_partitioned_blob_keys(organization, project, year)
 
+    manifest = _load_partitioned_manifest(blob_service, keys)
+    if manifest and not force_refresh:
+        summary = _load_summary_cache(blob_service, keys, manifest, year, quarter)
+        if summary:
+            return summary
+
     partitions, manifest, migrated = _load_partitioned_cache(blob_service, keys, organization, project, year)
     cached_total = sum(len(v) for v in partitions.values())
 
     # Fast path: use the precomputed summary blob, so the dashboard does not read every raw work item.
     if cached_total and not force_refresh:
-        summary = blob_service.get_json(keys["summary"][quarter])
-        if isinstance(summary, dict) and summary.get("year") == year and summary.get("quarter") == quarter:
-            logger.info("Serving InnerSource leaderboard from summary cache %s", keys["summary"][quarter])
-            summary["cached"] = True
-            summary["storage_blob_name"] = keys["summary"][quarter]
-            summary["total_cached_items"] = manifest.get("total_items", cached_total)
+        summary = _load_summary_cache(blob_service, keys, manifest, year, quarter)
+        if summary:
             return summary
 
         logger.info("Summary cache missing; rebuilding summaries from %s partitioned items", cached_total)

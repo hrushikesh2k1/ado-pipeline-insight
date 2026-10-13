@@ -6,6 +6,13 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.12.3] - 2026-10-13
+
+### Fixed
+- **InnerSource quarter switching now uses the summary cache before loading raw work item partitions:**
+  - *Problem:* Switching between Q1/Q2/Q3/Q4 still took around 45 seconds because the backend loaded all raw `items/q1.json` through `items/q4.json` blobs before reading the selected quarter summary.
+  - *Fix:* The leaderboard now reads `manifest.json` and the selected `summary/qX.json` first on normal page loads, returning immediately when the summary is available. Raw item partitions are loaded only for refreshes, legacy migration, missing summaries, or cache rebuilds.
+
 ## [1.12.2] - 2026-10-13
 
 ### Fixed
