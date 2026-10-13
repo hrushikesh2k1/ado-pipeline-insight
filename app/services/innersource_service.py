@@ -15,6 +15,8 @@ from app.services.blob_storage_service import get_blob_storage_service
 
 logger = logging.getLogger(__name__)
 
+SUMMARY_SCHEMA_VERSION = 2
+
 QUARTER_MONTHS: dict[int, tuple[int, int]] = {
     1: (1, 3),
     2: (4, 6),
@@ -121,6 +123,7 @@ def calculate_leaderboard(
     organization: str,
     project: str,
     meta: dict[str, Any] | None = None,
+    story_scope: str = "all",
 ) -> dict[str, Any]:
     """Calculate the inner source leaderboard by person from a batch of work items."""
     person_data: dict[str, dict[str, Any]] = {}
@@ -180,17 +183,19 @@ def calculate_leaderboard(
             person_data[name]["quarter_stories_count"] += 1
             total_quarter_points += points
 
-        person_data[name]["stories"].append({
-            "id": item_id,
-            "title": title,
-            "type": w_type,
-            "state": state,
-            "points": round(points, 2),
-            "closed_date": date_str,
-            "quarter": item_quarter,
-            "iteration_path": iter_path,
-            "url": f"https://dev.azure.com/{quote(organization, safe='')}/{quote(project, safe='')}/_workitems/edit/{item_id}",
-        })
+        include_story = story_scope == "all" or (story_scope == "quarter" and item_quarter == quarter)
+        if include_story:
+            person_data[name]["stories"].append({
+                "id": item_id,
+                "title": title,
+                "type": w_type,
+                "state": state,
+                "points": round(points, 2),
+                "closed_date": date_str,
+                "quarter": item_quarter,
+                "iteration_path": iter_path,
+                "url": f"https://dev.azure.com/{quote(organization, safe='')}/{quote(project, safe='')}/_workitems/edit/{item_id}",
+            })
 
     leaderboard = list(person_data.values())
     for p in leaderboard:
@@ -222,6 +227,7 @@ def calculate_leaderboard(
         "last_synced_at": meta_info.get("last_synced_at"),
         "cached": bool(meta_info.get("cached", False)),
         "total_cached_items": meta_info.get("total_items", len(work_items)),
+        "summary_schema_version": meta_info.get("summary_schema_version"),
     }
 
 
@@ -332,6 +338,7 @@ def _summary_meta(blob_name: str, manifest: dict[str, Any], cached: bool = True)
         "last_synced_at": manifest.get("last_synced_at"),
         "cached": cached,
         "total_items": manifest.get("total_items", 0),
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION,
     }
 
 
@@ -345,7 +352,12 @@ def _load_partitioned_manifest(blob_service: Any, keys: dict[str, Any]) -> dict[
 def _load_summary_cache(blob_service: Any, keys: dict[str, Any], manifest: dict[str, Any], year: int, quarter: int) -> dict[str, Any] | None:
     """Read only the selected summary blob for fast tab/quarter changes."""
     summary = blob_service.get_json(keys["summary"][quarter])
-    if isinstance(summary, dict) and summary.get("year") == year and summary.get("quarter") == quarter:
+    if (
+        isinstance(summary, dict)
+        and summary.get("year") == year
+        and summary.get("quarter") == quarter
+        and summary.get("summary_schema_version") == SUMMARY_SCHEMA_VERSION
+    ):
         logger.info("Serving InnerSource leaderboard from summary cache %s", keys["summary"][quarter])
         summary["cached"] = True
         summary["storage_blob_name"] = keys["summary"][quarter]
@@ -405,6 +417,7 @@ def _persist_partitioned_cache(
             organization,
             project,
             _summary_meta(keys["summary"][q], manifest),
+            story_scope="quarter",
         )
         quarter_summary["total_cached_items"] = total_items
         blob_service.put_json(keys["summary"][q], quarter_summary)
@@ -416,6 +429,7 @@ def _persist_partitioned_cache(
         organization,
         project,
         _summary_meta(keys["summary"]["ytd"], manifest),
+        story_scope="none",
     )
     ytd_summary["total_cached_items"] = total_items
     blob_service.put_json(keys["summary"]["ytd"], ytd_summary)

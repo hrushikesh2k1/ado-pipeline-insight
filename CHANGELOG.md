@@ -6,6 +6,13 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.12.4] - 2026-10-13
+
+### Fixed
+- **InnerSource summary blobs are now compact and versioned for faster quarter switching:**
+  - *Problem:* `v1.12.3` read the summary blob first, but existing summary blobs could still contain full yearly story drilldowns, keeping the response large and slow.
+  - *Fix:* Quarter summaries now store only the selected quarter's story details while preserving yearly totals and per-quarter points. Old large summaries are treated as stale and rebuilt once into the compact schema.
+
 ## [1.12.3] - 2026-10-13
 
 ### Fixed

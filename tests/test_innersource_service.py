@@ -239,6 +239,9 @@ def test_fetch_innersource_leaderboard_writes_partitioned_blobs(monkeypatch):
     assert "innersource/hexagon-si-gpc/cloud_technologies/2026/summary/q2.json" in blob.data
     assert len(blob.data["innersource/hexagon-si-gpc/cloud_technologies/2026/items/q2.json"]) == 1
     assert len(blob.data["innersource/hexagon-si-gpc/cloud_technologies/2026/items/q3.json"]) == 1
+    assert blob.data["innersource/hexagon-si-gpc/cloud_technologies/2026/summary/q2.json"]["summary_schema_version"] == 2
+    assert len(blob.data["innersource/hexagon-si-gpc/cloud_technologies/2026/summary/q2.json"]["leaderboard"][0]["stories"]) == 1
+    assert blob.data["innersource/hexagon-si-gpc/cloud_technologies/2026/summary/q2.json"]["leaderboard"][0]["stories"][0]["quarter"] == 2
 
     class ShouldNotCallAdo(FakeAdo):
         def query_wiql(self, project, wiql, top=None):
