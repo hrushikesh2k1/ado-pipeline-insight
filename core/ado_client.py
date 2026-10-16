@@ -220,6 +220,16 @@ class AzureDevOpsClient:
         response.raise_for_status()
         return self._json_response(response).get("value", [])
 
+    def list_test_runs_for_build(self, project: str, build_id: int, top: int = 50) -> list[dict[str, Any]]:
+        """Published test runs for one build; an empty list does not mean tests passed."""
+        response = self.session.get(
+            self._url(project, "_apis/test/runs"),
+            params={"buildUri": f"vstfs:///Build/Build/{int(build_id)}", "includeRunDetails": "true",
+                    "$top": top, "api-version": self.api_version}, timeout=30,
+        )
+        response.raise_for_status()
+        return self._json_response(response).get("value", [])
+
     @staticmethod
     def _read_text(response: requests.Response, max_bytes: int) -> tuple[str | None, str | None]:
         """The text of a streamed file response: (text, None), or (None, 'too_large' | 'binary' | 'unreadable')."""

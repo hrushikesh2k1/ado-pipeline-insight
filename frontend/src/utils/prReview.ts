@@ -1,4 +1,4 @@
-import type { AdoPullRequest, PullRequestChecklistCheck, PullRequestKnowledgeCheck, PullRequestReviewComment, PullRequestReviewJob, PullRequestReviewModelInfo, PullRequestReviewModels, PullRequestReviewResponse, PullRequestReviewedFile, ReviewModelChoice } from '../types/api'
+import type { AdoPullRequest, PullRequestChecklistCheck, PullRequestKnowledgeCheck, PullRequestReviewComment, PullRequestReviewJob, PullRequestReviewModelInfo, PullRequestReviewModels, PullRequestReviewResponse, PullRequestReviewedFile, ReviewModeChoice, ReviewModelChoice } from '../types/api'
 
 /** The tool reads code changes; it does not approve a pull request. The wording says what it found, not what to decide. */
 const VERDICT_LABEL: Record<string, string> = {
@@ -146,6 +146,18 @@ export const KNOWLEDGE_STATUS_TIP: Record<PullRequestKnowledgeCheck['status'], s
   nothing_reported: 'An AI read the changed code with this check in mind and reported no problem. Nothing was run.',
   not_applicable: 'No file in this pull request is of the kind this check names.',
   could_not_check: 'The AI call for this check failed.',
+}
+
+// ---------------------------------------------------------------- review mode
+
+export const REVIEW_MODE_LABEL: Record<ReviewModeChoice, string> = { strict: 'Strict', deep: 'Deep' }
+export const REVIEW_MODE_TIP: Record<ReviewModeChoice, string> = {
+  strict: 'Investigates changed code and related repository files, then independently checks findings and cross-file contracts.',
+  deep: 'Uses repository investigation and cross-file checks with extra scrutiny for tests, config, error paths and design risks.',
+}
+
+export function reviewModeChanged(used: ReviewModeChoice | null | undefined, current: ReviewModeChoice): boolean {
+  return Boolean(used) && used !== current
 }
 
 export function knowledgeCounts(checks: PullRequestKnowledgeCheck[]): Record<PullRequestKnowledgeCheck['status'], number> {

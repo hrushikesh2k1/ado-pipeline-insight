@@ -113,7 +113,7 @@ export const FilesCard: React.FC<{ files: PullRequestReviewedFile[] }> = ({ file
   if (files.length === 0) return null
   const { reviewed, skipped } = filesCounts(files)
   return (
-    <details className="prp prpCard" data-testid="pr-files" open={skipped > 0 && reviewed === 0}>
+    <details className="prp prpCard" data-testid="pr-files" open={skipped > 0}>
       <summary className="prpSummary">
         <FileCode size={15} /> <span>What was reviewed: {reviewed} of {files.length} changed file{files.length === 1 ? '' : 's'}</span>
       </summary>

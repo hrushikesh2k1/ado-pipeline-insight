@@ -79,6 +79,11 @@ class RepoReader:
 
     # ------------------------------------------------------------ reading
 
+    def seed(self, path: str, text: str) -> None:
+        """Reuse source-commit text already fetched for the diff; never seed base text."""
+        with self._lock:
+            self._cache[_clean_path(path)] = (text, None)
+
     def read(self, path: str) -> tuple[str | None, str | None]:
         """(text, None) or (None, why not). Each file is fetched once."""
         path = _clean_path(path)

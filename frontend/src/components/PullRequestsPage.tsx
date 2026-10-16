@@ -16,11 +16,11 @@ import {
   Sparkles,
 } from 'lucide-react'
 import { api } from '../services/api'
-import type { AdoRepository, AdoPullRequest, AdoReviewer, PullRequestReviewModels, PullRequestReviewResponse, ReviewModelChoice } from '../types/api'
+import type { AdoRepository, AdoPullRequest, AdoReviewer, PullRequestReviewModels, PullRequestReviewResponse, ReviewModeChoice, ReviewModelChoice } from '../types/api'
 import { PrReviewDrawer } from './PrReviewDrawer'
 import { PrKnowledgeBase } from './PrKnowledgeBase'
 import { PrModelSelect } from './PrModelSelect'
-import { chosenModel, isPrApproved, knowledgeChanged, loadKnowledge, modelChanged, progressText, reviewIsStale, saveKnowledge } from '../utils/prReview'
+import { REVIEW_MODE_LABEL, chosenModel, isPrApproved, knowledgeChanged, loadKnowledge, modelChanged, progressText, reviewIsStale, reviewModeChanged, saveKnowledge } from '../utils/prReview'
 import { usePlugins } from '../context/PluginContext'
 
 interface PullRequestsPageProps {
@@ -126,12 +126,17 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
   const [reviewsCache, setReviewsCache] = useState<Record<number, PullRequestReviewResponse>>({})
   const [reviewError, setReviewError] = useState<{ prId: number; message: string } | null>(null)
   const [reviewProgress, setReviewProgress] = useState<{ prId: number; text: string } | null>(null)
+  const [reviewModeByPr, setReviewModeByPr] = useState<Record<number, ReviewModeChoice>>({})
+  const [reviewModeUsed, setReviewModeUsed] = useState<Record<number, ReviewModeChoice>>({})
 
   // The user's own checks for every review (kept in this browser, sent with each review)
   const [knowledge, setKnowledge] = useState<string>(loadKnowledge)
   const [reviewKnowledge, setReviewKnowledge] = useState<Record<number, string>>({})  // the checks each cached review was made with
   useEffect(() => { saveKnowledge(knowledge) }, [knowledge])
   const knowledgeChangedFor = (prId: number) => Boolean(reviewsCache[prId]) && knowledgeChanged(reviewKnowledge[prId], showAiPrReviewer ? knowledge : '')
+  const modeFor = (prId: number): ReviewModeChoice => reviewModeByPr[prId] ?? 'strict'
+  const setModeFor = (prId: number, mode: ReviewModeChoice) => setReviewModeByPr((prev) => ({ ...prev, [prId]: mode }))
+  const reviewModeChangedFor = (prId: number) => Boolean(reviewsCache[prId]) && reviewModeChanged(reviewModeUsed[prId], modeFor(prId))
 
   // Which model reviews each pull request: the server says what it has; every pull request has its own choice, sent with its review
   const [models, setModels] = useState<PullRequestReviewModels | null>(null)
@@ -152,12 +157,13 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
     // A review made at the commit that is still at the tip of the branch, with the checks written now, is shown as it is; after new commits,
     // after the knowledge base changed, or when asked, it is made again
     const cached = reviewsCache[targetPr.id]
-    if (cached && !force && !reviewIsStale(cached, targetPr) && !knowledgeChangedFor(targetPr.id) && !modelChangedFor(targetPr.id)) {
+    if (cached && !force && !reviewIsStale(cached, targetPr) && !knowledgeChangedFor(targetPr.id) && !modelChangedFor(targetPr.id) && !reviewModeChangedFor(targetPr.id)) {
       setActiveReview({ pr: targetPr, review: cached })
       return
     }
     const usedKnowledge = knowledge
     const usedModel = modelFor(targetPr.id)
+    const usedMode = modeFor(targetPr.id)
 
     setReviewingPrId(targetPr.id)
     setReviewError(null)
@@ -171,6 +177,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
       pat,
       knowledge: usedKnowledge.trim() ? usedKnowledge : undefined,
       model: canChooseModel ? usedModel : undefined,
+      review_mode: usedMode,
     }, (job) => setReviewProgress({ prId: targetPr.id, text: progressText(job) }))
       .then((res) => {
         setReviewingPrId(null)
@@ -178,6 +185,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
         setReviewsCache((prev) => ({ ...prev, [targetPr.id]: res }))
         setReviewKnowledge((prev) => ({ ...prev, [targetPr.id]: usedKnowledge }))
         setReviewModel((prev) => ({ ...prev, [targetPr.id]: usedModel }))
+        setReviewModeUsed((prev) => ({ ...prev, [targetPr.id]: usedMode }))
         setActiveReview({ pr: targetPr, review: res })
       })
       .catch((err) => {
@@ -690,6 +698,21 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
                           />
                         )}
                         {showAiPrReviewer && (
+                          <label className="prReviewMode" title="Strict keeps the highest-confidence review. Deep adds extra checks for tests, contracts, config, error paths and design risks.">
+                            <span>Mode</span>
+                            <select
+                              value={modeFor(pr.id)}
+                              disabled={reviewingPrId === pr.id}
+                              aria-label="PR review mode"
+                              data-testid={`pr-review-mode-${pr.id}`}
+                              onChange={(event) => setModeFor(pr.id, event.target.value === 'deep' ? 'deep' : 'strict')}
+                            >
+                              <option value="strict">{REVIEW_MODE_LABEL.strict}</option>
+                              <option value="deep">{REVIEW_MODE_LABEL.deep}</option>
+                            </select>
+                          </label>
+                        )}
+                        {showAiPrReviewer && (
                           <button
                             type="button"
                             className={`prAddReviewCommentsBtn ${reviewsCache[pr.id] ? 'reviewed' : ''}`}
@@ -702,7 +725,7 @@ export const PullRequestsPage: React.FC<PullRequestsPageProps> = ({
                               {reviewingPrId === pr.id
                                 ? 'Reviewing...'
                                 : reviewsCache[pr.id]
-                                ? reviewIsStale(reviewsCache[pr.id], pr) ? 'Review again (new commits)' : knowledgeChangedFor(pr.id) ? 'Review again (knowledge base changed)' : modelChangedFor(pr.id) ? 'Review again (model changed)' : 'View AI review'
+                                ? reviewIsStale(reviewsCache[pr.id], pr) ? 'Review again (new commits)' : knowledgeChangedFor(pr.id) ? 'Review again (knowledge base changed)' : modelChangedFor(pr.id) ? 'Review again (model changed)' : reviewModeChangedFor(pr.id) ? 'Review again (mode changed)' : 'View AI review'
                                 : 'Review with AI'}
                             </span>
                           </button>

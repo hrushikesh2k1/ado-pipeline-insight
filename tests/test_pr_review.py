@@ -50,7 +50,8 @@ class TestWhichFilesAreRead:
         assert (rows[REPORT]["status"], rows[REPORT]["language"]) == ("reviewed", "Python")
         assert (rows[TOTALS]["status"], rows[TOTALS]["language"]) == ("reviewed", "PowerShell")
         assert (rows["CHANGELOG.md"]["status"], rows["CHANGELOG.md"]["reason"]) == ("skipped", "documentation (a changelog)")
-        assert result["method"] == "diff-per-file" and result["posted_to_ado"] is False
+        assert "Files not reviewed: CHANGELOG.md (documentation (a changelog))." in result["notes"]
+        assert result["method"] == "repository-investigation" and result["posted_to_ado"] is False
         assert result["source_commit"] == "a" * 40 and result["iterations"] == 1
 
     def test_the_reviewer_is_shown_the_diff_not_the_whole_file_as_if_it_were_new(self):
@@ -127,7 +128,7 @@ class TestWhichFilesAreRead:
         ado = FakeAdo(changes=[change(n, "add") for n in yaml] + [change("/tools/x.ps1", "add")], blobs={**{f"new-{n}": "a: 1\n" for n in yaml}, "new-/tools/x.ps1": "Get-Date\n"})
         rows = by_path(run(ado)[0])
         assert rows["tools/x.ps1"]["status"] == "reviewed"
-        assert rows[f"ci/p{limit - 1:02d}.yml"]["status"] == "skipped"
+        assert sum(1 for name in yaml if rows[name.lstrip("/")]["status"] == "skipped") == 1
 
     def test_only_a_changelog_means_nothing_is_reviewed_and_the_model_is_not_asked(self):
         ado = FakeAdo(changes=[change("/CHANGELOG.md")])
@@ -253,10 +254,10 @@ class TestSecondCheck:
 
     def test_a_finding_the_checker_does_not_mention_stays_unconfirmed(self):
         class Silent(FakePrModel):
-            def _create(self, model, messages, temperature=0, response_format=None):
+            def _create(self, model, messages, temperature=0, response_format=None, **kwargs):
                 if messages[0]["content"].startswith("You check findings"):
                     return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"findings": []}'))])
-                return super()._create(model, messages, temperature, response_format)
+                return super()._create(model, messages, temperature, response_format, **kwargs)
 
         model = Silent({REPORT: [finding(17)]})
         model.client.chat.completions.create = model._create
@@ -439,12 +440,12 @@ class TestAiFailures:
         class Flaky(FakePrModel):
             attempts = 0
 
-            def _create(self, model, messages, temperature=0, response_format=None):
-                if messages[0]["content"].startswith("You review one changed file") and f"File: {REPORT}" in messages[1]["content"]:
+            def _create(self, model, messages, temperature=0, response_format=None, **kwargs):
+                if messages[0]["content"].startswith("You review one changed file") and messages[1]["content"].startswith(f"File: {REPORT}\n"):
                     Flaky.attempts += 1
                     if Flaky.attempts == 1:
                         raise RuntimeError("busy")
-                return super()._create(model, messages, temperature, response_format)
+                return super()._create(model, messages, temperature, response_format, **kwargs)
 
         model = Flaky({REPORT: [finding(17)]})
         model.client.chat.completions.create = model._create
@@ -935,4 +936,4 @@ class TestNothingIsMadeUp:
 
     def test_the_scope_of_the_review_is_always_stated(self):
         result, _, _ = run()
-        assert "cannot judge how the result looks" in result["scope_note"]
+        assert "does not execute code or tests" in result["scope_note"]

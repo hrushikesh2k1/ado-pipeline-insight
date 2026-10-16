@@ -198,7 +198,7 @@ class TestWhatTheAiIsToldAbout:
         _, _, model = run()
         prompt = next(u for u in model.calls_of("file") if u.startswith(f"File: {REPORT}"))
         line = next(l for l in prompt.splitlines() if l.startswith("Other files changed in this pull request"))
-        assert "you cannot see them here" in line and "scripts/totals.ps1" in line and "tests/test_report.py" in line and REPORT not in line
+        assert "inspect related excerpts or use repository tools" in line and "scripts/totals.ps1" in line and "tests/test_report.py" in line and REPORT not in line
 
     def test_a_pull_request_of_one_file_has_no_such_line(self):
         _, _, model = run(FakeAdo(changes=[change("/scripts/report.py")]))
@@ -231,7 +231,7 @@ class TestWhatTheAiIsToldAbout:
         assert any(f["status"] == "reviewed" for f in result["files"])
 
     def test_the_rules_about_other_files_compile_errors_and_dates_are_in_the_prompts(self):
-        for part in ("You see this one file only", "Do not report that code will not compile", "a date on or before today is not in the future", "syntax that the project's language version supports is valid"):
+        for part in ("Anchor comments to this file's changed lines", "Do not report that code will not compile", "a date on or before today is not in the future", "syntax that the project's language version supports is valid"):
             assert part in pr_review.FILE_SYSTEM
         assert "does not hold unless the project facts show the syntax is newer" in pr_review.VERIFY_SYSTEM
 
@@ -503,7 +503,7 @@ class TestProgressAndTheTimeAllowed:
         told = []
         PullRequestReviewService(FakeAdo(), FakePrModel()).review("proj", "repo", 7, progress=lambda done, total, message: told.append((done, total, message)))
         assert told[0] == (0, 0, "Reading the pull request") and told[-1] == (1, 1, "Writing the summary")
-        assert (0, 3, "Reviewing 3 files") in told and told[-2] == (3, 3, "Reviewed 3 of 3 files")
+        assert (0, 3, "Reviewing 3 files") in told and (3, 3, "Reviewed 3 of 3 files") in told and any("Investigating interactions" in message for _, _, message in told)
         assert [done for done, total, message in told if message.startswith("Reviewed ")] == [1, 2, 3]
 
     def test_the_review_works_without_a_progress_listener(self):

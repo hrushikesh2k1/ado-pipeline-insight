@@ -116,6 +116,9 @@ export type PullRequestChecklistCheck = {
 /** Which model reviews: the standard deployment or the optional strong one. */
 export type ReviewModelChoice = 'standard' | 'strong'
 
+/** How broad the PR review should be. */
+export type ReviewModeChoice = 'strict' | 'deep'
+
 /** The models a review can use; a name is null when it is not set up. */
 export type PullRequestReviewModels = {
   standard: string | null

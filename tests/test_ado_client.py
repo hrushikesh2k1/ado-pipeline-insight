@@ -125,3 +125,19 @@ def test_work_items_batch_never_combines_fields_and_expand():
     only_fields = client.get_work_items_batch("project", [3], fields=["System.Id", "System.Title"])
     assert [w["id"] for w in only_fields] == [3]
     assert session.payloads[-1]["fields"] == ["System.Id", "System.Title"] and "$expand" not in session.payloads[-1]
+
+
+def test_test_runs_are_filtered_by_build_with_details_and_a_timeout():
+    class Session:
+        headers = {}
+        call = None
+        def get(self, url, params=None, timeout=None):
+            self.call = (url, params, timeout)
+            return _FakeResponse([{'id': 23, 'state': 'Completed'}])
+    session = Session()
+    rows = AzureDevOpsClient('example', 'test', session=session).list_test_runs_for_build('proj', 42)
+    url, params, timeout = session.call
+    assert url.endswith('/_apis/test/runs')
+    assert params['buildUri'] == 'vstfs:///Build/Build/42'
+    assert params['includeRunDetails'] == 'true' and params['$top'] == 50
+    assert timeout == 30 and rows[0]['id'] == 23

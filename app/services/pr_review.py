@@ -20,6 +20,9 @@ from app.services.pr_arm import ARM_LANGUAGE, ARM_LINE_WIDTH, arm_context, is_ar
 from app.services.pr_json import JSON_LANGUAGE, JSON_LINE_WIDTH
 from app.services.pr_checklist import evaluate_checklist, linked_build_ids, parse_checklist, placeholder_checks
 from app.services import pr_checks, pr_json, pr_knowledge
+from app.services import pr_investigation
+from app.services import pr_validation
+from app.services.pr_guidance import AZURE_PIPELINES_GUIDE, CLOUD_OPERATIONS_GUIDE, TYPESCRIPT_GUIDE, focused_guides
 from app.services.pr_diff import LINE_WIDTH, FileView, build_view, classify, priority, suggestable
 from app.services.pr_lookup import TOOLS, RepoReader, ToolBelt, csharp_facts
 from app.services.pr_static import static_findings
@@ -27,13 +30,13 @@ from core.openai_client import PipelineRecommendationClient
 
 logger = logging.getLogger(__name__)
 
-MAX_FILES = 50
+MAX_FILES = 120
 MAX_FINDINGS_PER_FILE = 8
 EVIDENCE_SHOWN_CHARS = 360  # of the quoted code shown with a finding (the whole quote is checked against the file first)
 MAX_SPAN = 40
 WORKERS = 5
 MAX_FILE_BYTES = 1_000_000
-MAX_EXAMINED = 150  # files looked at in one review, whether or not they turn out to be reviewable
+MAX_EXAMINED = 500  # files looked at in one review, whether or not they turn out to be reviewable
 MAX_VERIFY_TURNS = 6  # model calls in one second check (lookups included); the last one must answer
 MAX_OTHER_FILES = 40  # names of the pull request's other changed files that the reviewer is told about
 MAX_DESCRIPTION_CHARS = 8000  # of the pull request description, after the checklist lines are taken out
@@ -45,15 +48,15 @@ EVIDENCE_NEAR = 5  # lines: the changed code a finding quotes has to be this clo
 MIN_TRACE_CHARS = 20  # the steps by which a finding says the code gives the wrong result
 TRACE_REQUIRED = True
 REVIEW_BUDGET_SECONDS = 170  # a review answered inside one web request: Azure App Service ends a request after 230 s, so a slow model gives a partial review, not a timeout
-BACKGROUND_BUDGET_SECONDS = 600  # a review that runs in the background (see pr_review_jobs) has no request to keep alive
+BACKGROUND_BUDGET_SECONDS = 1200  # a review that runs in the background (see pr_review_jobs) has no request to keep alive
 CATEGORIES = ("correctness", "security", "performance", "maintainability", "test_coverage")
 SOFT_CATEGORIES = ("maintainability", "test_coverage")  # findings here are capped at "suggestion"
 SEVERITIES = ("critical", "warning", "suggestion")
 RESOLVED = {"fixed", "closed", "wontFix", "byDesign"}
 STATUS_WORDS = {"active": "open", "pending": "pending", "fixed": "resolved", "closed": "closed", "wontFix": "won't fix", "byDesign": "by design"}
 
-SCOPE_NOTE = ("This review reads the code changes only. It cannot judge how the result looks or behaves when it runs: "
-              "run it and look at the output yourself.")
+SCOPE_NOTE = ("This review inspects diffs and related repository code at the PR source commit, including cross-file interactions. "
+              "It does not execute code or tests. File, excerpt, lookup and time limits can leave gaps; inspect coverage notes and run your tests.")
 
 COMMON_GUIDE = "Look for correctness, security and error-handling problems in the changed lines."
 CSHARP_GUIDE = (
@@ -126,8 +129,9 @@ JSON_GUIDE = (
     "a change made by hand is lost the next time the script runs, unless the script is among the changed files. "
     "Exact checks in code already report a file that is not valid JSON, a key written twice and a secret in the file: do not report those."
 )
-GUIDES = {"Python": PYTHON_GUIDE, "PowerShell": POWERSHELL_GUIDE, ARM_LANGUAGE: ARM_GUIDE, "KQL": KQL_GUIDE, "C#": CSHARP_GUIDE, "Markdown": MARKDOWN_GUIDE, "SQL": SQL_GUIDE, JSON_LANGUAGE: JSON_GUIDE}
-LOOKUP_FIRST_LANGUAGES = (JSON_LANGUAGE,)  # the first read may look things up here: what a JSON file says is mostly about code and files elsewhere
+GUIDES = {"Python": PYTHON_GUIDE, "PowerShell": POWERSHELL_GUIDE, ARM_LANGUAGE: ARM_GUIDE, "KQL": KQL_GUIDE, "C#": CSHARP_GUIDE, "Markdown": MARKDOWN_GUIDE, "SQL": SQL_GUIDE, JSON_LANGUAGE: JSON_GUIDE,
+          "TypeScript": TYPESCRIPT_GUIDE, "TypeScript (React)": TYPESCRIPT_GUIDE,
+          "JavaScript": TYPESCRIPT_GUIDE, "JavaScript (React)": TYPESCRIPT_GUIDE}
 
 FILE_SYSTEM = """You review one changed file of an Azure DevOps pull request. The file is shown as a diff: every line has its line number in the new version, a "+" marks a line this pull request added or changed, a "-" marks a line it removed, and unmarked lines are unchanged context.
 
@@ -145,8 +149,8 @@ Rules:
 - Do not ask the author to verify or confirm something. State a defect you can show, or leave the finding out.
 - If the pull request description, a comment in the code, a name in the code or the alert's own description says a behaviour is intended, do not report it unless you can show a concrete case where it gives a wrong result.
 - Report each problem once. If the same problem appears on several lines, write one finding (use end_line, or name the other lines in the text), not one per line.
-- You see this one file only. Do not report what might be wrong in other files, a name you cannot see defined, or code you cannot see: the other files of this pull request are listed only so you know they exist.
-- Do not report that code will not compile or has a syntax error: the build checks that. Believe the project facts and today's date you are given: a date on or before today is not in the future, and syntax that the project's language version supports is valid.
+- Anchor comments to this file's changed lines. Investigate related files using supplied excerpts and repository tools before judging cross-file contracts. Supporting code in another file can establish the concrete failure; never infer a missing definition from an incomplete search or invent code you have not read.
+- Do not report that code will not compile or has a syntax error based on a guess. Do not assume a build or test ran, passed, or covered this change; use the supplied commit-specific validation evidence and its stated coverage. Believe the project facts and today's date you are given: a date on or before today is not in the future, and syntax that the project's language version supports is valid.
 - Before you say a name, label, order or value is wrong, find how the rest of the file does the same thing, and follow the file's own convention. Do not report a difference from your own preference.
 - If the description says some code was only moved, renamed or brought into the repository and its logic is unchanged, do not report problems in that logic; report only what the move or rename broke.
 - Never write that there is no failing case: a finding without one is left out.
@@ -226,6 +230,16 @@ class ReviewFailed(Exception):
 
 
 MODEL_CHOICES = ("standard", "strong")
+REVIEW_MODES = ("strict", "deep")
+
+DEEP_REVIEW_SYSTEM = """
+
+DEEP REVIEW MODE. Keep all the evidence rules above. In addition, spend extra attention on:
+- changed behavior that has no test coverage in this pull request;
+- API, data contract, configuration and deployment risks;
+- error paths, empty states, retries, timeouts and authorization boundaries;
+- mismatches between the pull request description, changed files and existing comments.
+Do not invent architecture concerns. A deep-mode finding still needs a concrete case, exact evidence from the shown changed code, and a trace."""
 
 
 def review_models() -> dict[str, Any]:
@@ -605,6 +619,8 @@ def verify_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
     by_code = ("Findings already made by exact checks in code:\n" + "\n".join(f"S{n}: line {s['line_number']}: {s['title']}" for n, s in enumerate(exact, 1)) + "\n\n") if exact else ""
     user = (f"File: {view.path} ({view.language})\n{facts_block(view)}\n\n{why}{others}Comments people already made:\n{comments_block(existing)}\n\n{by_code}"
             "Findings to check:\n" + _finding_lines(findings) + alerts + f"\n\nThe file:\n\n{view.shown}")
+    user += pr.get("investigation_context", "")
+    user += pr_validation.block(pr.get("validation"))
 
     def ask() -> dict[str, Any]:
         if belt is not None:
@@ -693,6 +709,8 @@ def refute_findings(model: Any, view: FileView, findings: list[dict[str, Any]], 
     alerts = f"\n\nThe alert rules, read from the template:\n{view.extra}" if view.extra else ""
     alerts += f"\n\nWhere each changed part sits in the JSON structure:\n{view.outline}" if view.outline else ""
     user = f"File: {view.path} ({view.language})\n{facts_block(view)}\n\n{why}Findings to try to prove wrong:\n{_finding_lines(findings)}{alerts}\n\nThe file:\n\n{view.shown}"
+    user += pr.get("investigation_context", "")
+    user += pr_validation.block(pr.get("validation"))
 
     def ask() -> dict[str, Any]:
         if belt is not None:
@@ -736,7 +754,7 @@ def file_prompt(view: FileView, pr: dict[str, Any], existing: list[dict[str, Any
     alerts = f"What the alert rules in this template are, and what changed in them:\n{view.extra}\n\n" if view.extra else ""
     alerts += f"Where each changed part sits in the JSON structure:\n{view.outline}\n\n" if view.outline else ""
     others = [p for p in pr.get("others") or [] if p != view.path]
-    listed = f"Other files changed in this pull request (you cannot see them here): {', '.join(others)}\n\n" if others else ""
+    listed = f"Other files changed in this pull request (inspect related excerpts or use repository tools): {', '.join(others)}\n\n" if others else ""
     checks = pr_knowledge.block(team or [], team_hits or [])
     checks = f"{checks}\n\n" if checks else ""
     checklist = pr_checks.block(pr_checks.checks_for(view.language))
@@ -771,11 +789,18 @@ def review_file(model: Any, view: FileView, pr: dict[str, Any], threads: list[di
     find, and note what people already said."""
     existing = context_threads(threads, view.path)
     system = FILE_SYSTEM.format(guide=GUIDES.get(view.language, COMMON_GUIDE)) + CHECKLIST_SYSTEM
-    looks_things_up = belt is not None and view.language in LOOKUP_FIRST_LANGUAGES
+    if pr.get("review_mode") == "deep":
+        system += DEEP_REVIEW_SYSTEM
+    looks_things_up = belt is not None
+    system += pr_investigation.INVESTIGATION_GUIDE
     system += FIRST_PASS_TOOLS if looks_things_up else ""
     team = pr_knowledge.for_language(pr.get("knowledge") or [], view.language)  # the team's own checks that are about this kind of file
     hits = pr_knowledge.literal_hits(team, view.new_lines, view.added)
     prompt = file_prompt(view, pr, existing, team, hits)
+    prompt += pr.get("investigation_context", "")
+    prompt += pr_validation.block(pr.get("validation"))
+    extras = focused_guides(view.language, view.path, view.new_text or "")
+    system += "\n\n" + "\n\n".join(g for g in extras if g != GUIDES.get(view.language))
     if looks_things_up:
         answer = with_retry(lambda: chat_json_with_tools(model, system, prompt, TOOLS, belt.run, max_turns=MAX_VERIFY_TURNS, temperature=0.1))
     else:
@@ -907,7 +932,7 @@ class PullRequestReviewService:
         return old, new, None
 
     def review(self, project: str, repository_id: str, pull_request_id: int, progress: Callable[[int, int, str], None] | None = None,
-               budget: float = REVIEW_BUDGET_SECONDS, knowledge: str = "") -> dict[str, Any]:
+               budget: float = REVIEW_BUDGET_SECONDS, knowledge: str = "", review_mode: str = "strict") -> dict[str, Any]:
         """The review of one pull request. `progress(done, total, message)` is told how far it has got; `budget` is the seconds the model calls may take;
         `knowledge` is the team's own checks, as the user wrote them (see pr_knowledge)."""
         tell = progress or (lambda done, total, message: None)
@@ -926,16 +951,27 @@ class PullRequestReviewService:
 
         description = pr.get("description") or ""
         team = pr_knowledge.parse(knowledge)
-        context = {"title": pr.get("title") or f"Pull request {pull_request_id}", "description": clean_description(description), "knowledge": team}
+        mode = review_mode if review_mode in REVIEW_MODES else "strict"
+        context = {"title": pr.get("title") or f"Pull request {pull_request_id}", "description": clean_description(description), "knowledge": team, "review_mode": mode}
         threads = thread_summaries(self._optional(notes, "The existing comments", lambda: self.ado.get_pull_request_threads(project, repository_id, pull_request_id)))
         work_items = self._optional(notes, "The linked work items", lambda: [str(w.get("id")) for w in self.ado.get_pull_request_work_items(project, repository_id, pull_request_id)])
         build_check = self._build_check(project, pr, description)
+        context["validation"] = pr_validation.collect(self.ado, project, repository_id, pr.get("sourceRefName") or "", refs["source"])
+        notes.append("Build/test evidence is limited to recent source-branch builds and published tests; missing evidence is treated as unknown.")
 
         tell(0, 0, "Reading the changed files")
         reader = RepoReader(self.ado, project, repository_id, refs["source"], [(e.get("item") or {}).get("path", "") for e in entries]) if refs["source"] else None
         files, views = self._plan(project, repository_id, entries, refs, reader)
         context["others"] = [f["path"] for f in files][:MAX_OTHER_FILES]
-        results, failures = self._review_all(views, context, threads, reader, budget, tell)
+        context["all_changes"] = [f"{f['change_type']}: {f['path']}" for f in files]
+        context["focused_guidance"] = {v.path: focused_guides(v.language, v.path, v.new_text or "") for v in views}
+        if reader is not None:
+            for view in views:
+                reader.seed(view.path, view.new_text)
+        started = time.monotonic()
+        file_budget = budget * 0.75 if len(views) > 1 and reader is not None else budget
+        results, failures = self._review_all(views, context, threads, reader, file_budget, tell, deadline=started + file_budget)
+        self._review_interactions(views, results, context, threads, reader, started + budget, tell, notes)
         for path, reason in failures.items():
             self._mark(files, path, "skipped", reason)
         if views and not results:
@@ -976,6 +1012,11 @@ class PullRequestReviewService:
         read = sorted({item for r in results.values() for item in r["looked"] if item.startswith("read ")})
         if read:
             notes.append(f"While reviewing, the AI read {len(read)} file(s) of the repository: " + ", ".join(i.removeprefix("read ") for i in read[:6]) + (", ..." if len(read) > 6 else "") + ".")
+        skipped_files = [f for f in files if f["status"] == "skipped" and f.get("reason")]
+        if skipped_files:
+            shown = "; ".join(f"{f['path']} ({f['reason']})" for f in skipped_files[:6])
+            more = f"; and {len(skipped_files) - 6} more" if len(skipped_files) > 6 else ""
+            notes.append(f"Files not reviewed: {shown}{more}.")
         if removed_total:
             notes.append("Removed before showing: " + "; ".join(f"{n} finding(s) {why}" for why, n in removed_total.items()) + ".")
         notes.extend(f"Removed as a guess: {line}" for line in guessed[:6])
@@ -1002,6 +1043,8 @@ class PullRequestReviewService:
         if switched:
             notes.insert(0, f"The strong model ({self.model.primary.deployment}) could not answer ({switched}), so the standard model ({self.model.backup.deployment}) did the rest of this review. "
                             "Review again later to use the strong model.")
+        if mode == "deep":
+            notes.append("Deep review mode was used, so the AI spent extra attention on tests, contracts, configuration, error paths and design risks while keeping the same evidence rules.")
         notes = list(dict.fromkeys(notes))  # the same note, for example "could not be read", is not said twice
         verdict, scorecard = judge(comments)
         if not any(f["status"] == "reviewed" for f in files):
@@ -1009,11 +1052,82 @@ class PullRequestReviewService:
         return {
             "pull_request_id": pull_request_id, "verdict": verdict, "summary": summarize(files, comments, refs["source"], int(last.get("id") or len(iterations)), len(iterations)),
             "scorecard": scorecard, "comments": comments, "clarifications": clarifications, "posted_to_ado": False,
-            "method": "diff-per-file", "source_commit": refs["source"] or None, "iterations": len(iterations),
+            "method": "repository-investigation", "source_commit": refs["source"] or None, "iterations": len(iterations),
             "files": files, "checklist": checklist, "notes": notes, "scope_note": SCOPE_NOTE, "knowledge_checks": knowledge_checks, "model": model_info(self.model),
         }
 
     # ------------------------------------------------------------ steps
+
+    def _review_interactions(self, views: list[FileView], results: dict[str, Any], context: dict[str, Any],
+                             threads: list[dict[str, Any]], reader: RepoReader | None, deadline: float,
+                             tell: Callable, notes: list[str]) -> None:
+        """Discover across files, then ground and independently verify each candidate.
+
+        Only successfully reviewed files can be anchors. Other changed/deleted paths
+        remain in the inventory and can be investigated via repository tools.
+        """
+        if len(views) < 2 or reader is None:
+            return
+        batches = pr_investigation.batches([v for v in views if v.path in results])
+        completed = 0
+        for batch in batches:
+            if time.monotonic() >= deadline:
+                break
+            tell(completed, len(batches), "Investigating interactions between changed files")
+            belt = ToolBelt(reader, batch[0].path, deadline)
+            prompt = pr_investigation.integration_prompt(batch, context, results)
+            prompt += pr_validation.block(context.get("validation"))
+            prompt += "\n\nFocused checks:\n" + "\n\n".join(dict.fromkeys(
+                guide for v in batch for guide in context.get("focused_guidance", {}).get(v.path, [])
+            ))
+            try:
+                answer = with_retry(lambda: chat_json_with_tools(self.model, pr_investigation.INTEGRATION_SYSTEM,
+                                    prompt, TOOLS, belt.run, max_turns=MAX_VERIFY_TURNS))
+            except Exception as exc:
+                logger.warning("PR interaction review failed (%s)", type(exc).__name__)
+                continue
+            completed += 1
+            raw = answer.get("findings")
+            raw = [f for f in raw if isinstance(f, dict)] if isinstance(raw, list) else []
+            for view in batch:
+                candidates = [f for f in raw if str(f.get("file_path") or "").lstrip("/") == view.path]
+                result = results[view.path]
+                result["proposed"] += len(candidates)
+                findings, removed = clean_findings(candidates, view)
+                result["removed"].extend(removed)
+                result["overflow"] += max(0, len(findings) - MAX_FINDINGS_PER_FILE)
+                findings = findings[:MAX_FINDINGS_PER_FILE]
+                # Independent verification receives the same supporting excerpts,
+                # and can fetch full source files rather than trusting discovery.
+                support = "\n\nInteraction evidence:\n" + prompt
+                belt.seen.append("\n\n".join(pr_investigation.excerpt(v) for v in batch))
+                checked_context = {**context, "investigation_context": support}
+                existing = context_threads(threads, view.path)
+                findings, rejected = verify_findings(self.model, view, findings, checked_context, existing, belt,
+                                                     static_findings(view, view.old_text, view.new_text))
+                findings, refuted = refute_findings(self.model, view, findings, checked_context, belt)
+                result["rejected"].extend(rejected + refuted)
+                for finding in findings:
+                    if finding.get("verified") is not True:
+                        result["rejected"].append((finding["title"], "interaction finding could not be independently verified"))
+                        continue
+                    duplicate = any(f["line_number"] == finding["line_number"] and f["title"].lower() == finding["title"].lower()
+                                    for f in result["findings"])
+                    if duplicate:
+                        result["rejected"].append((finding["title"], "it repeats another finding"))
+                        continue
+                    if len(result["findings"]) >= MAX_FINDINGS_PER_FILE:
+                        result["overflow"] += 1
+                        continue
+                    thread = _existing_for(finding, existing)
+                    if thread:
+                        _mark_existing(finding, thread)
+                    result["findings"].append(finding)
+                result["looked"] = list(dict.fromkeys(result["looked"] + belt.looked))
+        notes.append(f"Cross-file investigation completed {completed} of {len(batches)} batches. "
+                     "Related callers, contracts and tests can be read at the source commit; no tests were executed.")
+        if completed < len(batches):
+            notes.append("Cross-file investigation is partial: a model failure or the review time limit left batches unchecked.")
 
     def _team_checks_about_the_pull_request(self, team: list[dict[str, Any]], context: dict[str, Any], threads: list[dict[str, Any]],
                                             files: list[dict[str, Any]]) -> tuple[dict[int, str], bool]:
@@ -1127,20 +1241,24 @@ class PullRequestReviewService:
         return files, views
 
     def _review_all(self, views: list[FileView], context: dict[str, Any], threads: list[dict[str, Any]], reader: RepoReader | None = None,
-                    budget: float = REVIEW_BUDGET_SECONDS, tell: Callable[[int, int, str], None] | None = None) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+                    budget: float = REVIEW_BUDGET_SECONDS, tell: Callable[[int, int, str], None] | None = None,
+                    deadline: float | None = None) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
         results: dict[str, dict[str, Any]] = {}
         failures: dict[str, str] = {}
         if not views:
             return results, failures
         tell = tell or (lambda done, total, message: None)
-        deadline = time.monotonic() + budget
+        deadline = deadline if deadline is not None else time.monotonic() + budget
 
         def one(view: FileView) -> tuple[str, dict[str, Any] | None, str]:
             if time.monotonic() > deadline:
                 return view.path, None, "not reached in the time allowed"
             belt = ToolBelt(reader, view.path, deadline) if reader is not None else None
             try:
-                return view.path, review_file(self.model, view, context, threads, belt), ""
+                local = {**context, "investigation_context": pr_investigation.related_context(view, views)}
+                if belt is not None and local["investigation_context"]:
+                    belt.seen.append(local["investigation_context"])
+                return view.path, review_file(self.model, view, local, threads, belt), ""
             except Exception as exc:
                 logger.warning("PR review: the AI call for %s failed (%s)", view.path, type(exc).__name__)
                 return view.path, None, "the AI call failed"

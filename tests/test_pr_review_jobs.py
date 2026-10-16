@@ -178,9 +178,9 @@ class TestTheRoutes:
         seen = []
         original = pr_review.PullRequestReviewService.review
 
-        def spy(self, project, repository, pr_id, progress=None, budget=pr_review.REVIEW_BUDGET_SECONDS, knowledge=""):
+        def spy(self, project, repository, pr_id, progress=None, budget=pr_review.REVIEW_BUDGET_SECONDS, knowledge="", review_mode="strict"):
             seen.append((budget, progress is not None))
-            return original(self, project, repository, pr_id, progress, budget, knowledge)
+            return original(self, project, repository, pr_id, progress, budget, knowledge, review_mode)
 
         monkeypatch.setattr(pr_review.PullRequestReviewService, "review", spy)
         finish(client, client.post(START, json=PAYLOAD).json()["job_id"])

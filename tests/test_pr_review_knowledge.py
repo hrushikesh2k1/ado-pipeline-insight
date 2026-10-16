@@ -33,6 +33,11 @@ def run(knowledge="", ado=None, model=None):
     return PullRequestReviewService(ado, model).review("proj", "repo", 7, knowledge=knowledge), ado, model
 
 
+def run_with_mode(review_mode="strict", ado=None, model=None):
+    ado, model = ado or FakeAdo(), model or FakePrModel()
+    return PullRequestReviewService(ado, model).review("proj", "repo", 7, review_mode=review_mode), ado, model
+
+
 def write_host_finding(**over):
     return finding(7, "Write-Host in a script", "suggestion", category="correctness", comment="Write-Host writes to the host, so a caller cannot capture the message.",
                     failing_case="A caller that pipes the script's output gets nothing for the message that Write-Host printed.", kb=1, **over)
@@ -67,6 +72,13 @@ class TestWhatTheReviewerIsGiven:
 
     def test_the_system_prompt_lets_a_finding_name_its_check(self):
         assert '"kb": null' in pr_review.FILE_SYSTEM and '"kb" is the number of the team\'s check' in pr_review.FILE_SYSTEM
+
+    def test_deep_review_mode_adds_extra_scrutiny_without_removing_evidence_rules(self):
+        result, _, model = run_with_mode(review_mode="deep")
+        system = model.system_of("file")[0]
+        assert "DEEP REVIEW MODE" in system
+        assert "concrete case, exact evidence" in system
+        assert "Deep review mode was used" in " ".join(result["notes"])
 
 
 class TestFindingsFromTheTeamsChecks:
@@ -212,6 +224,12 @@ class TestOverHttp:
         done = finish(client, started["job_id"])
         assert done["result"]["knowledge_checks"][0]["status"] == "raised" and done["result"]["comments"][0]["knowledge_number"] == 1
 
+    def test_the_review_mode_is_sent_to_the_reviewer(self, api):
+        client, state = api
+        data = client.post("/api/v1/ado/pullrequests/review", json={**PAYLOAD, "review_mode": "deep"}).json()
+        assert data["pull_request_id"] == 101
+        assert "DEEP REVIEW MODE" in state["model"].system_of("file")[0]
+
     def test_a_request_with_no_knowledge_is_a_review_as_before(self, api):
         client, _ = api
         data = client.post("/api/v1/ado/pullrequests/review", json=PAYLOAD).json()
@@ -238,5 +256,23 @@ class TestOverHttp:
         first = start("one check")
         assert start("  one   check \n\n") == first
         assert start("another check") != first
+        release.set()
+        finish(client, first)
+
+    def test_another_mode_is_another_background_review(self, api):
+        import threading
+        client, state = api
+        release = threading.Event()
+
+        class Slow(FakePrModel):
+            def _create(self, *args, **kwargs):
+                release.wait(5)
+                return super()._create(*args, **kwargs)
+
+        state["model"] = Slow()
+        start = lambda **extra: client.post("/api/v1/ado/pullrequests/review/start", json={**PAYLOAD, **extra}).json()["job_id"]
+        first = start(review_mode="strict")
+        assert start(review_mode="strict") == first
+        assert start(review_mode="deep") != first
         release.set()
         finish(client, first)

@@ -241,12 +241,12 @@ class TestReviewingAJsonFile:
         assert model.first_tools_offered == [True]
         assert "You can look things up before you answer" in model.system_of("file")[0] and "Never report what you did not look up" in model.system_of("file")[0]
 
-    def test_other_languages_are_read_without_tools(self):
+    def test_other_languages_can_investigate_before_proposing_findings(self):
         ado = FakeAdo(changes=[change("/src/a.py", "add")], blobs={"new-/src/a.py": "x = 1\n"}, description="", repo_files=REPO)
         from app.services.pr_review import PullRequestReviewService
         model = FakePrModel()
         PullRequestReviewService(ado, model).review("proj", "repo", 7)
-        assert model.first_tools_offered == [False] and "You can look things up before you answer" not in model.system_of("file")[0]
+        assert model.first_tools_offered == [True] and "You can look things up before you answer" in model.system_of("file")[0]
 
     def test_without_a_repository_to_read_there_are_no_tools_even_for_json(self):
         ado = json_pr()

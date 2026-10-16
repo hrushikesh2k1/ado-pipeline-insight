@@ -6,6 +6,29 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.12.9] - 2026-10-16
+
+### Fixed
+- **AI PR review now investigates related code before judging findings:**
+  - Enabled source-commit repository lookups during initial review for every supported language, rather than only JSON.
+  - Added related changed-file excerpts and a separate cross-file investigation pass to detect caller, contract, schema, configuration, and deployment mismatches.
+  - Independently grounds, verifies, and challenges integration findings; suppresses duplicate findings and reports incomplete investigation coverage.
+  - Removed contradictory instructions limiting investigation to one file and the unsupported assumption that a build already checked the change.
+- **PR review validation now distinguishes evidence from unknown coverage:**
+  - Supplies build commit, repository, status, and result to discovery, integration, verification, and refutation prompts.
+  - Reads published test runs for matching source-commit builds. Stale runs, missing results, inaccessible checks, and partial coverage do not imply a pass.
+  - Treats human review comments as investigation leads rather than proof of a defect.
+- **Larger PRs receive broader review coverage:**
+  - Increased the reviewable-file cap from 50 to 120 and the examined-file cap from 150 to 500.
+  - Increased the background review budget from 10 to 20 minutes, reserving part of it for integration investigation.
+  - Reuses fetched source files and bounds related excerpts and integration batches.
+  - Expands skipped-file details automatically and names skipped files and reasons in review notes.
+
+### Added
+- Strict and Deep review modes, with cached reviews marked stale when the selected mode changes. Deep mode adds scrutiny for tests, contracts, configuration, error paths, authorization, and design risks.
+- Scoped guidance for Azure Pipelines YAML, cloud-operation scripts, and TypeScript/React state and data flows. Ordinary YAML does not automatically receive Azure Pipeline rules.
+- Regression coverage for repository investigation, cross-file findings, pipeline classification, and commit-aware validation; documented how to evaluate verified defects, missed defects, and false positives on held-out historical PRs.
+
 ## [1.12.8] - 2026-10-13
 
 ### Fixed

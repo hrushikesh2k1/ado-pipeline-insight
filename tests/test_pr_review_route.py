@@ -40,13 +40,13 @@ def test_a_review_comes_back_with_everything_the_page_shows(api):
     response = client.post(URL, json=PAYLOAD)
     assert response.status_code == 200
     data = response.json()
-    assert data["pull_request_id"] == 101 and data["posted_to_ado"] is False and data["method"] == "diff-per-file"
+    assert data["pull_request_id"] == 101 and data["posted_to_ado"] is False and data["method"] == "repository-investigation"
     assert data["verdict"] == "APPROVED_WITH_SUGGESTIONS" and data["source_commit"] == "a" * 40
     comment = data["comments"][0]
     assert (comment["file_path"], comment["line_number"], comment["verified"], comment["language"]) == ("scripts/report.py", 17, True, "Python")
     assert {f["status"] for f in data["files"]} == {"reviewed", "skipped"}
     assert any(c["item"] == "Changelog updated" and c["status"] == "ok" for c in data["checklist"])
-    assert "cannot judge how the result looks" in data["scope_note"] and set(data["scorecard"]) == {"correctness", "security", "performance", "maintainability", "test_coverage"}
+    assert "does not execute code or tests" in data["scope_note"] and set(data["scorecard"]) == {"correctness", "security", "performance", "maintainability", "test_coverage"}
 
 
 def test_the_callers_pat_is_used_for_azure_devops(api):

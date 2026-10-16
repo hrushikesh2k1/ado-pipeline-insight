@@ -3,7 +3,7 @@ import { api } from '../../services/api'
 import type { PullRequestKnowledgeCheck } from '../../types/api'
 import {
   KNOWLEDGE_EXAMPLE, KNOWLEDGE_HELP, KNOWLEDGE_MAX_CHARS, KNOWLEDGE_STATUS_LABEL, KNOWLEDGE_STATUS_TIP, KNOWLEDGE_STORAGE_KEY,
-  knowledgeChanged, knowledgeCount, knowledgeCounts, loadKnowledge, normalizeKnowledge, saveKnowledge,
+  knowledgeChanged, knowledgeCount, knowledgeCounts, loadKnowledge, normalizeKnowledge, reviewModeChanged, saveKnowledge,
 } from '../../utils/prReview'
 
 function fakeStorage(initial: Record<string, string> = {}, broken = false) {
@@ -101,13 +101,27 @@ describe('what the user is told', () => {
 })
 
 describe('sending the knowledge base with a review', () => {
-  it('puts it in the request that starts the review', async () => {
+  it('puts knowledge and review mode in the request that starts the review', async () => {
     const bodies: unknown[] = []
     vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)))
       return new Response(JSON.stringify({ job_id: 'abcdefgh12345678', status: 'done', message: 'Done', done: 1, total: 1, elapsed_seconds: 0, result: { pull_request_id: 1, verdict: 'APPROVED', summary: 's', scorecard: {}, comments: [], posted_to_ado: false } }), { status: 202 })
     }))
-    await api.reviewPullRequest({ organization: 'o', project: 'p', repository_id: 'r', pull_request_id: 1, knowledge: '[PowerShell] Avoid `Write-Host`' }, undefined, 0)
-    expect(bodies[0]).toMatchObject({ knowledge: '[PowerShell] Avoid `Write-Host`', pull_request_id: 1 })
+    await api.reviewPullRequest({
+      organization: 'o',
+      project: 'p',
+      repository_id: 'r',
+      pull_request_id: 1,
+      knowledge: '[PowerShell] Avoid `Write-Host`',
+      review_mode: 'deep',
+    }, undefined, 0)
+    expect(bodies[0]).toMatchObject({ knowledge: '[PowerShell] Avoid `Write-Host`', pull_request_id: 1, review_mode: 'deep' })
+  })
+})
+
+describe('PR review mode', () => {
+  it('marks a cached review stale when review mode changes', () => {
+    expect(reviewModeChanged('strict', 'deep')).toBe(true)
+    expect(reviewModeChanged(undefined, 'deep')).toBe(false)
   })
 })

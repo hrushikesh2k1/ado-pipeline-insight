@@ -109,7 +109,7 @@ export const api = {
     return request<AdoPullRequest[]>(`/api/v1/ado/pullrequests?${p.toString()}`)
   },
   /** Starts the review in the background and follows it until it is done (a review can take minutes, longer than one web request may last). */
-  reviewPullRequest:async(payload:{organization:string;project:string;repository_id:string;pull_request_id:number;pat?:string;knowledge?:string;model?:ReviewModelChoice}, onProgress?:(job:PullRequestReviewJob)=>void, pollMs=REVIEW_POLL_MS):Promise<PullRequestReviewResponse>=>{
+  reviewPullRequest:async(payload:{organization:string;project:string;repository_id:string;pull_request_id:number;pat?:string;knowledge?:string;model?:ReviewModelChoice;review_mode?:'strict'|'deep'}, onProgress?:(job:PullRequestReviewJob)=>void, pollMs=REVIEW_POLL_MS):Promise<PullRequestReviewResponse>=>{
     let job = await request<PullRequestReviewJob>('/api/v1/ado/pullrequests/review/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

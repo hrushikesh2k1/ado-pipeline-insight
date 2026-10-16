@@ -91,6 +91,7 @@ class PullRequestReviewRequest(BaseModel):
     pat: str | None = Field(default=None, max_length=512)
     knowledge: str | None = Field(default=None, max_length=6000)  # the team's own checks, as the user wrote them (see pr_knowledge)
     model: Literal["standard", "strong"] | None = None  # which model reviews; none means the server's default (the strong one when it is set up)
+    review_mode: Literal["strict", "deep"] | None = None  # strict is the current high-confidence review; deep asks for wider test/design scrutiny
 
 
 class PullRequestReviewCommentSchema(BaseModel):
