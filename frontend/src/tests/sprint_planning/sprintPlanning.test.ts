@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { PlannedPerson, PlanStory, SprintPlan } from '../../types/api'
 import {
   ANY_AREA, addPerson, areaLabel, commentDate, dayMonth, daysInState, flagText, fullness, loadPeople, mergeMembers, peopleForPlan, personKey, plural, planAsMarkdown, planProblems,
-  removePerson, savePeople, setAreas, setIncluded, sprintLabel, storyCount,
+  removePerson, savePeople, setAreas, setIncluded, setPtoDays, setWorkingDays, sprintLabel, storyCount,
   type PlanningPerson,
 } from '../../utils/sprintPlanning'
 
@@ -69,6 +69,17 @@ describe('who is in the plan', () => {
 
   it('sends only the people who are included', () => {
     expect(peopleForPlan(setIncluded([ava, ben], personKey(ben), false))).toEqual([{ name: 'Ava Stone', unique_name: 'ava@example.test', areas: ['Demo\\Alpha\\Backend'] }])
+  })
+
+  it('keeps intentional zero capacity and days through storage, member merge and request serialization', () => {
+    vi.stubGlobal('localStorage', fakeStorage())
+    const people = setPtoDays(setWorkingDays([{ ...ava, capacity_points: 0 }], personKey(ava), 0), personKey(ava), 0)
+    savePeople('org', 'project', 'team', people)
+    const merged = mergeMembers(loadPeople('org', 'project', 'team'), [{ name: ava.name, unique_name: ava.unique_name }])
+    const payload = JSON.parse(JSON.stringify(peopleForPlan(merged)))
+    expect(payload[0]).toMatchObject({ working_days: 0, pto_days: 0, capacity_points: 0 })
+    expect(peopleForPlan([ava])[0].working_days).toBeUndefined()
+    expect(peopleForPlan([ava])[0].capacity_points).toBeUndefined()
   })
 })
 

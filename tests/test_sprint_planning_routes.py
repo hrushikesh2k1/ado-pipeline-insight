@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import app.api.routes as routes
 import app.api.sprint_planning_routes as planning_routes
 from app.main import create_app
-from sprint_support import FakeBoard, http_error, comment
+from sprint_support import FakeBoard, http_error, comment, story
 from test_sprint_planning import AVA, BEN, CARA, scenario_items
 
 SETUP = "/api/v1/ado/sprint-planning/setup"
@@ -73,6 +73,37 @@ class TestSetup:
 
 
 class TestPlan:
+    @pytest.mark.parametrize("capacity_mode", ["points", "stories"])
+    @pytest.mark.parametrize("capacity", [
+        {"capacity_points": 0},
+        {"working_days": 0},
+        {"working_days": 10, "pto_days": 10},
+        {"working_days": 10, "pto_days": 12},
+        {"working_days": 0, "capacity_points": 20},
+        {},
+        {"capacity_points": None, "working_days": None},
+    ])
+    def test_capacity_survives_request_validation_and_zero_availability_is_enforced(self, api, capacity_mode, capacity):
+        client, state = api
+        state["board"] = FakeBoard([
+            story(101, who="ava", iteration="Demo\\Sprint 2", points=3),
+            story(102, who="ava", iteration="Demo\\Sprint 3", points=2),
+            story(103, points=1),
+        ])
+        response = client.post(PLAN, json={**BODY, "people": [{**AVA, **capacity}], "capacity_mode": capacity_mode})
+        assert response.status_code == 200
+        member = response.json()["people"][0]
+        assert [item["id"] for item in member["carried"]] == [101]
+        assert [item["id"] for item in member["already_planned"]] == [102]
+        no_days = capacity.get("working_days") == 0 or capacity.get("pto_days", 0) >= 10
+        no_budget = no_days or (capacity_mode == "points" and capacity.get("capacity_points") == 0)
+        assert [item["id"] for item in member["new"]] == ([] if no_budget else [103])
+        if no_budget:
+            assert member["points_capacity"] == 0
+            assert member["points_over_by"] == 5
+            assert member["points_open"] == 0
+            assert any("Capacity exceeded" in warning for warning in member["warnings"])
+
     def test_the_plan_comes_back_with_what_the_page_shows(self, api):
         client, _ = api
         response = client.post(PLAN, json=BODY)
