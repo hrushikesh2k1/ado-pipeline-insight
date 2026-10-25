@@ -177,18 +177,19 @@ const PersonCard: React.FC<{
   onReassign?: (storyId: number, targetPersonName: string) => void
 }> = ({ person, sprintName, project, mode, allPeople, onReassign }) => {
   const key = personKey(person)
-  const percent = mode === 'points' && person.points_capacity
-    ? Math.min(100, Math.round(((person.points_planned ?? 0) / Math.max(1, person.points_capacity)) * 100))
+  const pointsCapacity = mode === 'points' ? person.points_capacity : null
+  const percent = pointsCapacity != null
+    ? Math.min(100, Math.round(((person.points_planned ?? 0) / Math.max(1, pointsCapacity)) * 100))
     : Math.min(100, Math.round((person.total / Math.max(1, person.capacity)) * 100))
 
-  const isOver = mode === 'points' && person.points_capacity
-    ? (person.points_planned ?? 0) > person.points_capacity
+  const isOver = pointsCapacity != null
+    ? (person.points_planned ?? 0) > pointsCapacity
     : person.over_by > 0
 
   const state = isOver ? 'over' : person.open_places ? 'short' : 'full'
 
-  const countDisplay = mode === 'points' && person.points_capacity
-    ? `${person.points_planned ?? 0} of ${person.points_capacity} pts`
+  const countDisplay = pointsCapacity != null
+    ? `${person.points_planned ?? 0} of ${pointsCapacity} pts`
     : fullness(person)
 
   return (
@@ -662,7 +663,7 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
                           min={0}
                           max={30}
                           value={p.working_days ?? 10}
-                          onChange={e => setPeople(setWorkingDays(people, key, Number(e.target.value) || 10))}
+                          onChange={e => setPeople(setWorkingDays(people, key, e.target.value === '' ? 10 : Number(e.target.value)))}
                           title="Working days in sprint"
                         />
                       </td>

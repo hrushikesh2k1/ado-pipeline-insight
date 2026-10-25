@@ -528,6 +528,106 @@ class TestSetup:
         assert sp.team_setup(FakeBoard([], fail=("types",)), PROJECT, TEAM)["work_item_types"] == list(sp.DEFAULT_TYPES)
 
 
+class TestZeroCapacity:
+    @pytest.mark.parametrize("estimate", [3.0, 0.0, None])
+    def test_explicit_zero_point_budget_prevents_all_new_work(self, estimate):
+        result = sp.make_plan(
+            people=sp.normalize_people([{**AVA, "capacity_points": 0}]), carried=[], planned=[],
+            backlog=[{**plain(101), "points": estimate}], per_person=6, capacity_mode="points",
+        )
+        member = result["people"][0]
+        assert member["points_capacity"] == 0
+        assert member["new"] == []
+        assert any("Point capacity is zero" in warning for warning in member["warnings"])
+        assert not any("no unassigned story is left" in warning for warning in member["warnings"])
+
+    @pytest.mark.parametrize("capacity_mode", ["points", "stories"])
+    @pytest.mark.parametrize("availability", [
+        {"working_days": 0},
+        {"working_days": 10, "pto_days": 10},
+        {"working_days": 10, "pto_days": 12},
+        {"working_days": 0, "capacity_points": 20},
+        {"working_days": 10, "pto_days": 10, "capacity_points": 20},
+    ])
+    @pytest.mark.parametrize("estimate", [3.0, 0.0, None])
+    def test_no_available_days_prevents_new_work_in_both_modes(self, capacity_mode, availability, estimate):
+        result = sp.make_plan(
+            people=sp.normalize_people([{**AVA, **availability}]), carried=[], planned=[],
+            backlog=[{**plain(101), "points": estimate}], per_person=6, capacity_mode=capacity_mode,
+        )
+        member = result["people"][0]
+        assert member["points_capacity"] == 0
+        assert member["new"] == []
+        assert any("No working days are available" in warning for warning in member["warnings"])
+        assert not any("no unassigned story is left" in warning for warning in member["warnings"])
+
+    @pytest.mark.parametrize("capacity_mode", ["points", "stories"])
+    def test_existing_commitments_stay_with_their_owner_and_show_zero_budget_overload(self, capacity_mode):
+        carryover = {**plain(101, who="ava"), "points": 3.0}
+        existing = {**plain(102, who="ava"), "points": 2.0}
+        result = sp.make_plan(
+            people=sp.normalize_people([{**AVA, "working_days": 0}, BEN]),
+            carried=[carryover], planned=[existing], backlog=[{**plain(103), "points": 1.0}],
+            per_person=6, capacity_mode=capacity_mode,
+        )
+        unavailable, available = result["people"]
+        assert unavailable["carried"] == [carryover]
+        assert unavailable["already_planned"] == [existing]
+        assert unavailable["new"] == []
+        assert unavailable["total"] == 2
+        assert unavailable["points_planned"] == 5
+        assert unavailable["points_capacity"] == 0
+        assert unavailable["points_over_by"] == 5
+        assert unavailable["points_open"] == 0
+        assert any("Existing commitments remain assigned" in warning for warning in unavailable["warnings"])
+        assert any("Capacity exceeded" in warning for warning in unavailable["warnings"])
+        assert ids(available["new"]) == [103]
+        _, reasons, _, _ = sp._calculate_risks(result["people"], [], [carryover, existing] + available["new"])
+        assert "Capacity exceeded for Ava Stone." in reasons
+
+    @pytest.mark.parametrize("capacity_mode", ["points", "stories"])
+    def test_unassigned_carryover_cannot_become_new_work_for_someone_without_available_days(self, capacity_mode):
+        result = sp.make_plan(
+            people=sp.normalize_people([{**AVA, "working_days": 0}]),
+            carried=[{**plain(101), "points": 1.0}], planned=[], backlog=[],
+            per_person=6, capacity_mode=capacity_mode,
+        )
+        assert result["people"][0]["new"] == []
+        assert result["backlog_left"] == 1
+
+    @pytest.mark.parametrize("estimate", [0.0, None])
+    def test_unestimated_existing_commitments_are_not_dropped_at_zero_capacity(self, estimate):
+        commitment = {**plain(101, who="ava"), "points": estimate}
+        result = sp.make_plan(
+            people=sp.normalize_people([{**AVA, "capacity_points": 0}]), carried=[commitment], planned=[],
+            backlog=[{**plain(102), "points": estimate}], per_person=6, capacity_mode="points",
+        )
+        member = result["people"][0]
+        assert member["carried"] == [commitment]
+        assert member["new"] == []
+        assert member["points_over_by"] == 0
+        assert any("Existing commitments remain assigned" in warning for warning in member["warnings"])
+
+    @pytest.mark.parametrize("capacity_mode", ["points", "stories"])
+    @pytest.mark.parametrize("capacity", [{}, {"capacity_points": None}, {"working_days": None}, {"capacity_points": 8}])
+    def test_positive_and_omitted_capacity_keep_their_existing_behavior(self, capacity_mode, capacity):
+        result = sp.make_plan(
+            people=sp.normalize_people([{**AVA, **capacity}]), carried=[], planned=[],
+            backlog=[{**plain(index), "points": 3.0} for index in range(101, 105)], per_person=6,
+            capacity_mode=capacity_mode,
+        )
+        member = result["people"][0]
+        assert member["points_capacity"] == 8
+        assert ids(member["new"]) == ([101, 102, 103] if capacity_mode == "points" else [101, 102, 103, 104])
+
+    def test_story_count_mode_still_uses_the_story_target_when_working_days_are_available(self):
+        result = sp.make_plan(
+            people=sp.normalize_people([{**AVA, "capacity_points": 0}]), carried=[], planned=[],
+            backlog=[{**plain(index), "points": 3.0} for index in range(101, 104)], per_person=2, capacity_mode="stories",
+        )
+        assert ids(result["people"][0]["new"]) == [101, 102]
+
+
 class TestSprintPlanningEnhancements:
     def test_points_capacity_and_workload_calculation(self):
         p1 = {"name": "Ava Stone", "unique_name": "ava@example.test", "areas": [BACKEND], "working_days": 10, "pto_days": 2, "focus_factor": 0.8}

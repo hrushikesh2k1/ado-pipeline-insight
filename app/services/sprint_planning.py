@@ -339,15 +339,25 @@ def _sum_points(stories: list[dict[str, Any]]) -> float:
     return round(sum(s.get("points") or 0.0 for s in stories), 1)
 
 
+def _available_days(person: dict[str, Any]) -> float:
+    working_days = person.get("working_days")
+    if working_days is None:
+        working_days = 10.0
+    return max(0.0, working_days - (person.get("pto_days") or 0.0))
+
+
 def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], planned: list[dict[str, Any]], backlog: list[dict[str, Any]], per_person: int, capacity_mode: str = "stories") -> dict[str, Any]:
     """Who takes what. `carried` are the open stories of the previous sprint, `planned` those already in the next sprint, `backlog` the unassigned stories
     that may be taken (in the order they should be taken). Pure: no calls to Azure DevOps."""
     rows = []
     for p in people:
+        avail_days = _available_days(p)
         cap_pts = p.get("capacity_points")
-        if cap_pts is None:
-            avail_days = max(0.0, (p.get("working_days") or 10.0) - (p.get("pto_days") or 0.0))
-            cap_pts = round(avail_days * (p.get("focus_factor") or 0.8), 1)
+        if avail_days <= 0:
+            cap_pts = 0.0
+        elif cap_pts is None:
+            focus_factor = p.get("focus_factor")
+            cap_pts = round(avail_days * (0.8 if focus_factor is None else focus_factor), 1)
         rows.append({
             **p,
             "capacity": per_person,
@@ -390,21 +400,21 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
         return sum(s.get("points") or 0.0 for s in row["carried"] + row["already_planned"] + row["new"])
 
     def free_points(row: dict[str, Any]) -> float:
-        cap = row.get("points_capacity") or row.get("capacity_points") or 0.0
-        return max(0.0, round(cap - current_points(row), 1)) if cap > 0 else 0.0
+        return max(0.0, round(row["points_capacity"] - current_points(row), 1))
 
     def can_take_story(row: dict[str, Any], story: dict[str, Any]) -> bool:
-        if free_stories(row) <= 0:
+        if free_stories(row) <= 0 or _available_days(row) <= 0:
             return False
         if capacity_mode == "points":
-            cap = row.get("points_capacity") or row.get("capacity_points") or 0.0
-            if cap > 0:
-                s_pts = story.get("points") or 0.0
-                curr = current_points(row)
-                if curr >= cap:
-                    return False
-                if s_pts > 0 and curr + s_pts > cap * 1.15:
-                    return False
+            cap = row["points_capacity"]
+            if cap <= 0:
+                return False
+            s_pts = story.get("points") or 0.0
+            curr = current_points(row)
+            if curr >= cap:
+                return False
+            if s_pts > 0 and curr + s_pts > cap * 1.15:
+                return False
         return True
 
     unplaced: list[dict[str, Any]] = []
@@ -447,18 +457,26 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
         row["points_already_planned"] = _sum_points(row["already_planned"])
         row["points_new"] = _sum_points(row["new"])
         row["points_planned"] = round(row["points_carried"] + row["points_already_planned"] + row["points_new"], 1)
-        cap = row.get("points_capacity") or 0.0
-        row["points_over_by"] = max(0.0, round(row["points_planned"] - cap, 1)) if cap > 0 else 0.0
-        row["points_open"] = max(0.0, round(cap - row["points_planned"], 1)) if cap > 0 else 0.0
+        cap = row["points_capacity"]
+        row["points_over_by"] = max(0.0, round(row["points_planned"] - cap, 1))
+        row["points_open"] = max(0.0, round(cap - row["points_planned"], 1))
 
         if not row["areas"]:
             row["warnings"].append("No area of choice is set, so no new story can be given to this person.")
-        if row["open_places"]:
+        no_days = _available_days(row) <= 0
+        no_point_budget = capacity_mode == "points" and cap <= 0
+        if no_days:
+            row["warnings"].append("No working days are available after leave, so no new stories can be assigned.")
+        elif no_point_budget:
+            row["warnings"].append("Point capacity is zero, so no new stories can be assigned.")
+        elif row["open_places"]:
             where = "any area" if ANY_AREA in row["areas"] else "their areas" if row["areas"] else "no area"
             row["warnings"].append(f"{row['open_places']} place{'s' if row['open_places'] != 1 else ''} still empty: no unassigned story is left in {where}.")
+        if (no_days or no_point_budget) and row["total"]:
+            row["warnings"].append("Existing commitments remain assigned despite no available capacity.")
         if row["over_by"]:
             row["warnings"].append(f"{row['over_by']} more than the {per_person} planned: that many stories are carried over or already in the sprint.")
-        if row["points_capacity"] and row["points_planned"] > row["points_capacity"] * 1.15:
+        if row["points_planned"] > cap * 1.15:
             row["warnings"].append(f"Capacity exceeded: {row['points_planned']} pts allocated exceeds estimated {row['points_capacity']} pts capacity.")
 
     return {"people": rows, "outside_plan": outside, "outside_planned": outside_planned, "unplaced": unplaced, "unplaced_total": unplaced_total,
@@ -539,7 +557,7 @@ def _calculate_risks(people_rows: list[dict[str, Any]], flagged: list[dict[str, 
         recommendations.append(f"Estimate points for {len(unpointed)} unpointed items to ensure accurate workload balancing.")
         score_points += 1 if len(unpointed) < 3 else 2
 
-    overloaded = [r for r in people_rows if r.get("points_capacity") and r.get("points_planned", 0) > r["points_capacity"]]
+    overloaded = [r for r in people_rows if r.get("points_capacity") is not None and r.get("points_planned", 0) > r["points_capacity"]]
     if overloaded:
         names = ", ".join(r["name"] for r in overloaded)
         reasons.append(f"Capacity exceeded for {names}.")

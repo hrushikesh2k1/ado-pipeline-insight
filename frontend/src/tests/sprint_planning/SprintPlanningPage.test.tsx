@@ -79,6 +79,15 @@ async function select(selector: string, value: string) {
   })
 }
 
+async function enterNumber(selector: string, value: string) {
+  await act(async () => {
+    const control = element<HTMLInputElement>(selector)
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    setValue.call(control, value)
+    control.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 async function render(overrides: Partial<typeof currentProps> = {}) {
   currentProps = { ...currentProps, ...overrides }
   await act(async () => root.render(<SprintPlanningPage {...currentProps} />))
@@ -120,6 +129,41 @@ afterEach(async () => {
 })
 
 describe('sprint planning draft scope', () => {
+  it.each([['0', 0], ['4', 4], ['', 10]] as const)('preserves Days input %s in storage and the actual JSON request', async (value, expected) => {
+    const actual = await vi.importActual<typeof import('../../services/api')>('../../services/api')
+    const fetchPlan = vi.fn(async (_url: RequestInfo | URL, _options?: RequestInit) =>
+      new Response(JSON.stringify(plan()), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchPlan)
+    vi.mocked(api.sprintPlan).mockImplementation(actual.api.sprintPlan)
+    await render()
+    await enterNumber('input[title="Working days in sprint"]', value)
+    expect(element<HTMLInputElement>('input[title="Working days in sprint"]').value).toBe(String(expected))
+    const saved = JSON.parse(localStorage.getItem('ado_sprint_planning:org-a:project a:team a')!)
+    expect(saved[0].working_days).toBe(expected)
+    await click(element('[data-testid="spp-plan"]'))
+
+    expect(fetchPlan).toHaveBeenCalledTimes(1)
+    const request = JSON.parse(String(fetchPlan.mock.calls[0][1]?.body))
+    expect(request.people[0].working_days).toBe(expected)
+    expect(request.capacity_mode).toBe('points')
+  })
+
+  it('shows a zero-point budget and existing overload without falling back to story count', async () => {
+    const generated = plan()
+    const person = generated.people[0]
+    person.carried = person.new
+    person.new = []
+    person.points_capacity = 0
+    person.points_planned = 3
+    person.points_over_by = 3
+    vi.mocked(api.sprintPlan).mockResolvedValueOnce(generated)
+    await render()
+    await click(element('[data-testid="spp-plan"]'))
+
+    expect(element('[data-testid="spp-count-planner@example.test"]').textContent).toBe('3 of 0 pts')
+    expect(element('[data-testid="spp-card-planner@example.test"]').classList.contains('over')).toBe(true)
+  })
+
   it('invalidates a reviewed plan and its open confirmation when the sprint changes', async () => {
     await render()
     await click(element('[data-testid="spp-plan"]'))
