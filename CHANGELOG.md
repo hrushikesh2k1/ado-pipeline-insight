@@ -6,6 +6,14 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+### Fixed
+- **Sprint planning respects zero available capacity:**
+  - Preserves explicit zero working days in the page, saved preferences, and plan request instead of restoring the ten-day default.
+  - Prevents new automatic work when no working days remain after leave in either planning mode; points mode also enforces zero point budgets for estimated, zero-point, and unestimated candidates.
+  - Keeps carryover and existing target-sprint commitments with their owners, reporting overload against a zero budget with accurate warnings and point-capacity displays.
+  - Added service, HTTP, storage, and component regressions while preserving positive-capacity planning and the existing story-count targets.
+  - Merged in [`bbdb6f5`](https://github.com/hrushikesh2k1/ado-pipeline-insight/commit/bbdb6f548837004ef465f1b61719348e523a74c3) via [PR #4](https://github.com/hrushikesh2k1/ado-pipeline-insight/pull/4); implementation commit [`5139f82`](https://github.com/hrushikesh2k1/ado-pipeline-insight/commit/5139f8235ec5b9722c78afe8f13b4007e4c73c07).
+
 ## [1.12.9] - 2026-10-16
 
 ### Fixed
