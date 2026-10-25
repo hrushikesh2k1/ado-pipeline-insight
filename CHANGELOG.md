@@ -6,6 +6,14 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+### Fixed
+- **Prevent sprint plans from being committed to a different sprint:**
+  - Changing organization, project, team, or sprint invalidates the generated draft and closes its commit confirmation.
+  - Discards outdated planning and setup responses, including when switching away and back to an earlier selection.
+  - Commits only to the reviewed draft's destination while its planning context still matches the active selection.
+  - Added component regression coverage for context changes, late responses, and unchanged-context commits.
+  - Merged in [`f6fb775`](https://github.com/hrushikesh2k1/ado-pipeline-insight/commit/f6fb775623ce4b39720a5c68f9fff45bd0fd56e5) via [PR #2](https://github.com/hrushikesh2k1/ado-pipeline-insight/pull/2); implementation commit [`b76c07b`](https://github.com/hrushikesh2k1/ado-pipeline-insight/commit/b76c07b08e96dbe3cae923dc4e2792b033d257a3).
+
 ## [1.12.9] - 2026-10-16
 
 ### Fixed
