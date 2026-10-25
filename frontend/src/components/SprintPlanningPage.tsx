@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Ban, Bot, CalendarCheck, Check, ChevronDown, Clock, Copy, ExternalLink,
   Info, Plus, Send, ShieldAlert, Sparkles, Target, TriangleAlert, Users, X,
@@ -257,6 +257,7 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const [people, setPeople] = useState<PlanningPerson[]>([])
   const [newPerson, setNewPerson] = useState('')
   const [plan, setPlan] = useState<SprintPlan | null>(null)
+  const [planScope, setPlanScope] = useState<string | null>(null)
   const [planning, setPlanning] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [commitModalOpen, setCommitModalOpen] = useState(false)
@@ -264,7 +265,22 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const latestSetup = useRef(0)
+  const latestPlanning = useRef(0)
   const ready = !!org && !!project && !!team
+  const planningScope = JSON.stringify([org, project, team, fromId, toId])
+  const canCommitPlan = !!plan && planScope === planningScope
+    && plan.project === project && plan.team === team && plan.to_sprint.id === toId
+
+  useLayoutEffect(() => {
+    latestPlanning.current += 1
+    setPlan(null)
+    setPlanScope(null)
+    setCommitModalOpen(false)
+    setCommitResult(null)
+    setPlanning(false)
+    setError('')
+    return () => { latestPlanning.current += 1 }
+  }, [planningScope])
 
   useEffect(() => {
     if (!org || !project) { setTeams([]); setTeam(''); return }
@@ -275,7 +291,7 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   }, [org, project, pat])
 
   const loadSetup = useCallback(async () => {
-    if (!ready) { setSetup(null); return }
+    if (!ready) { setSetup(null); setLoadingSetup(false); return }
     const ticket = ++latestSetup.current
     setLoadingSetup(true)
     setSetupError('')
@@ -307,7 +323,10 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
     }
   }, [ready, org, project, team, pat])
 
-  useEffect(() => { void loadSetup() }, [loadSetup])
+  useEffect(() => {
+    void loadSetup()
+    return () => { latestSetup.current += 1 }
+  }, [loadSetup])
 
   // the areas and capacity people chose are kept in this browser for this team
   useEffect(() => { if (setup && ready) savePeople(org, project, team, people) }, [people, setup, ready, org, project, team])
@@ -338,22 +357,32 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const problems = useMemo(() => planProblems(people, toId, fromId), [people, toId, fromId])
 
   const makePlan = async () => {
+    const ticket = ++latestPlanning.current
+    setPlan(null)
+    setPlanScope(null)
+    setCommitModalOpen(false)
     setPlanning(true)
     setError('')
     setCommitResult(null)
     try {
       const tagsList = tagsFilter.split(',').map(t => t.trim()).filter(Boolean)
-      setPlan(await api.sprintPlan({
+      const generated = await api.sprintPlan({
         organization: org, project, team, pat: pat || undefined, from_iteration_id: fromId, to_iteration_id: toId, people: peopleForPlan(people),
         per_person: perPerson, active_days: activeDays, work_item_types: types.length ? types : undefined,
         sprint_goal: sprintGoal.trim() || undefined, capacity_mode: capacityMode,
         tags: tagsList.length ? tagsList : undefined,
         area_filter: areaFilter.trim() || undefined,
-      }))
+      })
+      if (ticket !== latestPlanning.current) return
+      if (generated.project !== project || generated.team !== team || generated.to_sprint.id !== toId) {
+        throw new Error('The returned plan does not match the selected project, team and sprint. Generate the plan again.')
+      }
+      setPlan(generated)
+      setPlanScope(planningScope)
     } catch (e) {
-      setError(errorText(e))
+      if (ticket === latestPlanning.current) setError(errorText(e))
     } finally {
-      setPlanning(false)
+      if (ticket === latestPlanning.current) setPlanning(false)
     }
   }
 
@@ -416,7 +445,8 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
 
   // Commit Plan to Azure DevOps
   const executeCommit = async () => {
-    if (!plan || !toSprint) return
+    if (!plan || !canCommitPlan || committing) return
+    const ticket = latestPlanning.current
     setCommitting(true)
     setError('')
     try {
@@ -431,15 +461,17 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
         project,
         team,
         pat: pat || undefined,
-        to_iteration_id: toSprint.id,
-        to_iteration_path: toSprint.path,
+        to_iteration_id: plan.to_sprint.id,
+        to_iteration_path: plan.to_sprint.path,
         assignments,
         sprint_goal: sprintGoal || undefined,
       })
-      setCommitResult({ success: res.success, message: res.message })
-      setCommitModalOpen(false)
+      if (ticket === latestPlanning.current) {
+        setCommitResult({ success: res.success, message: res.message })
+        setCommitModalOpen(false)
+      }
     } catch (e) {
-      setError(errorText(e))
+      if (ticket === latestPlanning.current) setError(errorText(e))
     } finally {
       setCommitting(false)
     }
@@ -662,10 +694,10 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
           </section>
 
           <div className="sppActions">
-            <button type="button" className="sppPrimary" onClick={() => void makePlan()} disabled={planning || problems.blocking.length > 0} data-testid="spp-plan">
+            <button type="button" className="sppPrimary" onClick={() => void makePlan()} disabled={planning || loadingSetup || !ready || problems.blocking.length > 0} data-testid="spp-plan">
               <CalendarCheck size={14} /> {planning ? 'Planning…' : toSprint ? `Plan ${toSprint.name}` : 'Plan the sprint'}
             </button>
-            {plan && (
+            {canCommitPlan && (
               <>
                 <button type="button" className="sppGhost" onClick={() => void copyPlan()} data-testid="spp-copy">
                   {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy plan'}
@@ -801,7 +833,7 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
       )}
 
       {/* Commit Confirmation Modal */}
-      {commitModalOpen && plan && toSprint && (
+      {commitModalOpen && plan && canCommitPlan && (
         <div className="sppModalBackdrop" onClick={() => setCommitModalOpen(false)}>
           <div className="sppModalContent" onClick={e => e.stopPropagation()}>
             <div className="sppModalHead">
@@ -809,7 +841,7 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
               <button type="button" className="sppIconBtn" onClick={() => setCommitModalOpen(false)}><X size={15} /></button>
             </div>
             <p style={{ margin: 0, fontSize: '13px', color: 'var(--spp-muted)' }}>
-              This will update <b>{plan.people.reduce((a, b) => a + b.total, 0)}</b> work items directly in Azure DevOps to iteration <b>{toSprint.name}</b> (`{toSprint.path}`) and assign them to their respective team members.
+              This will update <b>{plan.people.reduce((a, b) => a + b.total, 0)}</b> work items directly in Azure DevOps to iteration <b>{plan.to_sprint.name}</b> (`{plan.to_sprint.path}`) and assign them to their respective team members.
             </p>
             {sprintGoal && (
               <div style={{ background: 'var(--spp-field)', padding: '8px 12px', borderRadius: '8px', fontSize: '12px' }}>

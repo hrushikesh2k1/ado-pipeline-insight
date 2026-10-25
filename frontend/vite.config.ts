@@ -8,5 +8,9 @@ export default defineConfig({
   // @ts-expect-error Vitest configuration
   test: {
     exclude: ['**/node_modules/**', '**/dist/**', '**/playwright/**'],
+    projects: [
+      { extends: true, test: { name: 'unit', exclude: ['**/node_modules/**', '**/dist/**', '**/playwright/**', 'src/tests/sprint_planning/SprintPlanningPage*.test.tsx'] } },
+      { extends: true, test: { name: 'sprint-planning-page', include: ['src/tests/sprint_planning/SprintPlanningPage*.test.tsx'], environment: 'jsdom' } },
+    ],
   },
 })
