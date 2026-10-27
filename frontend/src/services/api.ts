@@ -156,8 +156,7 @@ export const api = {
   /** The sprints, members and areas the planning page starts from. */
   sprintPlanningSetup:(organization:string,project:string,team:string,pat?:string)=>{
     const p = new URLSearchParams({ organization, project, team })
-    if (pat) p.set('pat', pat)
-    return request<SprintPlanningSetup>(`/api/v1/ado/sprint-planning/setup?${p.toString()}`)
+    return request<SprintPlanningSetup>(`/api/v1/ado/sprint-planning/setup?${p.toString()}`, {headers: pat ? {'X-ADO-PAT': pat} : {}})
   },
   /** The plan for the next sprint. It is only shown: nothing is written to Azure DevOps. */
   sprintPlan:(payload:SprintPlanRequest)=>request<SprintPlan>('/api/v1/ado/sprint-planning/plan', {

@@ -213,3 +213,97 @@ export function planAsMarkdown(plan: SprintPlan): string {
 }
 
 
+
+/** Move a draft assignment atomically; no Azure DevOps write happens here. */
+export function reassignStory(plan: SprintPlan, storyId: number, targetKey: string): SprintPlan {
+  const target = targetKey ? plan.people.find(p => personKey(p) === targetKey) : undefined
+  if (targetKey && !target) return plan
+  const lanes = ['carried', 'already_planned', 'new'] as const
+  let moving: PlanStory | undefined
+  let lane: typeof lanes[number] = 'new'
+  for (const p of plan.people) for (const l of lanes) {
+    const match = p[l].find(s => s.id === storyId)
+    if (match) {
+      if (target && personKey(p) === personKey(target)) return plan
+      moving = match; lane = l
+    }
+  }
+  const fromUnplaced = plan.unplaced.find(u => u.story.id === storyId)
+  if (!moving) {
+    moving = fromUnplaced?.story
+    if (!moving || !target) return plan
+    lane = moving.iteration_path === plan.from_sprint.path ? 'carried'
+      : moving.iteration_path === plan.to_sprint.path ? 'already_planned' : 'new'
+  }
+  const story = { ...moving, assigned_to: target?.name ?? '', assigned_unique: target?.unique_name ?? '', matched_area: null }
+  const people = plan.people.map(p => {
+    const row = { ...p, carried: p.carried.filter(s => s.id !== storyId), already_planned: p.already_planned.filter(s => s.id !== storyId), new: p.new.filter(s => s.id !== storyId) }
+    if (target && personKey(p) === personKey(target)) row[lane] = [...row[lane], story]
+    return row
+  })
+  const unplaced = plan.unplaced.filter(u => u.story.id !== storyId)
+  if (!target) unplaced.push({ story, reason: 'Excluded manually from this draft; Azure DevOps is unchanged.' })
+  const hiddenUnplaced = Math.max(0, plan.unplaced_total - plan.unplaced.length)
+  return recalculatePlan({ ...plan, people, unplaced, unplaced_total: hiddenUnplaced + unplaced.length })
+}
+
+const points = (stories: PlanStory[]) => Math.round(stories.reduce((sum, s) => sum + (s.points ?? 0), 0) * 10) / 10
+
+/** Refresh all derived draft metrics after a manual move, matching planner risk rules. */
+export function recalculatePlan(plan: SprintPlan): SprintPlan {
+  const people = plan.people.map(p => {
+    const total = storyCount(p)
+    const points_carried = points(p.carried), points_already_planned = points(p.already_planned), points_new = points(p.new)
+    const points_planned = Math.round((points_carried + points_already_planned + points_new) * 10) / 10
+    const cap = p.points_capacity ?? p.capacity_points ?? 0
+    const open_places = Math.max(0, p.capacity - total), over_by = Math.max(0, total - p.capacity)
+    const warnings: string[] = []
+    if (!p.areas.length) warnings.push('No area of choice is set, so no new story can be given to this person.')
+    if (open_places) warnings.push(`${open_places} places still empty in this draft.`)
+    if (over_by) warnings.push(`${over_by} more than the ${p.capacity} planned.`)
+    if (points_planned > cap * 1.15) warnings.push(`Capacity exceeded: ${points_planned} pts allocated exceeds estimated ${cap} pts capacity.`)
+    return { ...p, total, open_places, over_by, points_carried, points_already_planned, points_new, points_planned,
+      points_open: Math.max(0, Math.round((cap - points_planned) * 10) / 10),
+      points_over_by: Math.max(0, Math.round((points_planned - cap) * 10) / 10), warnings }
+  })
+  const all = people.flatMap(p => [...p.carried, ...p.already_planned, ...p.new])
+  const flagged = [...all.filter(s => s.flags.length && s.iteration_path === plan.from_sprint.path), ...plan.outside_plan.filter(s => s.flags.length)]
+  const blocked = flagged.filter(s => s.flags.some(f => f.code === 'blocked')).length
+  const long_active = flagged.filter(s => s.flags.some(f => f.code === 'active_too_long')).length
+  const unpointed_stories = all.filter(s => s.points === null).length
+  const overloaded = people.filter(p => (p.points_planned ?? 0) > (p.points_capacity ?? p.capacity_points ?? 0))
+  const score = blocked * 2 + (unpointed_stories ? unpointed_stories < 3 ? 1 : 2 : 0) + (overloaded.length ? 2 : 0)
+  const risk_reasons: string[] = [], ai_recommendations: string[] = []
+  if (blocked) {
+    risk_reasons.push(`${blocked} carried-over ${blocked === 1 ? 'story is' : 'stories are'} currently Blocked.`)
+    ai_recommendations.push(`Unblock or descope ${blocked} blocked work items before confirming sprint commitment.`)
+  }
+  if (unpointed_stories) {
+    risk_reasons.push(`${unpointed_stories} planned ${unpointed_stories === 1 ? 'story has' : 'stories have'} no Story Points estimated.`)
+    ai_recommendations.push(`Estimate points for ${unpointed_stories} unpointed items to ensure accurate workload balancing.`)
+  }
+  if (overloaded.length) {
+    const names = overloaded.map(p => p.name).join(', ')
+    risk_reasons.push(`Capacity exceeded for ${names}.`)
+    ai_recommendations.push(`Rebalance assignments from ${names} to team members with available capacity.`)
+  } else if (people.some(p => p.open_places && p.areas.length)) ai_recommendations.push('All team members are within capacity limits. Review sprint goal alignment.')
+  return { ...plan, people, flagged, ai_recommendations, summary: { ...plan.summary,
+    people: people.length, stories_planned: all.length, carried: people.reduce((n, p) => n + p.carried.length, 0),
+    already_planned: people.reduce((n, p) => n + p.already_planned.length, 0), new: people.reduce((n, p) => n + p.new.length, 0),
+    flagged: flagged.length, blocked, long_active, unplaced: plan.unplaced_total, open_places: people.reduce((n, p) => n + p.open_places, 0),
+    total_points_planned: points(all), total_points_capacity: Math.round(people.reduce((n, p) => n + (p.points_capacity ?? p.capacity_points ?? 0), 0) * 10) / 10,
+    points_carried: points(people.flatMap(p => p.carried)), points_new: points(people.flatMap(p => p.new)), unpointed_stories,
+    risk_score: score >= 4 ? 'High' : score >= 2 ? 'Medium' : 'Low', risk_reasons, sprint_confidence_pct: Math.max(40, Math.min(95, 95 - score * 12)),
+  } }
+}
+
+/** Deduplicate exact assignments, rejecting conflicting owners before any write. */
+export function commitAssignments(plan: SprintPlan): import('../types/api').StoryAssignment[] {
+  const assignments = new Map<number, string>()
+  for (const person of plan.people) for (const story of [...person.carried, ...person.already_planned, ...person.new]) {
+    const owner = person.unique_name || person.name
+    if (assignments.has(story.id) && assignments.get(story.id) !== owner) throw new Error(`Work item #${story.id} has conflicting planned owners. Generate the plan again.`)
+    assignments.set(story.id, owner)
+  }
+  return [...assignments].map(([story_id, assigned_to]) => ({ story_id, assigned_to }))
+}

@@ -13,6 +13,9 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
   - Keeps carryover and existing target-sprint commitments with their owners, reporting overload against a zero budget with accurate warnings and point-capacity displays.
   - Added service, HTTP, storage, and component regressions while preserving positive-capacity planning and the existing story-count targets.
   - Merged in [`bbdb6f5`](https://github.com/hrushikesh2k1/ado-pipeline-insight/commit/bbdb6f548837004ef465f1b61719348e523a74c3) via [PR #4](https://github.com/hrushikesh2k1/ado-pipeline-insight/pull/4); implementation commit [`5139f82`](https://github.com/hrushikesh2k1/ado-pipeline-insight/commit/5139f8235ec5b9722c78afe8f13b4007e4c73c07).
+- Sprint Planning now resolves carryover owners by exact identity and leaves ambiguous names unmatched; an oversized backlog item no longer blocks later smaller work from fitting.
+- Manual reassignment and removal update workloads, flags, warnings and summary counts while preserving each story's original lane. Changing planning inputs invalidates stale plans, and failed partial commits show affected work-item IDs and errors.
+- Commit requests reject empty or duplicate assignments and validate the sprint ID/path against the selected team before writing to Azure DevOps.
 
 ## [1.12.9] - 2026-10-16
 

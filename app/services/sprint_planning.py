@@ -305,32 +305,21 @@ def area_matches(area_path: str, chosen: list[str], tags: list[str] | None = Non
 
 
 def _owner(people: list[dict[str, Any]], story: dict[str, Any]) -> dict[str, Any] | None:
-    unique = (story.get("assigned_unique") or "").strip().lower()
-    name = (story.get("assigned_to") or "").strip().lower()
-    if not unique and not name:
-        return None
-    for person in people:
-        p_unique = (person.get("unique_name") or "").strip().lower()
-        p_name = (person.get("name") or "").strip().lower()
-        if unique and p_unique and unique == p_unique:
-            return person
-        if name and p_name and name == p_name:
-            return person
-        if unique and p_name and unique == p_name:
-            return person
-        if name and p_unique and name == p_unique:
-            return person
-        if unique and "@" in unique:
-            user = unique.split("@")[0]
-            if p_unique and user == p_unique.split("@")[0]:
-                return person
-            if p_name and (user == p_name or user in p_name):
-                return person
-        if p_unique and "@" in p_unique:
-            user = p_unique.split("@")[0]
-            if name and (user == name or user in name):
-                return person
-    return None
+    unique = (story.get("assigned_unique") or "").strip().casefold()
+    name = (story.get("assigned_to") or "").strip().casefold()
+    # Resolve authoritative identities across the whole roster before display names.
+    # Never match an email prefix or choose arbitrarily between duplicate names.
+    if unique:
+        matches = [p for p in people if unique == (p.get("unique_name") or "").strip().casefold()
+                   or unique == (p.get("name") or "").strip().casefold()]
+        if matches:
+            return matches[0] if len(matches) == 1 else None
+        matches = [p for p in people if not (p.get("unique_name") or "").strip()
+                   and name and name == (p.get("name") or "").strip().casefold()]
+    else:
+        matches = [p for p in people if name and name in {
+            (p.get("name") or "").strip().casefold(), (p.get("unique_name") or "").strip().casefold()}]
+    return matches[0] if len(matches) == 1 else None
 
 
 # ---------------------------------------------------------------- the plan
@@ -379,7 +368,7 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
         owner = _owner(people, story)
         if owner:
             by_key[id(owner)]["carried"].append(story)
-        elif story.get("assigned_to"):
+        elif story.get("assigned_to") or story.get("assigned_unique"):
             outside.append(story)
         else:
             leftovers.append(story)  # open in the previous sprint with nobody on it: it is taken first
@@ -424,7 +413,9 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
 
     for story in pool:
         if not any(can_take_story(r, story) for r in rows):
-            break
+            # A large story must not prevent a later smaller story from fitting.
+            if not any(can_take_story(r, {"points": 0}) for r in rows):
+                break
         taken += 1
 
         candidates = [(r, area_matches(story["area_path"], r["areas"], story.get("tags"))) for r in rows if can_take_story(r, story) and r["areas"]]

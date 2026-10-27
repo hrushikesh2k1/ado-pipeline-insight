@@ -1,4 +1,4 @@
-"""Sprint planning over HTTP. The plan is returned for display only: nothing is written to Azure DevOps."""
+"""Sprint planning over HTTP: read-only previews and explicitly confirmed commits."""
 from __future__ import annotations
 
 import logging
@@ -80,10 +80,15 @@ def sprint_planning_commit(payload: SprintCommitRequest) -> SprintCommitResponse
     org_clean, proj_clean = _names(payload.organization, payload.project)
     token = _resolve_pat(org_clean, payload.pat)
     try:
+        client = AzureDevOpsClient(organization=org_clean, pat=token)
+        target = next((s for s in sprint_planning.list_sprints(client, proj_clean, payload.team.strip())
+                       if s["id"] == payload.to_iteration_id), None)
+        if target is None or target["path"].strip().casefold() != payload.to_iteration_path.strip().casefold():
+            raise sprint_planning.PlanningError("The target sprint ID and path must match a sprint of this team. Refresh the setup and generate the plan again.")
         result = sprint_planning.commit_sprint_plan(
-            AzureDevOpsClient(organization=org_clean, pat=token),
+            client,
             project=proj_clean,
-            iteration_path=payload.to_iteration_path.strip(),
+            iteration_path=target["path"],
             assignments=[a.model_dump() for a in payload.assignments],
             sprint_goal=payload.sprint_goal,
         )

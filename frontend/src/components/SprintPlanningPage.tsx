@@ -1,15 +1,15 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Ban, Bot, CalendarCheck, Check, ChevronDown, Clock, Copy, ExternalLink,
   Info, Plus, Send, ShieldAlert, Sparkles, Target, TriangleAlert, Users, X,
 } from 'lucide-react'
 import './SprintPlanningPage.css'
 import { api } from '../services/api'
-import type { AdoTeam, PlanSprint, PlanStory, PlannedPerson, SprintPlan, SprintPlanningSetup, StoryAssignment } from '../types/api'
+import type { AdoTeam, PlanSprint, PlanStory, PlannedPerson, SprintPlan, SprintPlanningSetup, SprintCommitResponse } from '../types/api'
 import {
   ANY_AREA, DEFAULT_ACTIVE_DAYS, DEFAULT_PER_PERSON, MAX_PER_PERSON, MIN_PER_PERSON,
   addPerson, areaLabel, commentDate, daysInState, flagText, fullness, loadPeople, mergeMembers, peopleForPlan, personKey, plural, planAsMarkdown, planProblems,
-  removePerson, savePeople, setAreas, setIncluded, setPtoDays, setWorkingDays, sprintLabel, storyCount,
+  reassignStory, commitAssignments, removePerson, savePeople, setAreas, setIncluded, setPtoDays, setWorkingDays, sprintLabel, storyCount,
   type PlanningPerson,
 } from '../utils/sprintPlanning'
 
@@ -113,9 +113,9 @@ const StoryRow: React.FC<{
           onChange={e => onReassign(story.id, e.target.value)}
           aria-label={`Reassign story ${story.id}`}
         >
-          <option value="">(Unassigned / Backlog)</option>
+          <option value="">(Not in plan)</option>
           {people.map(p => (
-            <option key={p.name} value={p.name}>{p.name}</option>
+            <option key={personKey(p)} value={personKey(p)}>{p.name}</option>
           ))}
         </select>
       )}
@@ -141,7 +141,7 @@ const FlaggedCard: React.FC<{
         <a href={workItemUrl(story)} target="_blank" rel="noreferrer" className="sppStoryTitle"><span className="sppId">#{story.id}</span> {story.title}<ExternalLink size={10} /></a>
         {onDrop && (
           <button type="button" className="sppGhost" style={{ padding: '2px 8px', fontSize: '11px' }} onClick={() => onDrop(story.id)}>
-            Return to Backlog
+            Remove from plan
           </button>
         )}
       </div>
@@ -177,19 +177,18 @@ const PersonCard: React.FC<{
   onReassign?: (storyId: number, targetPersonName: string) => void
 }> = ({ person, sprintName, project, mode, allPeople, onReassign }) => {
   const key = personKey(person)
-  const pointsCapacity = mode === 'points' ? person.points_capacity : null
-  const percent = pointsCapacity != null
-    ? Math.min(100, Math.round(((person.points_planned ?? 0) / Math.max(1, pointsCapacity)) * 100))
+  const percent = mode === 'points' && person.points_capacity != null
+    ? Math.min(100, Math.round(((person.points_planned ?? 0) / Math.max(1, person.points_capacity)) * 100))
     : Math.min(100, Math.round((person.total / Math.max(1, person.capacity)) * 100))
 
-  const isOver = pointsCapacity != null
-    ? (person.points_planned ?? 0) > pointsCapacity
+  const isOver = mode === 'points' && person.points_capacity != null
+    ? (person.points_planned ?? 0) > person.points_capacity
     : person.over_by > 0
 
   const state = isOver ? 'over' : person.open_places ? 'short' : 'full'
 
-  const countDisplay = pointsCapacity != null
-    ? `${person.points_planned ?? 0} of ${pointsCapacity} pts`
+  const countDisplay = mode === 'points' && person.points_capacity != null
+    ? `${person.points_planned ?? 0} of ${person.points_capacity} pts`
     : fullness(person)
 
   return (
@@ -210,19 +209,19 @@ const PersonCard: React.FC<{
       {person.carried.length > 0 && (
         <>
           <h5>Carried over from the current sprint <span>({person.carried.length})</span></h5>
-          <ul>{person.carried.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={person.name} onReassign={onReassign} />)}</ul>
+          <ul>{person.carried.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} />)}</ul>
         </>
       )}
       {person.already_planned.length > 0 && (
         <>
           <h5>Already in {sprintName} <span>({person.already_planned.length})</span></h5>
-          <ul>{person.already_planned.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={person.name} onReassign={onReassign} />)}</ul>
+          <ul>{person.already_planned.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} />)}</ul>
         </>
       )}
       {person.new.length > 0 && (
         <>
           <h5>New from the backlog <span>({person.new.length})</span></h5>
-          <ul>{person.new.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={person.name} onReassign={onReassign} note={s.matched_area ? `area: ${areaLabel(s.matched_area, project)}` : undefined} />)}</ul>
+          <ul>{person.new.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} note={s.matched_area ? `area: ${areaLabel(s.matched_area, project)}` : undefined} />)}</ul>
         </>
       )}
       {storyCount(person) === 0 && <p className="sppMuted">No stories planned.</p>}
@@ -237,7 +236,7 @@ const Kpi: React.FC<{ label: string; value: string | number; sub?: string; tone?
 
 // ---------------------------------------------------------------- the page
 
-export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
+export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   organization = '', project = '', pat = '', projects = [], onOrganizationChange, onProjectChange, onPatChange,
 }) => {
   const org = organization.trim()
@@ -257,31 +256,30 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const [types, setTypes] = useState<string[]>([])
   const [people, setPeople] = useState<PlanningPerson[]>([])
   const [newPerson, setNewPerson] = useState('')
-  const [plan, setPlan] = useState<SprintPlan | null>(null)
-  const [planScope, setPlanScope] = useState<string | null>(null)
+  const [savedPlan, setPlan] = useState<SprintPlan | null>(null)
+  const [planKey, setPlanKey] = useState<string | null>(null)
   const [planning, setPlanning] = useState(false)
   const [committing, setCommitting] = useState(false)
   const [commitModalOpen, setCommitModalOpen] = useState(false)
-  const [commitResult, setCommitResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [commitResult, setCommitResult] = useState<SprintCommitResponse | null>(null)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const latestSetup = useRef(0)
-  const latestPlanning = useRef(0)
   const ready = !!org && !!project && !!team
-  const planningScope = JSON.stringify([org, project, team, fromId, toId])
-  const canCommitPlan = !!plan && planScope === planningScope
-    && plan.project === project && plan.team === team && plan.to_sprint.id === toId
+  const latestPlan = useRef(0)
+  const commitInFlight = useRef(false)
+  const setupScope = useRef('')
+  const scope = JSON.stringify([org, project, team, pat])
+  const inputsKey = JSON.stringify([scope, fromId, toId, perPerson, activeDays, sprintGoal, capacityMode, tagsFilter, areaFilter, types, peopleForPlan(people)])
+  const latestInputs = useRef(inputsKey)
+  latestInputs.current = inputsKey
+  const plan = planKey === inputsKey ? savedPlan : null
+  useEffect(() => {
+    latestPlan.current += 1
+    setPlan(null); setPlanKey(null); setCommitResult(null); setCommitModalOpen(false); setPlanning(false); setError('')
+  }, [inputsKey])
+  useEffect(() => () => { latestPlan.current += 1 }, [])
 
-  useLayoutEffect(() => {
-    latestPlanning.current += 1
-    setPlan(null)
-    setPlanScope(null)
-    setCommitModalOpen(false)
-    setCommitResult(null)
-    setPlanning(false)
-    setError('')
-    return () => { latestPlanning.current += 1 }
-  }, [planningScope])
 
   useEffect(() => {
     if (!org || !project) { setTeams([]); setTeam(''); return }
@@ -292,13 +290,16 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   }, [org, project, pat])
 
   const loadSetup = useCallback(async () => {
-    if (!ready) { setSetup(null); setLoadingSetup(false); return }
     const ticket = ++latestSetup.current
+    setSetup(null)
+    setupScope.current = ''
+    if (!ready) { setLoadingSetup(false); return }
     setLoadingSetup(true)
     setSetupError('')
     try {
       const found = await api.sprintPlanningSetup(org, project, team, pat || undefined)
       if (ticket !== latestSetup.current) return
+      setupScope.current = scope
       setSetup(found)
       const targetToId = found.default_to_id ?? ''
       setToId(targetToId)
@@ -324,13 +325,10 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
     }
   }, [ready, org, project, team, pat])
 
-  useEffect(() => {
-    void loadSetup()
-    return () => { latestSetup.current += 1 }
-  }, [loadSetup])
+  useEffect(() => { void loadSetup(); return () => { latestSetup.current += 1 } }, [loadSetup])
 
   // the areas and capacity people chose are kept in this browser for this team
-  useEffect(() => { if (setup && ready) savePeople(org, project, team, people) }, [people, setup, ready, org, project, team])
+  useEffect(() => { if (setup && ready && setupScope.current === scope) savePeople(org, project, team, people) }, [people, setup, ready, org, project, team, scope])
 
   const changeTeam = (value: string) => {
     setTeam(value)
@@ -358,32 +356,30 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const problems = useMemo(() => planProblems(people, toId, fromId), [people, toId, fromId])
 
   const makePlan = async () => {
-    const ticket = ++latestPlanning.current
-    setPlan(null)
-    setPlanScope(null)
-    setCommitModalOpen(false)
+    if (committing || planning || problems.blocking.length) return
+    const ticket = ++latestPlan.current
+    const key = inputsKey
+    setPlan(null); setPlanKey(null)
     setPlanning(true)
     setError('')
     setCommitResult(null)
     try {
       const tagsList = tagsFilter.split(',').map(t => t.trim()).filter(Boolean)
-      const generated = await api.sprintPlan({
+      const result = await api.sprintPlan({
         organization: org, project, team, pat: pat || undefined, from_iteration_id: fromId, to_iteration_id: toId, people: peopleForPlan(people),
         per_person: perPerson, active_days: activeDays, work_item_types: types.length ? types : undefined,
         sprint_goal: sprintGoal.trim() || undefined, capacity_mode: capacityMode,
         tags: tagsList.length ? tagsList : undefined,
         area_filter: areaFilter.trim() || undefined,
       })
-      if (ticket !== latestPlanning.current) return
-      if (generated.project !== project || generated.team !== team || generated.to_sprint.id !== toId) {
+      if (result.project !== project || result.team !== team || result.to_sprint.id !== toId) {
         throw new Error('The returned plan does not match the selected project, team and sprint. Generate the plan again.')
       }
-      setPlan(generated)
-      setPlanScope(planningScope)
+      if (ticket === latestPlan.current && latestInputs.current === key) { setPlan(result); setPlanKey(key) }
     } catch (e) {
-      if (ticket === latestPlanning.current) setError(errorText(e))
+      if (ticket === latestPlan.current && latestInputs.current === key) setError(errorText(e))
     } finally {
-      if (ticket === latestPlanning.current) setPlanning(false)
+      if (ticket === latestPlan.current) setPlanning(false)
     }
   }
 
@@ -396,67 +392,24 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
     } catch { setError('The plan could not be copied. Select the text on the page instead.') }
   }
 
-  // Interactive Reassignment within current active Plan
-  const handleReassign = (storyId: number, targetPersonName: string) => {
-    if (!plan) return
-    let foundStory: PlanStory | null = null
-
-    // Extract story from current place
-    const updatedPeople = plan.people.map(p => {
-      const isOwner = p.carried.some(s => s.id === storyId) || p.already_planned.some(s => s.id === storyId) || p.new.some(s => s.id === storyId)
-      if (!isOwner) return p
-
-      const carried = p.carried.filter(s => { if (s.id === storyId) { foundStory = s; return false } return true })
-      const already = p.already_planned.filter(s => { if (s.id === storyId) { foundStory = s; return false } return true })
-      const nw = p.new.filter(s => { if (s.id === storyId) { foundStory = s; return false } return true })
-      const total = carried.length + already.length + nw.length
-      const pts = Math.round((carried.reduce((a, b) => a + (b.points || 0), 0) + already.reduce((a, b) => a + (b.points || 0), 0) + nw.reduce((a, b) => a + (b.points || 0), 0)) * 10) / 10
-      return {
-        ...p, carried, already_planned: already, new: nw, total,
-        points_planned: pts, open_places: Math.max(0, p.capacity - total), over_by: Math.max(0, total - p.capacity),
-      }
-    })
-
-    if (!foundStory) return
-    const movingStory: PlanStory = foundStory
-
-    // If assigned to a target person, append to their new list
-    let updatedUnplaced = plan.unplaced
-    if (targetPersonName) {
-      const targetPerson = updatedPeople.find(p => p.name === targetPersonName)
-      if (targetPerson) {
-        targetPerson.new.push(movingStory)
-        targetPerson.total += 1
-        targetPerson.points_planned = Math.round(((targetPerson.points_planned || 0) + (movingStory.points || 0)) * 10) / 10
-        targetPerson.open_places = Math.max(0, targetPerson.capacity - targetPerson.total)
-        targetPerson.over_by = Math.max(0, targetPerson.total - targetPerson.capacity)
-      }
-    } else {
-      updatedUnplaced = [...updatedUnplaced, { story: movingStory, reason: 'Unassigned manually' }]
-    }
-
-
-    setPlan({
-      ...plan,
-      people: updatedPeople,
-      unplaced: updatedUnplaced,
-      unplaced_total: updatedUnplaced.length,
-    })
+  // Reassignment updates the complete draft atomically and preserves its source lane.
+  const handleReassign = (storyId: number, targetKey: string) => {
+    if (!plan || committing) return
+    setPlan(current => current ? reassignStory(current, storyId, targetKey) : current)
+    setCommitResult(null)
   }
 
   // Commit Plan to Azure DevOps
   const executeCommit = async () => {
-    if (!plan || !canCommitPlan || committing) return
-    const ticket = latestPlanning.current
+    if (!plan || planning || commitInFlight.current || problems.blocking.length) return
+    const key = inputsKey
+    commitInFlight.current = true
     setCommitting(true)
+    setCommitResult(null)
     setError('')
     try {
-      const assignments: StoryAssignment[] = []
-      for (const p of plan.people) {
-        for (const s of [...p.carried, ...p.already_planned, ...p.new]) {
-          assignments.push({ story_id: s.id, assigned_to: p.unique_name || p.name })
-        }
-      }
+      const assignments = commitAssignments(plan)
+      if (!assignments.length) throw new Error('There are no planned work items to commit.')
       const res = await api.sprintCommit({
         organization: org,
         project,
@@ -465,21 +418,19 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
         to_iteration_id: plan.to_sprint.id,
         to_iteration_path: plan.to_sprint.path,
         assignments,
-        sprint_goal: sprintGoal || undefined,
+        sprint_goal: plan.sprint_goal || undefined,
       })
-      if (ticket === latestPlanning.current) {
-        setCommitResult({ success: res.success, message: res.message })
-        setCommitModalOpen(false)
-      }
+      if (latestInputs.current === key) { setCommitResult(res); setCommitModalOpen(false) }
     } catch (e) {
-      if (ticket === latestPlanning.current) setError(errorText(e))
+      if (latestInputs.current === key) setError(errorText(e))
     } finally {
+      commitInFlight.current = false
       setCommitting(false)
     }
   }
 
   return (
-    <div className="sppPage" data-testid="sprint-planning-page">
+    <fieldset className="sppPage" disabled={committing} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }} data-testid="sprint-planning-page">
       <div className="sppBanner">
         <div className="sppBannerIcon"><CalendarCheck size={22} /></div>
         <div style={{ flex: 1 }}>
@@ -536,7 +487,10 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
       {setup?.notes.map(n => <div key={n} className="sppNotice warn" data-testid="spp-setup-note"><TriangleAlert size={14} /> {n}</div>)}
       {commitResult && (
         <div className={`sppNotice ${commitResult.success ? '' : 'warn'}`}>
-          <Check size={14} /> {commitResult.message}
+          <div data-testid="spp-commit-result">
+            {commitResult.success ? <Check size={14} /> : <TriangleAlert size={14} />} {commitResult.message}
+            {commitResult.errors.length > 0 && <><p>These work items were not updated. Review the errors before retrying the plan.</p><ul>{commitResult.errors.map((message, i) => <li key={i}>{message}</li>)}</ul></>}
+          </div>
         </div>
       )}
 
@@ -695,15 +649,15 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
           </section>
 
           <div className="sppActions">
-            <button type="button" className="sppPrimary" onClick={() => void makePlan()} disabled={planning || loadingSetup || !ready || problems.blocking.length > 0} data-testid="spp-plan">
+            <button type="button" className="sppPrimary" onClick={() => void makePlan()} disabled={planning || committing || loadingSetup || problems.blocking.length > 0} data-testid="spp-plan">
               <CalendarCheck size={14} /> {planning ? 'Planning…' : toSprint ? `Plan ${toSprint.name}` : 'Plan the sprint'}
             </button>
-            {canCommitPlan && (
+            {plan && (
               <>
                 <button type="button" className="sppGhost" onClick={() => void copyPlan()} data-testid="spp-copy">
                   {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy plan'}
                 </button>
-                <button type="button" className="sppPrimary" style={{ background: '#059669', borderColor: '#059669' }} onClick={() => setCommitModalOpen(true)}>
+                <button type="button" className="sppPrimary" style={{ background: '#059669', borderColor: '#059669' }} onClick={() => setCommitModalOpen(true)} disabled={planning || committing || problems.blocking.length > 0 || !plan.summary.stories_planned}>
                   <Send size={14} /> Commit to Azure DevOps
                 </button>
               </>
@@ -834,7 +788,7 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
       )}
 
       {/* Commit Confirmation Modal */}
-      {commitModalOpen && plan && canCommitPlan && (
+      {commitModalOpen && plan && toSprint && (
         <div className="sppModalBackdrop" onClick={() => setCommitModalOpen(false)}>
           <div className="sppModalContent" onClick={e => e.stopPropagation()}>
             <div className="sppModalHead">
@@ -858,7 +812,9 @@ export const SprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
           </div>
         </div>
       )}
-    </div>
+    </fieldset>
   )
 }
 
+
+export const SprintPlanningPage = LegacySprintPlanningPage

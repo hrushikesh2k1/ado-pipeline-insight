@@ -1,7 +1,8 @@
 """Request and response shapes of sprint planning (see app/services/sprint_planning.py)."""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+from pydantic import BaseModel, Field, model_validator
 
 
 class PlanSprint(BaseModel):
@@ -55,7 +56,7 @@ class SprintPlanRequest(BaseModel):
     active_days: int = Field(default=10, ge=1, le=90)
     work_item_types: list[str] | None = Field(default=None, max_length=8)
     sprint_goal: str | None = Field(default=None, max_length=500)
-    capacity_mode: str = Field(default="stories", max_length=20)  # "stories" | "points"
+    capacity_mode: Literal["stories", "points"] = "stories"
     focus_factor: float = Field(default=0.8, ge=0.1, le=1.0)
     tags: list[str] | None = Field(default=None, max_length=20)
     area_filter: str | None = Field(default=None, max_length=256)
@@ -168,7 +169,7 @@ class SprintPlan(BaseModel):
 
 
 class StoryAssignment(BaseModel):
-    story_id: int
+    story_id: int = Field(ge=1)
     assigned_to: str | None = None  # display name or unique email
 
 
@@ -181,6 +182,14 @@ class SprintCommitRequest(BaseModel):
     to_iteration_path: str = Field(min_length=1, max_length=256)
     assignments: list[StoryAssignment] = Field(default_factory=list)
     sprint_goal: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def unique_assignments(self):
+        if not self.assignments:
+            raise ValueError("At least one assignment is required to commit a sprint plan.")
+        if len({a.story_id for a in self.assignments}) != len(self.assignments):
+            raise ValueError("Each work item may appear only once in a sprint commit.")
+        return self
 
 
 class SprintCommitResponse(BaseModel):

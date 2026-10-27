@@ -733,3 +733,49 @@ class TestSprintPlanningEnhancements:
         assert [s["id"] for s in ben_row["new"]] == [202, 201]
 
 
+
+
+class TestPlanningRegressionFixes:
+    @pytest.mark.parametrize('settings', [
+        {'capacity_points': 0}, {'working_days': 0},
+        {'working_days': 10, 'pto_days': 10}, {'working_days': 5, 'pto_days': 8},
+    ])
+    def test_zero_capacity_never_gets_new_work_in_points_mode(self, settings):
+        p = {**AVA, **settings}
+        for value in (0, None, 5):
+            backlog = [{'id': 99, 'points': value, 'area_path': BACKEND, 'assigned_to': '', 'assigned_unique': '', 'flags': []}]
+            result = sp.make_plan(people=[p], carried=[], planned=[], backlog=backlog, per_person=6, capacity_mode='points')
+            assert result['people'][0]['points_capacity'] == 0
+            assert result['people'][0]['new'] == []
+            assert result['backlog_left'] == 1
+
+    def test_zero_capacity_preserves_existing_work_and_reports_overload(self):
+        carry = {'id': 1, 'points': 3, 'area_path': BACKEND, 'assigned_to': AVA['name'], 'assigned_unique': AVA['unique_name'], 'flags': []}
+        result = sp.make_plan(people=[{**AVA, 'capacity_points': 0}], carried=[carry], planned=[], backlog=[], per_person=6, capacity_mode='points')
+        row = result['people'][0]
+        assert row['carried'] == [carry] and row['points_over_by'] == 3
+        assert any('Capacity exceeded' in w for w in row['warnings'])
+        assert any('Capacity exceeded' in w for w in sp._calculate_risks([row], [], [carry])[1])
+
+    def test_oversized_first_story_does_not_hide_smaller_stories_that_fit(self):
+        backlog = [{'id': i, 'points': pts, 'area_path': BACKEND, 'assigned_to': '', 'assigned_unique': '', 'flags': []} for i, pts in [(1, 13), (2, 3)]]
+        result = sp.make_plan(people=[{**AVA, 'capacity_points': 5}], carried=[], planned=[], backlog=backlog, per_person=6, capacity_mode='points')
+        assert [s['id'] for s in result['people'][0]['new']] == [2]
+        assert [u['story']['id'] for u in result['unplaced']] == [1]
+
+    def test_owner_uses_full_identity_before_display_names(self):
+        people = [{'name': 'Same Name', 'unique_name': 'other@test'}, {'name': 'Same Name', 'unique_name': 'owner@test'}]
+        assert sp._owner(people, {'assigned_to': 'Same Name', 'assigned_unique': 'owner@test'}) is people[1]
+        assert sp._owner(people, {'assigned_to': 'Same Name', 'assigned_unique': 'absent@test'}) is None
+        assert sp._owner(people, {'assigned_to': 'Same Name', 'assigned_unique': ''}) is None
+
+    def test_owner_never_matches_email_prefixes_or_different_domains(self):
+        people = [{'name': 'Alexandra Smith', 'unique_name': 'alexandra@test'}]
+        assert sp._owner(people, {'assigned_unique': 'alex@test'}) is None
+        assert sp._owner([{'name': 'Alex', 'unique_name': 'alex@a.test'}], {'assigned_unique': 'alex@b.test'}) is None
+
+    def test_unique_only_outside_owner_is_not_treated_as_unassigned(self):
+        carry = {'id': 1, 'points': 1, 'area_path': BACKEND, 'assigned_to': '', 'assigned_unique': 'unknown@test', 'flags': []}
+        result = sp.make_plan(people=[AVA], carried=[carry], planned=[], backlog=[], per_person=6)
+        assert result['outside_plan'] == [carry]
+        assert result['people'][0]['new'] == []

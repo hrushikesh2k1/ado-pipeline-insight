@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import app.api.routes as routes
 import app.api.sprint_planning_routes as planning_routes
 from app.main import create_app
-from sprint_support import FakeBoard, http_error, comment, story
+from sprint_support import FakeBoard, http_error, comment, story, NOW
 from test_sprint_planning import AVA, BEN, CARA, scenario_items
 
 SETUP = "/api/v1/ado/sprint-planning/setup"
@@ -26,6 +26,11 @@ def api(monkeypatch):
         return state["board"]
 
     monkeypatch.setattr(planning_routes, "AzureDevOpsClient", make)
+    real_plan = planning_routes.sprint_planning.plan_sprint
+    def fixed_date_plan(*args, **kwargs):
+        kwargs.setdefault("now", NOW)
+        return real_plan(*args, **kwargs)
+    monkeypatch.setattr(planning_routes.sprint_planning, "plan_sprint", fixed_date_plan)
     return TestClient(create_app(), raise_server_exceptions=False), state
 
 
@@ -162,3 +167,42 @@ class TestPlan:
         client.get(SETUP, params=QUERY)
         board = state["board"]
         assert not [name for name in dir(board) if name.startswith(("update_", "create_", "delete_", "patch_", "post_", "set_"))]
+
+
+COMMIT = '/api/v1/ado/sprint-planning/commit'
+COMMIT_BODY = {**{k: BODY[k] for k in ('organization', 'project', 'team', 'pat')},
+               'to_iteration_id': 's3', 'to_iteration_path': 'Demo\\Sprint 3',
+               'assignments': [{'story_id': 10, 'assigned_to': 'ava@example.test'}, {'story_id': 12, 'assigned_to': 'ben@example.test'}]}
+
+
+class TestCommitSafety:
+    def test_partial_write_keeps_per_item_failures(self, api):
+        client, state = api
+        writes = []
+        def update(project, item_id, patch):
+            writes.append(item_id)
+            if item_id == 12:
+                raise ValueError('Assignment not allowed')
+        state['board'].update_work_item = update
+        result = client.post(COMMIT, json=COMMIT_BODY)
+        assert result.status_code == 200
+        data = result.json()
+        assert data['success'] is False and data['updated_count'] == 1
+        assert data['errors'] == ['#12: Assignment not allowed'] and writes == [10, 12]
+
+    @pytest.mark.parametrize('changes', [
+        {'to_iteration_path': 'Demo\\Wrong Sprint'}, {'to_iteration_id': 'not-in-team'},
+        {'assignments': []}, {'assignments': [{'story_id': 0}]},
+        {'assignments': [{'story_id': 10, 'assigned_to': 'a'}, {'story_id': 10, 'assigned_to': 'b'}]},
+    ])
+    def test_invalid_commit_fails_before_any_write(self, api, changes):
+        client, state = api
+        writes = []
+        state['board'].update_work_item = lambda *args: writes.append(args)
+        result = client.post(COMMIT, json={**COMMIT_BODY, **changes})
+        assert result.status_code == 422 and writes == []
+
+    def test_unknown_capacity_mode_is_rejected_before_ado_access(self, api):
+        client, state = api
+        assert client.post(PLAN, json={**BODY, 'capacity_mode': 'unlimited'}).status_code == 422
+        assert state['made'] == []
