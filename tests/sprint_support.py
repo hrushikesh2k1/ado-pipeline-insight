@@ -105,6 +105,14 @@ class FakeBoard:
         self._maybe_fail("members")
         return self.members
 
+    def list_teams(self, project, top=100):
+        self._maybe_fail("teams")
+        return [{"id": "alpha", "name": TEAM}]
+
+    def list_group_members(self, identity_id):
+        self._maybe_fail("groups")
+        return []
+
     def get_area_tree(self, project, depth=6):
         self._maybe_fail("area_tree")
         return AREA_TREE

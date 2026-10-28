@@ -2,12 +2,12 @@ import {
   assignee,
   buildSprintReport,
   buildTeamDeliverablesReport,
-  calculateSprintBusinessDays,
   formatSprintMonthYear,
   prepareMemberDeliverables,
   workItemUrl,
 } from '../utils/sprintReport'
 import { formatSprintRange, formatWorkDaysRemaining, withListedDates } from '../utils/sprintDates'
+import { availableCapacityDays, capacityStorageKey, loadCapacityMembers, mergeCapacityMembers, sprintWorkingDays, totalCapacityHours } from '../utils/sprintCapacity'
 import React, { useState, useEffect, useMemo } from 'react'
 import {
   AlertTriangle,
@@ -117,43 +117,6 @@ const TEAMS_CACHE_KEY = (org: string, project: string): string => {
 }
 
 const normalizePersonName = (name: string): string => name.trim().toLowerCase()
-
-const capacityStorageKey = (teamId: string, iterationId?: string): string =>
-  `ado_sprint_capacity_${teamId || 'default'}_${iterationId || 'current'}`
-
-function mergeCapacityMembers(adoMembers: CapacityMember[], savedMembers: CapacityMember[], assignees: string[]): CapacityMember[] {
-  const byName = new Map<string, CapacityMember>()
-  adoMembers.forEach(member => {
-    byName.set(normalizePersonName(member.name), { ...member, source: member.source || 'ado' })
-  })
-
-  assignees.forEach((name, idx) => {
-    const key = normalizePersonName(name)
-    if (!byName.has(key)) {
-      byName.set(key, {
-        id: `cap-assignee-${idx}-${key.replace(/\s+/g, '-')}`,
-        name,
-        activity: 'Development',
-        capacity_per_day: 8,
-        days_off: 0,
-        source: 'manual',
-      })
-    }
-  })
-
-  savedMembers.forEach(member => {
-    const key = normalizePersonName(member.name)
-    byName.set(key, {
-      ...byName.get(key),
-      ...member,
-      id: byName.get(key)?.id || member.id,
-      name: byName.get(key)?.name || member.name,
-      source: member.source || byName.get(key)?.source || 'manual',
-    })
-  })
-
-  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name))
-}
 
 function getStoredBoardData(org: string, project: string, teamId: string, iterationId?: string): AdoSprintBoardResponse | null {
   if (!org || !project || !teamId) return null
@@ -1061,18 +1024,11 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
 
   // Initialize capacity members
   useEffect(() => {
-    const key = capacityStorageKey(selectedTeamId, selectedIterationId)
     let savedMembers: CapacityMember[] = []
     try {
-      const saved = localStorage.getItem(key)
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          savedMembers = parsed
-        }
-      }
-    } catch {
-      // ignore
+      savedMembers = loadCapacityMembers(organization, project, selectedTeamId, selectedIterationId)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Capacity settings could not be read.')
     }
 
     const adoMembers = (boardData?.capacity_members || []).map(member => ({
@@ -1081,18 +1037,19 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       days_off: Number(member.days_off || 0),
       source: member.source || 'ado',
     }))
-    setCapacityMembers(mergeCapacityMembers(adoMembers, savedMembers, uniqueAssignees))
-  }, [uniqueAssignees, selectedTeamId, selectedIterationId, boardData?.capacity_members])
+    setCapacityMembers(mergeCapacityMembers(adoMembers, savedMembers))
+  }, [organization, project, selectedTeamId, selectedIterationId, boardData?.capacity_members])
 
   const saveCapacitySettings = (updated: CapacityMember[]) => {
     setCapacityMembers(updated)
-    const key = capacityStorageKey(selectedTeamId, selectedIterationId)
+    const key = capacityStorageKey(organization, project, selectedTeamId, selectedIterationId)
     try {
       localStorage.setItem(key, JSON.stringify(updated))
+      window.dispatchEvent(new Event('sprint-capacity-changed'))
       setCapacitySavedNotice(true)
       setTimeout(() => setCapacitySavedNotice(false), 2500)
-    } catch {
-      // ignore
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Capacity settings could not be saved.')
     }
   }
 
@@ -1279,14 +1236,9 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
       if (isDone) completedPoints += pts
     })
 
-    const workingDays = Math.max(
-      1,
-      boardData?.sprint_working_days ||
-        calculateSprintBusinessDays(boardData?.iteration?.start_date || currentIteration?.start_date, boardData?.iteration?.finish_date || currentIteration?.finish_date) ||
-        boardData?.working_days_remaining ||
-        10
-    )
-    const requiredDailyBurn = Math.round((totalRemaining / workingDays) * 10) / 10
+    const workingDays = sprintWorkingDays(boardData?.sprint_working_days,
+      boardData?.iteration?.start_date || currentIteration?.start_date, boardData?.iteration?.finish_date || currentIteration?.finish_date) ?? 0
+    const requiredDailyBurn = workingDays > 0 ? Math.round((totalRemaining / workingDays) * 10) / 10 : 0
     const totalSprintWork = totalCompleted + totalRemaining
     const percentDelivered = totalSprintWork > 0 ? Math.round((totalCompleted / totalSprintWork) * 100) : 0
 
@@ -1313,13 +1265,8 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
 
   // Capacity Stats Computation
   const capacityStats = useMemo(() => {
-    const workingDays = Math.max(
-      1,
-      boardData?.sprint_working_days ||
-        calculateSprintBusinessDays(boardData?.iteration?.start_date || currentIteration?.start_date, boardData?.iteration?.finish_date || currentIteration?.finish_date) ||
-        boardData?.working_days_remaining ||
-        10
-    )
+    const workingDays = sprintWorkingDays(boardData?.sprint_working_days,
+      boardData?.iteration?.start_date || currentIteration?.start_date, boardData?.iteration?.finish_date || currentIteration?.finish_date) ?? 0
     let totalTeamCapacity = 0
     let totalAssignedHours = 0
 
@@ -1333,8 +1280,8 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
     }
 
     const memberDetails = capacityMembers.map(m => {
-      const availableDays = Math.max(0, workingDays - (m.days_off || 0))
-      const individualCap = Math.round(availableDays * (m.capacity_per_day || 6) * 10) / 10
+      const availableDays = availableCapacityDays(workingDays, m.days_off)
+      const individualCap = totalCapacityHours(workingDays, m)
       totalTeamCapacity += individualCap
 
       const assignedTasks = (boardData?.work_items || []).filter(w => {
@@ -4026,19 +3973,13 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
         const sprintTitle = currentIteration ? formatSprintName(currentIteration.name, currentIteration.path) : 'Current Sprint'
         const teamTitle = teams.find(t => t.id === selectedTeamId)?.name || selectedTeamId
         const sprintLabel = formatSprintMonthYear(currentIteration?.start_date, currentIteration?.finish_date, currentIteration?.name)
-        const sprintWorkingDays = Math.max(
-          1,
-          boardData?.sprint_working_days ||
-            calculateSprintBusinessDays(currentIteration?.start_date, currentIteration?.finish_date) ||
-            10
-        )
-        const capacityPerPerson = sprintWorkingDays * 8
+        const capacityPerPerson = capacityStats.memberDetails.length
+          ? Math.round(capacityStats.totalTeamCapacity / capacityStats.memberDetails.length * 10) / 10
+          : null
 
         const memberCapacityMap: Record<string, number> = {}
-        capacityMembers.forEach(m => {
-          const availableDays = Math.max(0, sprintWorkingDays - (m.days_off || 0))
-          const indCap = Math.round(availableDays * (m.capacity_per_day || 8) * 10) / 10
-          memberCapacityMap[m.name] = indCap
+        capacityStats.memberDetails.forEach(member => {
+          memberCapacityMap[member.name] = member.individualCap
         })
 
         const emailSubject = isDeliverablesMode
@@ -4054,7 +3995,7 @@ export const SprintBoardPage: React.FC<SprintBoardPageProps> = ({
               deliverablesReport?.memberContributions || [],
               boardData?.work_items || [],
               memberCapacityMap,
-              capacityPerPerson,
+              null,
               iterToUse
             )
           : []

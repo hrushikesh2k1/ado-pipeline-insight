@@ -6,7 +6,27 @@ The number lives in the `VERSION` file; change it with `python scripts/bump_vers
 
 ## [Unreleased]
 
+## [1.12.10] - 2026-10-29
+
+### Added
+- Saved sprint-planning rosters per organization, project and team, with search, membership editing and refresh without resetting selections. Candidate discovery includes all project teams and nested identity groups, with pagination, deduplication and incomplete-discovery warnings.
+- Two-pane Team Workload Swimlanes: member workloads on the left and available backlog on the right, with immediate draft assignment through team-member dropdowns and return-to-backlog support.
+- Explainable Sprint Goal topic matching with evidence excerpts, goal-related backlog items ranked first and highlighted with a full green outline. Conservative phrase matching avoids generic-word false positives.
+- Collapsed-by-default recent comments across sprint-planning story cards, with the latest three comments loaded on demand, explicit read errors and retry support.
+- All / Blocked / Active too long display filters for the attention section.
+- Individual velocity forecasts using previous completed points scaled by upcoming versus previous available days. Historical owner, points and Completed-category state are read at the previous completed sprint's end.
+- Half-complete carryover assumption: reserve 50% of original carryover points and full points for existing target-sprint and new work. Forecast diagnostics distinguish original story size, reserved workload and unallocated budget.
+
+### Changed
+- Capacity is the shared source of Working Days, PTO and capacity hours across the Capacity tab, sprint planning and reports. Planning availability is read-only, browser overrides are scoped by organization/project/team/sprint, and zero values remain zero.
+- Automatic velocity-based assignments must fit the remaining forecast without a fixed eight-point budget, story-count cap or 15% overage. Missing history, estimates or availability pause automatic new assignment rather than inventing defaults; manual draft moves remain available with warnings.
+- Removed optional backlog tag/area/type controls and personal area dropdowns. Setup's standard work item types and the selected team's normal scope still apply; old personal area restrictions no longer limit assignments.
+- Retained explicit Azure DevOps commit confirmation as the only write action. Roster edits, backlog moves and plan previews remain local until committed.
+
 ### Fixed
+- Read Azure DevOps capacity members from `teamMembers`, with compatibility for `value`-wrapped responses, instead of silently treating valid capacity responses as empty.
+- Deduplicate overlapping PTO dates, share inclusive weekday calculations and preserve known sprint working days even when member capacity entries are missing.
+- Keep workload reserves, overload warnings, summaries and copied plans consistent after manual reassignment or removal, and invalidate stale drafts when Capacity data or planning inputs change.
 - **Sprint planning respects zero available capacity:**
   - Preserves explicit zero working days in the page, saved preferences, and plan request instead of restoring the ten-day default.
   - Prevents new automatic work when no working days remain after leave in either planning mode; points mode also enforces zero point budgets for estimated, zero-point, and unestimated candidates.

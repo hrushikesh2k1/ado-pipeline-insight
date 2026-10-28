@@ -79,7 +79,7 @@ export function buildSprintReport(input: SprintReportInput): { text: string; htm
 
 export interface MemberDeliverableItem {
   name: string
-  hoursDelivered: number
+  hoursDelivered: number | null
   storyTitles: string[]
   bugCount: number
   crossSprintCount?: number
@@ -88,7 +88,7 @@ export interface MemberDeliverableItem {
 
 export interface TeamDeliverablesReportInput {
   sprintLabel: string
-  capacityPerPersonHours: number
+  capacityPerPersonHours: number | null
   teamTitle: string
   members: MemberDeliverableItem[]
 }
@@ -155,26 +155,8 @@ export function formatSprintMonthYear(
 export function calculateSprintBusinessDays(
   startStr?: string | null,
   finishStr?: string | null
-): number {
-  if (!startStr || !finishStr) return 21 // standard monthly default
-  const start = new Date(startStr)
-  const finish = new Date(finishStr)
-  if (Number.isNaN(start.getTime()) || Number.isNaN(finish.getTime())) return 21
-
-  const cur = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate()))
-  const target = new Date(Date.UTC(finish.getUTCFullYear(), finish.getUTCMonth(), finish.getUTCDate()))
-
-  if (cur >= target) return 10
-
-  let count = 0
-  while (cur < target) {
-    cur.setUTCDate(cur.getUTCDate() + 1)
-    const day = cur.getUTCDay()
-    if (day !== 0 && day !== 6) {
-      count++
-    }
-  }
-  return count > 0 ? count : 21
+): number | null {
+  return sprintWorkingDays(null, startStr, finishStr)
 }
 
 /**
@@ -195,20 +177,21 @@ export function buildTeamDeliverablesReport(
     '',
     `Below are the high-level details of the work delivered in ${input.sprintLabel}.`,
     'Note: Items marked as tracked under another sprint were assigned to a different iteration path in Azure DevOps, but were closed during this sprint date range.',
-    `Capacity/person – ${input.capacityPerPersonHours} hrs.`,
+    input.capacityPerPersonHours == null ? 'Capacity data unavailable.' : `Average Capacity/person – ${input.capacityPerPersonHours} hrs.`,
   ]
 
   const htmlSections: string[] = [
     '<p style="margin: 0 0 12px 0;">Hi,</p>',
     `<p style="margin: 0 0 4px 0;">Below are the high-level details of the <u>work delivered</u> in <b>${escapeHtml(input.sprintLabel)}</b>.</p>`,
     '<p style="margin: 0 0 4px 0; color: #475569;">Note: Items marked as tracked under another sprint were assigned to a different iteration path in Azure DevOps, but were closed during this sprint date range.</p>',
-    `<p style="margin: 0 0 16px 0;">Capacity/person – <b>${input.capacityPerPersonHours} hrs.</b></p>`,
+    `<p style="margin: 0 0 16px 0;">${input.capacityPerPersonHours == null ? 'Capacity data unavailable.' : `Average Capacity/person – <b>${input.capacityPerPersonHours} hrs.</b>`}</p>`,
   ]
 
   input.members.forEach(m => {
     // Plain text section
     textLines.push('')
-    textLines.push(`@${m.name} (${m.hoursDelivered}h)`)
+    const capacity = m.hoursDelivered == null ? 'Capacity unavailable' : `${m.hoursDelivered}h`
+    textLines.push(`@${m.name} (${capacity})`)
     m.storyTitles.forEach(st => {
       textLines.push(`• ${st}`)
     })
@@ -228,7 +211,7 @@ export function buildTeamDeliverablesReport(
     }
 
     htmlSections.push(
-      `<p style="margin: 16px 0 4px 0;"><b><span style="color: #0078d4;">@${escapeHtml(m.name)}</span> (${m.hoursDelivered}h)</b></p>` +
+      `<p style="margin: 16px 0 4px 0;"><b><span style="color: #0078d4;">@${escapeHtml(m.name)}</span> (${capacity})</b></p>` +
       `<ul style="margin: 4px 0 12px 0; padding-left: 20px;">${itemsHtml.join('')}</ul>`
     )
   })
@@ -269,7 +252,7 @@ export function prepareMemberDeliverables(
     iteration_path?: string | null
   }[] = [],
   memberCapacities: Record<string, number> = {},
-  defaultCapacity: number = 168,
+  defaultCapacity: number | null = null,
   iteration?: {
     start_date?: string | null
     finish_date?: string | null
@@ -399,7 +382,7 @@ export function prepareMemberDeliverables(
   })
 
   // Resolve person's planned capacity (not task completed hours)
-  const getPersonCapacity = (name: string): number => {
+  const getPersonCapacity = (name: string): number | null => {
     const matchedKey = Object.keys(memberCapacities).find(k => isSamePerson(k, name))
     if (matchedKey && memberCapacities[matchedKey] !== undefined) {
       return memberCapacities[matchedKey]
@@ -417,5 +400,6 @@ export function prepareMemberDeliverables(
       crossSprintCount: data.crossSprintCount,
       crossSprintBugCount: data.crossSprintBugCount,
     }))
-    .sort((a, b) => b.hoursDelivered - a.hoursDelivered || b.storyTitles.length - a.storyTitles.length)
+    .sort((a, b) => (b.hoursDelivered ?? 0) - (a.hoursDelivered ?? 0) || b.storyTitles.length - a.storyTitles.length)
 }
+import { sprintWorkingDays } from './sprintCapacity'

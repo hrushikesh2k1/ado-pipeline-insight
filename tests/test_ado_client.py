@@ -1,4 +1,5 @@
 import requests
+import pytest
 
 from core.ado_client import AzureDevOpsClient
 
@@ -68,6 +69,38 @@ class _FakeResponse:
         return {"value": self._value}
 
 
+@pytest.mark.parametrize("wrapper", ["teamMembers", "value"])
+@pytest.mark.parametrize("members", [[], [{"teamMember": {"displayName": "Example Person"},
+                                         "activities": [{"capacityPerDay": 8, "name": "Development"}],
+                                         "daysOff": [{"start": "2026-09-02", "end": "2026-09-03"}]}]])
+def test_iteration_capacities_reads_team_members_and_legacy_value(wrapper, members):
+    class Session:
+        headers = {}
+
+        def get(self, url, params, timeout):
+            assert "team-id/_apis/work/teamsettings/iterations/sprint-id/capacities" in url
+            response = _FakeResponse(None)
+            response.json = lambda: {wrapper: members}
+            return response
+
+    assert AzureDevOpsClient("example", "test", session=Session()).get_iteration_capacities(
+        "project", "team-id", "sprint-id") == members
+
+
+@pytest.mark.parametrize("data", [{}, {"teamMembers": None}, {"teamMembers": {}}, {"teamMembers": [None]}])
+def test_iteration_capacities_rejects_malformed_response_instead_of_reporting_empty(data):
+    class Session:
+        headers = {}
+
+        def get(self, *args, **kwargs):
+            response = _FakeResponse(None)
+            response.json = lambda: data
+            return response
+
+    with pytest.raises(ValueError, match="invalid iteration capacity"):
+        AzureDevOpsClient("example", "test", session=Session()).get_iteration_capacities("project", "team", "sprint")
+
+
 class _FakeSession:
     def __init__(self):
         self.headers = {}
@@ -80,6 +113,46 @@ class _FakeSession:
         return _FakeResponse([{"id": 1}])
 
 
+@pytest.mark.parametrize("method,args", [("list_teams", ("project",)), ("list_team_members", ("project", "Alpha"))])
+def test_team_and_member_lists_read_every_page(method, args):
+    session = _FakeSession()
+    result = getattr(AzureDevOpsClient("example", "test", session=session), method)(*args, top=2)
+    assert [row["id"] for row in result] == [3, 2, 1]
+    assert session.calls[1]["$skip"] == 2
+
+
+def test_group_expansion_resolves_nested_groups_and_cycles_and_filters_inactive_users():
+    class Session:
+        headers = {}
+
+        def get(self, url, params, timeout):
+            assert params["queryMembership"] == "Direct"
+            identities = {
+                "root": {"id": "root", "isContainer": True, "memberIds": ["nested", "ava"]},
+                "nested": {"id": "nested", "isContainer": True, "members": [{"identityType": "aad", "identifier": "ben"}]},
+                "ava": {"id": "ava", "providerDisplayName": "Ava", "properties": {"Account": {"$value": "ava@test"}}},
+                "aad;ben": {"id": "group2", "isContainer": True, "memberIds": ["root", "ben", "inactive"]},
+                "ben": {"id": "ben", "providerDisplayName": "Ben", "properties": {"Mail": {"$value": "ben@test"}}},
+                "inactive": {"id": "inactive", "isActive": False},
+            }
+            values = params.get("identityIds", params.get("descriptors")).split(",")
+            return _FakeResponse([identities[value] for value in values])
+
+    result = AzureDevOpsClient("example", "test", session=Session()).list_group_members("root")
+    assert [(p["displayName"], p["uniqueName"]) for p in result] == [("Ava", "ava@test"), ("Ben", "ben@test")]
+
+
+def test_missing_group_identity_is_an_explicit_failure():
+    class Session:
+        headers = {}
+
+        def get(self, url, params, timeout):
+            return _FakeResponse([])
+
+    with pytest.raises(ValueError, match="did not return all"):
+        AzureDevOpsClient("example", "test", session=Session()).list_group_members("missing")
+
+
 def test_list_builds_follows_continuation_token():
     session = _FakeSession()
     client = AzureDevOpsClient("example", "test", session=session)
@@ -87,6 +160,24 @@ def test_list_builds_follows_continuation_token():
     assert [b["id"] for b in builds] == [3, 2, 1]
     assert session.calls[0]["$top"] == 2
     assert session.calls[1]["continuationToken"] == "next-token"
+
+
+def test_work_item_batch_uses_same_asof_timestamp_for_every_chunk():
+    class Session:
+        headers = {}
+        payloads = []
+
+        def post(self, url, json, params, timeout):
+            self.payloads.append(json)
+            return _FakeResponse([{"id": item_id} for item_id in json["ids"]])
+
+    session = Session()
+    result = AzureDevOpsClient("example", "test", session=session).get_work_items_batch(
+        "project", list(range(201)), fields=["System.AssignedTo"], as_of="2026-10-02T23:59:59.999Z")
+    assert len(result) == 201
+    assert len(session.payloads) == 2
+    assert all(payload["asOf"] == "2026-10-02T23:59:59.999Z" for payload in session.payloads)
+    assert all("$expand" not in payload for payload in session.payloads)
 
 
 def test_flatten_timeline_preserves_build_number():

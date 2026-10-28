@@ -494,7 +494,75 @@ class TestWhatTheCallerCanFix:
             run(FakeBoard(scenario_items(), fail=("iterations",)))
 
 
+class TestAvailableBacklog:
+    def test_capacity_stop_still_returns_every_remaining_candidate(self):
+        backlog = [plain(i) for i in range(1, 91)]
+        result = plan([AVA], backlog=backlog, per_person=1)
+        assert ids(result["people"][0]["new"]) == [1]
+        assert ids(result["available_backlog"]) == list(range(2, 91))
+        assert result["backlog_left"] == 89
+
+    def test_available_list_is_not_truncated_to_legacy_unplaced_limit(self):
+        backlog = [plain(i, OPS) for i in range(1, 91)]
+        result = plan([AVA], backlog=backlog)
+        assert len(result["unplaced"]) == sp.MAX_UNPLACED_LISTED
+        assert ids(result["available_backlog"]) == list(range(1, 91))
+
+    def test_unassigned_carryover_is_available_when_no_capacity_remains(self):
+        result = plan([AVA], carried=[plain(1)], planned=[plain(2, who="ava")], per_person=1)
+        assert ids(result["available_backlog"]) == [1]
+        assert ids(result["people"][0]["already_planned"]) == [2]
+
+    def test_response_keeps_plain_text_descriptions_for_goal_matching(self):
+        item = story(99)
+        item["fields"]["System.Description"] = "<p>OAuth <b>monitoring</b></p>"
+        made = sp.make_story(item, states=StateMap(), now=NOW, active_days=10, organization="org", project=PROJECT)
+        assert made["description"] == "OAuth monitoring"
+
+
 class TestSetup:
+    def test_candidates_include_all_teams_and_nested_group_people_once(self):
+        class ProjectBoard(FakeBoard):
+            def list_teams(self, project):
+                return [{"name": TEAM}, {"name": "Beta"}]
+
+            def list_team_members(self, project, team, top=200):
+                if team == TEAM:
+                    return [{"identity": person("ava")}]
+                return [{"identity": person("ava")}, {"identity": person("ben")},
+                        {"identity": {"id": "group", "isContainer": True}}]
+
+            def list_group_members(self, identity_id):
+                assert identity_id == "group"
+                return [person("ben"), person("cara")]
+
+        result = sp.team_setup(ProjectBoard([]), PROJECT, TEAM)
+        assert [p["unique_name"] for p in result["members"]] == ["ava@example.test", "ben@example.test", "cara@example.test"]
+        assert result["notes"] == []
+
+    def test_discovery_failures_warn_without_removing_readable_people(self):
+        class PartialBoard(FakeBoard):
+            def list_teams(self, project):
+                return [{"name": "Beta"}]
+
+            def list_team_members(self, project, team, top=200):
+                if team == "Beta":
+                    raise PermissionError("not allowed")
+                return [{"identity": person("ava")}, {"identity": {"id": "group", "isContainer": True}}]
+
+            def list_group_members(self, identity_id):
+                raise PermissionError("not allowed")
+
+        result = sp.team_setup(PartialBoard([]), PROJECT, TEAM)
+        assert [p["name"] for p in result["members"]] == ["Ava Stone"]
+        assert any("Beta" in note for note in result["notes"])
+        assert any("identity read permissions" in note for note in result["notes"])
+
+    def test_team_listing_failure_warns_and_keeps_selected_team_members(self):
+        result = sp.team_setup(FakeBoard([], fail=("teams",)), PROJECT, TEAM)
+        assert len(result["members"]) == 4
+        assert any("All project teams could not be read" in note for note in result["notes"])
+
     def test_what_the_page_needs_to_start(self):
         setup = sp.team_setup(FakeBoard([]), PROJECT, TEAM)
         assert [s["id"] for s in setup["sprints"]] == ["s1", "s2", "s3", "s4"] and (setup["default_from_id"], setup["default_to_id"]) == ("s2", "s3")

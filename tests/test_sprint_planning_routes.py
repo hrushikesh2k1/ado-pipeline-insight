@@ -9,6 +9,7 @@ import app.api.sprint_planning_routes as planning_routes
 from app.main import create_app
 from sprint_support import FakeBoard, http_error, comment, story, NOW
 from test_sprint_planning import AVA, BEN, CARA, scenario_items
+from test_sprint_velocity import VelocityBoard, capacity, crew
 
 SETUP = "/api/v1/ado/sprint-planning/setup"
 PLAN = "/api/v1/ado/sprint-planning/plan"
@@ -32,6 +33,86 @@ def api(monkeypatch):
         return real_plan(*args, **kwargs)
     monkeypatch.setattr(planning_routes.sprint_planning, "plan_sprint", fixed_date_plan)
     return TestClient(create_app(), raise_server_exceptions=False), state
+
+
+class TestRecentComments:
+    def test_latest_three_are_requested_and_response_is_limited(self, api, monkeypatch):
+        client, state = api
+        calls = []
+
+        def read(project, item_id, top):
+            calls.append((project, item_id, top))
+            return [comment(f"Comment {i}") for i in range(5, 0, -1)]
+
+        monkeypatch.setattr(routes, "AzureDevOpsClient", lambda organization, pat: state["board"])
+        monkeypatch.setattr(state["board"], "get_work_item_comments", read)
+        response = client.get("/api/v1/ado/work-items/10/comments", params={**QUERY, "top": 3})
+        assert response.status_code == 200
+        assert calls == [("Demo", 10, 3)]
+        assert [c["text"] for c in response.json()] == ["Comment 5", "Comment 4", "Comment 3"]
+
+    def test_read_failure_is_not_reported_as_no_comments(self, api, monkeypatch):
+        client, state = api
+
+        def read(*args, **kwargs):
+            raise PermissionError("cannot read")
+
+        monkeypatch.setattr(routes, "AzureDevOpsClient", lambda organization, pat: state["board"])
+        monkeypatch.setattr(state["board"], "get_work_item_comments", read)
+        response = client.get("/api/v1/ado/work-items/10/comments", params=QUERY)
+        assert response.status_code == 502
+        assert "could not be read" in response.json()["detail"]
+
+
+class TestIndividualVelocity:
+    def test_context_uses_header_token_and_shared_capacity_snapshot(self, api, monkeypatch):
+        client, state = api
+        state["board"] = VelocityBoard()
+        from app.services.sprint_velocity import velocity_context
+        monkeypatch.setattr(planning_routes, "velocity_context", lambda *args: velocity_context(*args, now=NOW))
+        response = client.get("/api/v1/ado/sprint-planning/velocity-context",
+                              params={k: v for k, v in {**QUERY, "to_iteration_id": "s3"}.items() if k != "pat"},
+                              headers={"X-ADO-PAT": "header-pat"})
+        assert response.status_code == 200
+        assert state["made"] == [("myorg", "header-pat")]
+        data = response.json()
+        assert data["previous"]["id"] == "s2"
+        assert data["upcoming_capacity"]["working_days"] == 10
+        assert data["upcoming_capacity"]["members"][0]["capacity_per_day"] == 8
+
+    def test_plan_round_trips_forecast_and_half_point_reserve(self, api):
+        client, state = api
+        state["board"] = VelocityBoard()
+        response = client.post(PLAN, json={**BODY, "people": crew(), "velocity_capacity": capacity()})
+        assert response.status_code == 200
+        data = response.json()
+        assert [p["points_capacity"] for p in data["people"]] == [12, 10, 15]
+        assert all(p["forecast_status"] == "ready" for p in data["people"])
+        assert data["summary"]["total_points_reserved"] == sum(p["points_reserved"] for p in data["people"])
+        assert data["summary"]["total_points_planned"] > data["summary"]["total_points_reserved"]
+
+    def test_stale_capacity_context_is_rejected(self, api):
+        client, state = api
+        state["board"] = VelocityBoard()
+        data = capacity()
+        data["previous_iteration_id"] = "s1"
+        response = client.post(PLAN, json={**BODY, "people": crew(), "velocity_capacity": data})
+        assert response.status_code == 422
+        assert "context changed" in response.json()["detail"]
+
+
+def test_http_plan_exposes_remaining_candidates_and_goal_matching_descriptions(api):
+    client, state = api
+    for item in state["board"].items.values():
+        item["fields"]["System.Description"] = "<p>OAuth monitoring</p>"
+    response = client.post(PLAN, json={**BODY, "per_person": 1})
+    assert response.status_code == 200
+    result = response.json()
+    available = result["available_backlog"]
+    assert len(available) > 0
+    assigned = {s["id"] for p in result["people"] for lane in ("carried", "already_planned", "new") for s in p[lane]}
+    assert not assigned.intersection(s["id"] for s in available)
+    assert all(s["description"] == "OAuth monitoring" for s in available)
 
 
 class TestSetup:

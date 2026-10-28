@@ -1,16 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Ban, Bot, CalendarCheck, Check, ChevronDown, Clock, Copy, ExternalLink,
+  Ban, Bot, CalendarCheck, Check, ChevronDown, ChevronUp, Clock, Copy, ExternalLink, MessageSquare,
   Info, Plus, Send, ShieldAlert, Sparkles, Target, TriangleAlert, Users, X,
 } from 'lucide-react'
 import './SprintPlanningPage.css'
 import { api } from '../services/api'
-import type { AdoTeam, PlanSprint, PlanStory, PlannedPerson, SprintPlan, SprintPlanningSetup, SprintCommitResponse } from '../types/api'
+import type { AdoTeam, PlanSprint, PlanStory, PlannedPerson, SprintPlan, SprintPlanningSetup, SprintCommitResponse, VelocityContext } from '../types/api'
+import { capacityForPerson, totalCapacityHours, velocityCapacityInput, withSavedCapacity } from '../utils/sprintCapacity'
 import {
   ANY_AREA, DEFAULT_ACTIVE_DAYS, DEFAULT_PER_PERSON, MAX_PER_PERSON, MIN_PER_PERSON,
-  addPerson, areaLabel, commentDate, daysInState, flagText, fullness, loadPeople, mergeMembers, peopleForPlan, personKey, plural, planAsMarkdown, planProblems,
-  reassignStory, commitAssignments, removePerson, savePeople, setAreas, setIncluded, setPtoDays, setWorkingDays, sprintLabel, storyCount,
-  type PlanningPerson,
+  addPerson, areaLabel, commentDate, daysInState, flagText, fullness, loadPeople, loadRoster, mergeRosterMembers, peopleForPlan, personKey, plural, planAsMarkdown, planProblems,
+  reassignStory, rankGoalBacklog, commitAssignments, removePerson, savePeople, saveRoster, setIncluded, sprintLabel, storyCount,
+  type GoalEvidence, type PlanningPerson,
 } from '../utils/sprintPlanning'
 
 interface SprintPlanningPageProps {
@@ -32,55 +33,6 @@ function readSavedTeam(org: string, project: string): string {
   try { return localStorage.getItem(teamKey(org, project)) ?? '' } catch { return '' }
 }
 
-// ---------------------------------------------------------------- an area picker for one person
-
-const AreaPicker: React.FC<{ value: string[]; options: string[]; project: string; onChange: (areas: string[]) => void; testId: string }> = ({ value, options, project, onChange, testId }) => {
-  const [open, setOpen] = useState(false)
-  const [draft, setDraft] = useState('')
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    const close = (event: MouseEvent) => { if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false) }
-    document.addEventListener('mousedown', close)
-    return () => document.removeEventListener('mousedown', close)
-  }, [open])
-  const choices = [ANY_AREA, ...options, ...value.filter(v => v !== ANY_AREA && !options.includes(v))]
-  const toggle = (area: string) => onChange(value.includes(area) ? value.filter(a => a !== area) : [...value, area])
-  const addDraft = () => {
-    const path = draft.trim()
-    if (path && !value.includes(path)) onChange([...value, path])
-    setDraft('')
-  }
-  const summary = !value.length ? 'Choose areas' : value.length === 1 ? areaLabel(value[0], project) : `${areaLabel(value[0], project)} +${value.length - 1}`
-  return (
-    <div className="sppPicker" ref={ref}>
-      <button type="button" className={`sppPickerBtn ${value.length ? '' : 'needsAreas'}`} onClick={() => setOpen(o => !o)} aria-expanded={open} data-testid={testId} title={value.map(v => areaLabel(v, project)).join(', ')}>
-        <span>{summary}</span><ChevronDown size={13} />
-      </button>
-      {open && (
-        <div className="sppPickerMenu" role="listbox" aria-label="Areas of choice">
-          <div className="sppPickerList">
-            {choices.map(area => (
-              <label key={area} className="sppPickerOption">
-                <input type="checkbox" checked={value.includes(area)} onChange={() => toggle(area)} />
-                <span>{areaLabel(area, project)}</span>
-              </label>
-            ))}
-          </div>
-          <div className="sppPickerAdd">
-            <input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => e.key === 'Enter' && addDraft()} placeholder="Add an area path" aria-label="Add an area path" />
-            <button type="button" onClick={addDraft} disabled={!draft.trim()} aria-label="Add area"><Plus size={13} /></button>
-          </div>
-          <div className="sppPickerFoot">
-            <button type="button" onClick={() => onChange([])} disabled={!value.length}>Clear</button>
-            <button type="button" onClick={() => setOpen(false)}>Done</button>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
 // ---------------------------------------------------------------- stories
 
 const FlagChips: React.FC<{ story: PlanStory }> = ({ story }) => (
@@ -93,15 +45,66 @@ const FlagChips: React.FC<{ story: PlanStory }> = ({ story }) => (
   </>
 )
 
+type StoryComment = NonNullable<PlanStory['comments']>[number]
+type LoadComments = (storyId: number) => Promise<StoryComment[]>
+
+const RecentComments: React.FC<{ story: PlanStory; loadComments: LoadComments }> = ({ story, loadComments }) => {
+  const [expanded, setExpanded] = useState(false)
+  const [comments, setComments] = useState(story.comments)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const id = React.useId()
+  const recent = comments ? [...comments].sort((a, b) => a.date.localeCompare(b.date)).slice(-3) : []
+
+  const toggle = async () => {
+    setExpanded(!expanded)
+    if (expanded || comments !== null || loading) return
+    setLoading(true); setError('')
+    try {
+      setComments(await loadComments(story.id))
+    } catch (e) {
+      setError(`The comments could not be read: ${errorText(e)}. Hide and reopen to retry.`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div>
+      <button type="button" className="sppGhost" onClick={() => void toggle()} aria-expanded={expanded} aria-controls={id}>
+        <MessageSquare size={13} /> {expanded ? 'Hide Recent Comments' : 'View Recent Comments'}
+        {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+      </button>
+      {expanded && (
+        <div id={id} className="sppComments" data-testid={`spp-comments-${story.id}`}>
+          <h5>Last {recent.length ? plural(recent.length, 'comment') : 'comments'} <span>(oldest first)</span></h5>
+          {loading && <p className="sppMuted">Loading recent comments…</p>}
+          {error && <p role="alert" className="sppMuted">{error}</p>}
+          {!loading && !error && comments?.length === 0 && <p className="sppMuted">No comments on this story.</p>}
+          {recent.map((c, i) => (
+            <blockquote key={`${c.date}-${i}`} data-testid="spp-comment">
+              <div className="sppCommentHead"><b>{c.author}</b><span>{commentDate(c.date)}</span></div>
+              <p>{c.text}</p>
+            </blockquote>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 const StoryRow: React.FC<{
   story: PlanStory
   project: string
+  loadComments: LoadComments
   note?: string
   people?: PlannedPerson[]
   currentOwner?: string
+  goalMatches?: string[]
+  goalEvidence?: GoalEvidence[]
   onReassign?: (storyId: number, targetPersonName: string) => void
-}> = ({ story, project, note, people, currentOwner, onReassign }) => (
-  <li className="sppStory" data-testid={`spp-story-${story.id}`}>
+}> = ({ story, project, loadComments, note, people, currentOwner, goalMatches, goalEvidence, onReassign }) => (
+  <li className={`sppStory${goalMatches?.length ? ' sppGoalMatch' : ''}`} data-testid={`spp-story-${story.id}`}>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
       <a href={workItemUrl(story)} target="_blank" rel="noreferrer" className="sppStoryTitle">
         <span className="sppId">#{story.id}</span> {story.title}<ExternalLink size={10} />
@@ -126,15 +129,21 @@ const StoryRow: React.FC<{
       {story.points !== null && <span className="sppChip points">{story.points} pts</span>}
       <span className="sppArea" title={story.area_path}>{areaLabel(story.area_path, project)}</span>
       {note && <span className="sppNote">{note}</span>}
+      {!!goalMatches?.length && <span className="sppChip" title={`Matching topics: ${goalMatches.join(', ')}`}><Target size={11} /> Sprint Goal match</span>}
     </div>
+    {goalEvidence?.map(item => (
+      <p className="sppMuted" key={item.topic} data-testid="spp-goal-evidence">Matched "{item.topic}" in {item.source}: "{item.excerpt}"</p>
+    ))}
+    <RecentComments story={story} loadComments={loadComments} />
   </li>
 )
 
 const FlaggedCard: React.FC<{
   story: PlanStory
   project: string
+  loadComments: LoadComments
   onDrop?: (storyId: number) => void
-}> = ({ story, project, onDrop }) => (
+}> = ({ story, project, loadComments, onDrop }) => (
   <article className="sppFlagged" data-testid={`spp-flagged-${story.id}`}>
     <div className="sppFlaggedHead">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
@@ -154,17 +163,7 @@ const FlaggedCard: React.FC<{
       </div>
       <ul className="sppReasons">{story.flags.map(f => <li key={f.code}>{f.reason}</li>)}</ul>
     </div>
-    <div className="sppComments" data-testid={`spp-comments-${story.id}`}>
-      <h5>Last {story.comments?.length ? plural(story.comments.length, 'comment') : 'comments'} <span>(oldest first)</span></h5>
-      {story.comments === null && <p className="sppMuted">The comments could not be read.</p>}
-      {story.comments?.length === 0 && <p className="sppMuted">No comments on this story.</p>}
-      {story.comments?.map((c, i) => (
-        <blockquote key={`${c.date}-${i}`} data-testid="spp-comment">
-          <div className="sppCommentHead"><b>{c.author}</b><span>{commentDate(c.date)}</span></div>
-          <p>{c.text}</p>
-        </blockquote>
-      ))}
-    </div>
+    <RecentComments story={story} loadComments={loadComments} />
   </article>
 )
 
@@ -172,23 +171,28 @@ const PersonCard: React.FC<{
   person: PlannedPerson
   sprintName: string
   project: string
+  loadComments: LoadComments
   mode: 'stories' | 'points'
   allPeople?: PlannedPerson[]
   onReassign?: (storyId: number, targetPersonName: string) => void
-}> = ({ person, sprintName, project, mode, allPeople, onReassign }) => {
+}> = ({ person, sprintName, project, loadComments, mode, allPeople, onReassign }) => {
   const key = personKey(person)
-  const percent = mode === 'points' && person.points_capacity != null
-    ? Math.min(100, Math.round(((person.points_planned ?? 0) / Math.max(1, person.points_capacity)) * 100))
+  const usePointBudget = (person.velocity_based || mode === 'points') && person.points_capacity != null
+  const percent = usePointBudget
+    ? Math.min(100, Math.round(((person.velocity_based ? person.points_reserved : person.points_planned) ?? 0) / Math.max(1, person.points_capacity ?? 0) * 100))
     : Math.min(100, Math.round((person.total / Math.max(1, person.capacity)) * 100))
 
-  const isOver = mode === 'points' && person.points_capacity != null
-    ? (person.points_planned ?? 0) > person.points_capacity
+  const isOver = usePointBudget
+    ? ((person.velocity_based ? person.points_reserved : person.points_planned) ?? 0) > (person.points_capacity ?? 0)
     : person.over_by > 0
 
-  const state = isOver ? 'over' : person.open_places ? 'short' : 'full'
+  const hasRoom = person.velocity_based ? (person.points_open ?? 0) > 0 : person.open_places > 0
+  const state = isOver ? 'over' : hasRoom ? 'short' : 'full'
 
-  const countDisplay = mode === 'points' && person.points_capacity != null
-    ? `${person.points_planned ?? 0} of ${person.points_capacity} pts`
+  const countDisplay = person.velocity_based && person.forecast_status !== 'ready'
+    ? 'Forecast unavailable'
+    : usePointBudget
+    ? `${person.velocity_based && mode === 'stories' ? `${person.total} stories · ` : ''}${person.velocity_based ? person.points_reserved ?? 0 : person.points_planned ?? 0} of ${person.points_capacity} pts`
     : fullness(person)
 
   return (
@@ -206,22 +210,27 @@ const PersonCard: React.FC<{
           <span className="sppMeter"><span style={{ width: `${percent}%` }} /></span>
         </div>
       </div>
+      {person.velocity_based && <p className="sppMuted" data-testid={`spp-forecast-${key}`}>
+        Previous completed: {person.previous_completed_points ?? 'unavailable'} pts · Previous available: {person.previous_available_days ?? 'unavailable'} days.
+        {' '}Capacity: {person.total_capacity_hours == null ? 'unavailable' : `${person.total_capacity_hours}h`}.
+        {' '}Original planned size: {person.points_planned ?? 0} pts; remaining reserved: {person.points_reserved ?? 0} pts.
+      </p>}
       {person.carried.length > 0 && (
         <>
           <h5>Carried over from the current sprint <span>({person.carried.length})</span></h5>
-          <ul>{person.carried.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} />)}</ul>
+          <ul>{person.carried.map(s => <StoryRow key={s.id} story={s} project={project} loadComments={loadComments} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} />)}</ul>
         </>
       )}
       {person.already_planned.length > 0 && (
         <>
           <h5>Already in {sprintName} <span>({person.already_planned.length})</span></h5>
-          <ul>{person.already_planned.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} />)}</ul>
+          <ul>{person.already_planned.map(s => <StoryRow key={s.id} story={s} project={project} loadComments={loadComments} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} />)}</ul>
         </>
       )}
       {person.new.length > 0 && (
         <>
           <h5>New from the backlog <span>({person.new.length})</span></h5>
-          <ul>{person.new.map(s => <StoryRow key={s.id} story={s} project={project} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} note={s.matched_area ? `area: ${areaLabel(s.matched_area, project)}` : undefined} />)}</ul>
+          <ul>{person.new.map(s => <StoryRow key={s.id} story={s} project={project} loadComments={loadComments} people={allPeople} currentOwner={personKey(person)} onReassign={onReassign} note={s.matched_area ? `area: ${areaLabel(s.matched_area, project)}` : undefined} />)}</ul>
         </>
       )}
       {storyCount(person) === 0 && <p className="sppMuted">No stories planned.</p>}
@@ -240,6 +249,7 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   organization = '', project = '', pat = '', projects = [], onOrganizationChange, onProjectChange, onPatChange,
 }) => {
   const org = organization.trim()
+  const loadComments = (storyId: number) => api.workItemComments(org, project, storyId, 3, pat || undefined)
   const [teams, setTeams] = useState<AdoTeam[]>([])
   const [team, setTeam] = useState('')
   const [setup, setSetup] = useState<SprintPlanningSetup | null>(null)
@@ -251,10 +261,14 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const [activeDays, setActiveDays] = useState(DEFAULT_ACTIVE_DAYS)
   const [sprintGoal, setSprintGoal] = useState('')
   const [capacityMode, setCapacityMode] = useState<'stories' | 'points'>('points')
-  const [tagsFilter, setTagsFilter] = useState('Monitoring, Maintenance')
-  const [areaFilter, setAreaFilter] = useState('')
   const [types, setTypes] = useState<string[]>([])
   const [people, setPeople] = useState<PlanningPerson[]>([])
+  const [roster, setRoster] = useState<string[] | null>(null)
+  const [rosterEditorOpen, setRosterEditorOpen] = useState(false)
+  const [rosterDraft, setRosterDraft] = useState<string[]>([])
+  const [rosterSearch, setRosterSearch] = useState('')
+  const [rosterError, setRosterError] = useState('')
+  const [rosterNotice, setRosterNotice] = useState('')
   const [newPerson, setNewPerson] = useState('')
   const [savedPlan, setPlan] = useState<SprintPlan | null>(null)
   const [planKey, setPlanKey] = useState<string | null>(null)
@@ -264,16 +278,33 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
   const [commitResult, setCommitResult] = useState<SprintCommitResponse | null>(null)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
+  const [attentionFilter, setAttentionFilter] = useState('all')
+  const [velocityContext, setVelocityContext] = useState<VelocityContext | null>(null)
+  const [capacityError, setCapacityError] = useState('')
+  const [loadingCapacity, setLoadingCapacity] = useState(false)
+  const latestCapacity = useRef(0)
   const latestSetup = useRef(0)
   const ready = !!org && !!project && !!team
   const latestPlan = useRef(0)
   const commitInFlight = useRef(false)
+  const capacityRefreshPending = useRef(false)
   const setupScope = useRef('')
   const scope = JSON.stringify([org, project, team, pat])
-  const inputsKey = JSON.stringify([scope, fromId, toId, perPerson, activeDays, sprintGoal, capacityMode, tagsFilter, areaFilter, types, peopleForPlan(people)])
+  const rosterPeople = useMemo(() => roster === null ? people : people.filter(person => roster.includes(personKey(person))), [people, roster])
+  const planningPeople = useMemo(() => rosterPeople.map(person => {
+    const snapshot = velocityContext?.upcoming_capacity ?? null
+    const capacity = capacityForPerson(snapshot, person)
+    return { ...person, areas: [ANY_AREA], working_days: capacity ? snapshot?.working_days ?? 0 : 0,
+      pto_days: capacity?.days_off ?? 0, capacity_points: undefined, focus_factor: undefined }
+  }), [rosterPeople, velocityContext])
+  const currentRoster = useRef({ people, roster })
+  currentRoster.current = { people, roster }
+  const inputsKey = JSON.stringify([scope, fromId, toId, perPerson, activeDays, sprintGoal, capacityMode, types, peopleForPlan(planningPeople), rosterEditorOpen, loadingSetup, velocityContext, loadingCapacity])
   const latestInputs = useRef(inputsKey)
   latestInputs.current = inputsKey
   const plan = planKey === inputsKey ? savedPlan : null
+  const visibleFlagged = plan?.flagged.filter(story => attentionFilter === 'all' || story.flags.some(flag => flag.code === attentionFilter)) ?? []
+  const rankedBacklog = useMemo(() => plan ? rankGoalBacklog(plan.available_backlog ?? plan.unplaced.map(item => item.story), plan.sprint_goal ?? sprintGoal) : [], [plan, sprintGoal])
   useEffect(() => {
     latestPlan.current += 1
     setPlan(null); setPlanKey(null); setCommitResult(null); setCommitModalOpen(false); setPlanning(false); setError('')
@@ -293,12 +324,14 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
     const ticket = ++latestSetup.current
     setSetup(null)
     setupScope.current = ''
+    setRoster(null); setRosterEditorOpen(false); setRosterDraft([]); setRosterSearch(''); setRosterError(''); setRosterNotice('')
     if (!ready) { setLoadingSetup(false); return }
     setLoadingSetup(true)
     setSetupError('')
     try {
       const found = await api.sprintPlanningSetup(org, project, team, pat || undefined)
       if (ticket !== latestSetup.current) return
+      const savedRoster = loadRoster(org, project, team)
       setupScope.current = scope
       setSetup(found)
       const targetToId = found.default_to_id ?? ''
@@ -313,9 +346,8 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
       setPerPerson(found.per_person || DEFAULT_PER_PERSON)
       setActiveDays(found.active_days || DEFAULT_ACTIVE_DAYS)
       setTypes(found.default_types)
-      setPeople(mergeMembers(loadPeople(org, project, team), found.members))
-      setAreaFilter('')
-      setTagsFilter('Monitoring, Maintenance')
+      setPeople(mergeRosterMembers(loadPeople(org, project, team), found.members, savedRoster))
+      setRoster(savedRoster)
       setPlan(null)
       setCommitResult(null)
     } catch (e) {
@@ -327,13 +359,78 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
 
   useEffect(() => { void loadSetup(); return () => { latestSetup.current += 1 } }, [loadSetup])
 
-  // the areas and capacity people chose are kept in this browser for this team
+  const capacityTeamId = teams.find(choice => choice.name === team || choice.id === team)?.id
+  const refreshCapacity = useCallback(async () => {
+    const ticket = ++latestCapacity.current
+    latestPlan.current += 1
+    setPlan(null); setPlanKey(null); setCommitResult(null); setCommitModalOpen(false); setPlanning(false)
+    setVelocityContext(null); setCapacityError('')
+    if (!ready || !toId || !capacityTeamId) { setLoadingCapacity(false); return }
+    setLoadingCapacity(true)
+    try {
+      const context = await api.sprintVelocityContext(org, project, team, toId, pat || undefined)
+      if (ticket !== latestCapacity.current) return
+      setVelocityContext(withSavedCapacity(context, org, project, capacityTeamId))
+    } catch (e) {
+      if (ticket === latestCapacity.current) setCapacityError(`Capacity data could not be loaded: ${errorText(e)}`)
+    } finally {
+      if (ticket === latestCapacity.current) setLoadingCapacity(false)
+    }
+  }, [ready, org, project, team, toId, pat, capacityTeamId])
+  useEffect(() => {
+    void refreshCapacity()
+    const refresh = (event: Event) => {
+      if (event instanceof StorageEvent && event.key !== null && !event.key.startsWith('ado_sprint_capacity')) return
+      if (commitInFlight.current) { capacityRefreshPending.current = true; return }
+      void refreshCapacity()
+    }
+    window.addEventListener('storage', refresh)
+    window.addEventListener('sprint-capacity-changed', refresh)
+    return () => { latestCapacity.current += 1; window.removeEventListener('storage', refresh); window.removeEventListener('sprint-capacity-changed', refresh) }
+  }, [refreshCapacity])
+
+  const refreshMembers = async () => {
+    if (loadingSetup || committing || setupScope.current !== scope) return
+    const ticket = ++latestSetup.current
+    latestPlan.current += 1
+    setPlan(null); setPlanKey(null); setCommitModalOpen(false); setCommitResult(null)
+    setLoadingSetup(true); setRosterError(''); setRosterNotice('')
+    try {
+      const found = await api.sprintPlanningSetup(org, project, team, pat || undefined)
+      if (ticket !== latestSetup.current) return
+      const current = currentRoster.current
+      setPeople(mergeRosterMembers(current.people, found.members, current.roster))
+      setSetup(previous => previous ? { ...previous, members: found.members, notes: found.notes } : previous)
+      setRosterNotice('Available people refreshed. Your saved roster and planning settings are unchanged.')
+    } catch (e) {
+      if (ticket === latestSetup.current) setRosterError(`Available people could not be refreshed: ${errorText(e)}`)
+    } finally {
+      if (ticket === latestSetup.current) setLoadingSetup(false)
+    }
+  }
+
+  const openRosterEditor = () => {
+    setRosterDraft(roster ?? people.map(personKey))
+    setRosterSearch(''); setRosterError(''); setRosterNotice(''); setRosterEditorOpen(true)
+  }
+
+  const saveTeamRoster = () => {
+    const available = new Set(people.map(personKey))
+    const selected = [...new Set(rosterDraft)].filter(key => available.has(key))
+    try {
+      saveRoster(org, project, team, selected)
+      setRoster(selected); setRosterEditorOpen(false); setRosterError('')
+      setRosterNotice('Team roster saved in this browser for this organization, project and team.')
+    } catch {
+      setRosterError('The team roster could not be saved in this browser. Check browser storage permissions and try again. Your previous roster is unchanged.')
+    }
+  }
+
+  // Capacity preferences are kept in this browser for this team.
   useEffect(() => { if (setup && ready && setupScope.current === scope) savePeople(org, project, team, people) }, [people, setup, ready, org, project, team, scope])
 
   const changeTeam = (value: string) => {
     setTeam(value)
-    setAreaFilter('')
-    setTagsFilter('Monitoring, Maintenance')
     setPlan(null)
     setCommitResult(null)
     try { localStorage.setItem(teamKey(org, project), value) } catch { /* storage blocked */ }
@@ -353,24 +450,23 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
     }
   }
 
-  const problems = useMemo(() => planProblems(people, toId, fromId), [people, toId, fromId])
+  const problems = useMemo(() => planProblems(planningPeople, toId, fromId), [planningPeople, toId, fromId])
 
   const makePlan = async () => {
-    if (committing || planning || problems.blocking.length) return
+    if (committing || planning || loadingSetup || loadingCapacity || !velocityContext || rosterEditorOpen || problems.blocking.length) return
     const ticket = ++latestPlan.current
     const key = inputsKey
     setPlan(null); setPlanKey(null)
     setPlanning(true)
+    setAttentionFilter('all')
     setError('')
     setCommitResult(null)
     try {
-      const tagsList = tagsFilter.split(',').map(t => t.trim()).filter(Boolean)
       const result = await api.sprintPlan({
-        organization: org, project, team, pat: pat || undefined, from_iteration_id: fromId, to_iteration_id: toId, people: peopleForPlan(people),
+        organization: org, project, team, pat: pat || undefined, from_iteration_id: fromId, to_iteration_id: toId, people: peopleForPlan(planningPeople),
         per_person: perPerson, active_days: activeDays, work_item_types: types.length ? types : undefined,
         sprint_goal: sprintGoal.trim() || undefined, capacity_mode: capacityMode,
-        tags: tagsList.length ? tagsList : undefined,
-        area_filter: areaFilter.trim() || undefined,
+        velocity_capacity: velocityCapacityInput(velocityContext),
       })
       if (result.project !== project || result.team !== team || result.to_sprint.id !== toId) {
         throw new Error('The returned plan does not match the selected project, team and sprint. Generate the plan again.')
@@ -426,6 +522,10 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
     } finally {
       commitInFlight.current = false
       setCommitting(false)
+      if (capacityRefreshPending.current) {
+        capacityRefreshPending.current = false
+        void refreshCapacity()
+      }
     }
   }
 
@@ -521,123 +621,98 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
                   </span>
                 )}
               </label>
-              <label>Target stories per person
+              <label>Story count reference (display only)
                 <input type="number" min={MIN_PER_PERSON} max={MAX_PER_PERSON} value={perPerson} data-testid="spp-per-person"
                   onChange={e => setPerPerson(Math.max(MIN_PER_PERSON, Math.min(MAX_PER_PERSON, Number(e.target.value) || DEFAULT_PER_PERSON)))} /></label>
               <label>Flag when active for more than (days)
                 <input type="number" min={1} max={90} value={activeDays} data-testid="spp-active-days"
                   onChange={e => setActiveDays(Math.max(1, Math.min(90, Number(e.target.value) || DEFAULT_ACTIVE_DAYS)))} /></label>
-              <div>
-                <label>Backlog Tags Filter
-                  <input
-                    type="text"
-                    placeholder="e.g. Monitoring, Maintenance, cloudops-monitoring"
-                    value={tagsFilter}
-                    onChange={e => setTagsFilter(e.target.value)}
-                    title="Tags to query from backlog (e.g. Monitoring, Maintenance)"
-                    data-testid="spp-tags-filter"
-                  />
-                </label>
-                <div style={{ display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap' }}>
-                  <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px' }} onClick={() => setTagsFilter('Monitoring, Maintenance')}>
-                    + Monitoring, Maintenance
-                  </button>
-                  {team && (
-                    <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px' }} onClick={() => setTagsFilter(team)}>
-                      + {team}
-                    </button>
-                  )}
-                  {tagsFilter && (
-                    <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px', color: 'var(--spp-muted)' }} onClick={() => setTagsFilter('')}>
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div>
-                <label>Backlog Area Filter
-                  <input
-                    type="text"
-                    placeholder={`e.g. ${team || 'cloudops-monitoring'}`}
-                    value={areaFilter}
-                    onChange={e => setAreaFilter(e.target.value)}
-                    title="Area path or keyword to pull backlog items from"
-                    data-testid="spp-area-filter"
-                  />
-                </label>
-                {team && (
-                  <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
-                    <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px' }} onClick={() => setAreaFilter(team)}>
-                      Use Team Area ({team})
-                    </button>
-                    {areaFilter && (
-                      <button type="button" className="sppGhost" style={{ padding: '2px 6px', fontSize: '11px', color: 'var(--spp-muted)' }} onClick={() => setAreaFilter('')}>
-                        Clear
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-              <fieldset className="sppTypes"><legend>Work item types</legend>
-                {setup.work_item_types.map(t => (
-                  <label key={t} className="sppCheck"><input type="checkbox" checked={types.includes(t)} onChange={() => setTypes(types.includes(t) ? types.filter(x => x !== t) : [...types, t])} /> {t}</label>
-                ))}
-              </fieldset>
             </div>
           </section>
 
           <section className="sppCard" data-testid="spp-people">
             <div className="sppCardHead">
-              <div><h3><Users size={15} /> Team Capacity & Areas of Choice</h3>
-                <p>Configure working days, planned leave (PTO), and domain areas. Saved locally in this browser for this team.</p></div>
+              <div><h3><Users size={15} /> Team Capacity</h3>
+                <p>Working Days, PTO and hours come from the Capacity tab for the planned sprint. Edit availability there, not here. Assignments use each person's previous completed points scaled by available days; hours are never converted to points.</p></div>
+              <div className="sppRosterActions">
+                <button type="button" className="sppGhost" onClick={openRosterEditor} disabled={loadingSetup || rosterEditorOpen} data-testid="spp-edit-roster">Edit team roster</button>
+                <button type="button" className="sppGhost" onClick={() => void refreshMembers()} disabled={loadingSetup} data-testid="spp-refresh-members">Refresh available people</button>
+                <button type="button" className="sppGhost" onClick={() => void refreshCapacity()} disabled={loadingCapacity} data-testid="spp-refresh-capacity">Refresh Capacity data</button>
+              </div>
+              {loadingCapacity && <p className="sppMuted" role="status">Reading Capacity data…</p>}
+              {capacityError && <p className="sppNotice error" role="alert">{capacityError}</p>}
+              {velocityContext && <p className="sppMuted" data-testid="spp-velocity-baseline">
+                Historical baseline: {velocityContext.previous?.name ?? 'No previous completed sprint'}.
+                {' '}Budget = previous completed points × upcoming available days ÷ previous available days.
+                {' '}Carryover is assumed 50% complete. Unknown history or availability pauses automatic new assignments, but manual draft assignment remains available.
+              </p>}
+              {velocityContext?.notes.map(note => <p key={note} className="sppMuted">{note}</p>)}
             </div>
+            {rosterError && <div role="alert" className="sppNotice error" data-testid="spp-roster-error"><TriangleAlert size={14} /> {rosterError}</div>}
+            {rosterNotice && <p role="status" className="sppMuted">{rosterNotice}</p>}
+            {rosterEditorOpen && (
+              <div className="sppRosterEditor" data-testid="spp-roster-editor">
+                <h4>Choose the members of {team}</h4>
+                <p className="sppMuted">Available people include members across all teams in this project. This changes your local planning roster only, not Azure DevOps team membership.</p>
+                <input type="search" className="sppRosterSearch" value={rosterSearch} onChange={e => setRosterSearch(e.target.value)}
+                  placeholder="Search by name or email" aria-label="Search roster candidates" />
+                <div className="sppRosterChoices">
+                  {people.filter(person => `${person.name} ${person.unique_name}`.toLowerCase().includes(rosterSearch.trim().toLowerCase())).map(person => {
+                    const key = personKey(person)
+                    return (
+                      <label key={key} className="sppRosterChoice">
+                        <input type="checkbox" checked={rosterDraft.includes(key)} disabled={loadingSetup}
+                          onChange={e => setRosterDraft(selected => e.target.checked ? [...selected, key] : selected.filter(value => value !== key))}
+                          aria-label={`Roster ${person.name}`} />
+                        <span>{person.name}{person.unique_name && <small>{person.unique_name}</small>}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+                {!people.some(person => `${person.name} ${person.unique_name}`.toLowerCase().includes(rosterSearch.trim().toLowerCase())) &&
+                  <p className="sppMuted">No matching people. Add someone by name or email below.</p>}
+                <div className="sppRosterActions">
+                  <button type="button" className="sppGhost" onClick={() => setRosterDraft(people.map(personKey))} disabled={loadingSetup}>Select all</button>
+                  <button type="button" className="sppGhost" onClick={() => setRosterDraft([])} disabled={loadingSetup}>Clear selection</button>
+                  <button type="button" className="sppGhost" onClick={() => { setRosterEditorOpen(false); setRosterError('') }} disabled={loadingSetup}>Cancel</button>
+                  <button type="button" className="sppPrimary" onClick={saveTeamRoster} disabled={loadingSetup} data-testid="spp-save-roster">Save team roster ({rosterDraft.length})</button>
+                </div>
+              </div>
+            )}
+            {roster !== null && <p className="sppMuted" data-testid="spp-roster-summary">{rosterPeople.length} saved team members. Use Edit team roster to change this list.</p>}
             <div className="sppTableWrap">
             <table className="sppTable">
               <thead>
                 <tr>
                   <th>In plan</th>
                   <th>Person</th>
-                  <th>Days</th>
+                  <th>Working Days</th>
                   <th>PTO</th>
-                  <th>Areas of choice</th>
+                  <th>Total Capacity (h)</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {people.map(p => {
+                {rosterPeople.map(p => {
                   const key = personKey(p)
+                  const snapshot = velocityContext?.upcoming_capacity ?? null
+                  const capacity = capacityForPerson(snapshot, p)
                   return (
                     <tr key={key} className={p.included ? '' : 'off'} data-testid={`spp-person-${key}`}>
                       <td><input type="checkbox" checked={p.included} onChange={e => setPeople(setIncluded(people, key, e.target.checked))} aria-label={`Plan ${p.name}`} /></td>
                       <td><b>{p.name}</b>{p.unique_name && <small>{p.unique_name}</small>}</td>
-                      <td>
-                        <input
-                          type="number"
-                          className="sppCapInput"
-                          min={0}
-                          max={30}
-                          value={p.working_days ?? 10}
-                          onChange={e => setPeople(setWorkingDays(people, key, e.target.value === '' ? 10 : Number(e.target.value)))}
-                          title="Working days in sprint"
-                        />
+                      <td data-label="Working Days">
+                        <span data-testid={`spp-days-${key}`}>{snapshot ? snapshot.working_days : 'Unavailable'}</span>
                       </td>
-                      <td>
-                        <input
-                          type="number"
-                          className="sppCapInput"
-                          min={0}
-                          max={30}
-                          value={p.pto_days ?? 0}
-                          onChange={e => setPeople(setPtoDays(people, key, Number(e.target.value) || 0))}
-                          title="PTO / Leave days"
-                        />
+                      <td data-label="PTO">
+                        <span data-testid={`spp-pto-${key}`}>{capacity ? capacity.days_off : 'Unavailable'}</span>
                       </td>
-                      <td><AreaPicker value={p.areas} options={setup.areas} project={project} onChange={areas => setPeople(setAreas(people, key, areas))} testId={`spp-areas-${key}`} /></td>
+                      <td data-label="Total Capacity (h)" data-testid={`spp-hours-${key}`}>{capacity && snapshot ? totalCapacityHours(snapshot.working_days, capacity) : 'Unavailable'}</td>
                       <td>{p.manual && <button type="button" className="sppIconBtn" onClick={() => setPeople(removePerson(people, key))} aria-label={`Remove ${p.name}`}><X size={13} /></button>}</td>
                     </tr>
                   )
                 })}
-                {people.length === 0 && <tr><td colSpan={6} className="sppMuted">The team has no members listed. Add people below.</td></tr>}
+                {rosterPeople.length === 0 && <tr><td colSpan={6} className="sppMuted">{roster === null ? 'The team has no members listed. Add people below.' : 'The saved team roster is empty. Use Edit team roster to select people.'}</td></tr>}
               </tbody>
             </table>
             </div>
@@ -646,10 +721,11 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
                 placeholder="Add someone by name or email" aria-label="Add someone by name or email" data-testid="spp-add-person" />
               <button type="button" onClick={() => { setPeople(addPerson(people, newPerson)); setNewPerson('') }} disabled={!newPerson.trim()}><Plus size={13} /> Add</button>
             </div>
+            {roster !== null && <p className="sppMuted">People added above become available candidates. Select them in Edit team roster to include them.</p>}
           </section>
 
           <div className="sppActions">
-            <button type="button" className="sppPrimary" onClick={() => void makePlan()} disabled={planning || committing || loadingSetup || problems.blocking.length > 0} data-testid="spp-plan">
+            <button type="button" className="sppPrimary" onClick={() => void makePlan()} disabled={planning || committing || loadingSetup || loadingCapacity || !velocityContext || rosterEditorOpen || problems.blocking.length > 0} data-testid="spp-plan">
               <CalendarCheck size={14} /> {planning ? 'Planning…' : toSprint ? `Plan ${toSprint.name}` : 'Plan the sprint'}
             </button>
             {plan && (
@@ -709,16 +785,18 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
           <div className="sppKpis" data-testid="spp-summary">
             <Kpi label="People" value={plan.summary.people} testId="spp-kpi-people" />
             <Kpi
-              label="Points Planned"
-              value={`${plan.summary.total_points_planned ?? 0} pts`}
-              sub={`Cap: ${plan.summary.total_points_capacity ?? 0} pts`}
+              label={plan.people.some(p => p.velocity_based) ? 'Reserved workload' : 'Points Planned'}
+              value={`${plan.people.some(p => p.velocity_based) ? plan.summary.total_points_reserved ?? 0 : plan.summary.total_points_planned ?? 0} pts`}
+              sub={`Forecast: ${plan.summary.total_points_capacity ?? 0} pts · Original story size: ${plan.summary.total_points_planned ?? 0} pts`}
               testId="spp-kpi-planned"
             />
-            <Kpi label="Stories planned" value={plan.summary.stories_planned} sub={`${plan.per_person} each target`} testId="spp-kpi-stories" />
+            <Kpi label="Stories planned" value={plan.summary.stories_planned} sub="Individual velocity-based assignments" testId="spp-kpi-stories" />
             <Kpi label="Carried over" value={`${plan.summary.carried} (${plan.summary.points_carried ?? 0} pts)`} testId="spp-kpi-carried" />
             <Kpi label="New from backlog" value={`${plan.summary.new} (${plan.summary.points_new ?? 0} pts)`} testId="spp-kpi-new" />
             <Kpi label="Need a look" value={plan.summary.flagged} sub={`${plan.summary.blocked} blocked · ${plan.summary.long_active} active > ${plan.active_days}d`} tone={plan.summary.flagged ? 'warn' : undefined} testId="spp-kpi-flagged" />
-            <Kpi label="Empty places" value={plan.summary.open_places} tone={plan.summary.open_places ? 'warn' : undefined} testId="spp-kpi-open" />
+            {plan.people.some(p => p.velocity_based)
+              ? <Kpi label="Unallocated forecast" value={`${Math.round(plan.people.reduce((sum, p) => sum + (p.points_open ?? 0), 0) * 100) / 100} pts`} testId="spp-kpi-open" />
+              : <Kpi label="Empty places" value={plan.summary.open_places} tone={plan.summary.open_places ? 'warn' : undefined} testId="spp-kpi-open" />}
           </div>
 
           {plan.notes.map(n => <div key={n} className="sppNotice warn" data-testid="spp-note"><TriangleAlert size={14} /> {n}</div>)}
@@ -726,60 +804,82 @@ export const LegacySprintPlanningPage: React.FC<SprintPlanningPageProps> = ({
           {plan.flagged.length > 0 && (
             <section className="sppCard attention" data-testid="spp-flagged">
               <div className="sppCardHead"><div><h3><TriangleAlert size={15} /> Look at these first ({plan.flagged.length})</h3>
-                <p>Carried over, and blocked or active for more than {plan.active_days} days. Their last 3 comments show where each one stands.</p></div></div>
+                <p>Carried over, and blocked or active for more than {plan.active_days} days. Select View Recent Comments to read their last 3 comments.</p></div></div>
+              <div className="sppRosterActions">
+                <label className="sppMuted">Show{' '}
+                  <select className="sppReassignSelect" value={attentionFilter} onChange={event => setAttentionFilter(event.target.value)} aria-label="Filter stories needing attention">
+                    <option value="all">All</option>
+                    <option value="blocked">Blocked</option>
+                    <option value="active_too_long">Active too long</option>
+                  </select>
+                </label>
+                <span className="sppMuted" role="status">Showing {visibleFlagged.length} of {plan.flagged.length}</span>
+              </div>
               <div className="sppFlaggedList">
-                {plan.flagged.map(s => (
+                {visibleFlagged.map(s => (
                   <FlaggedCard
                     key={s.id}
                     story={s}
                     project={project}
+                    loadComments={loadComments}
                     onDrop={id => handleReassign(id, '')}
                   />
                 ))}
               </div>
+              {visibleFlagged.length === 0 && <p className="sppMuted">No stories match this attention filter.</p>}
             </section>
           )}
 
           <section data-testid="spp-people-plan">
             <h3 className="sppH">Team Workload Swimlanes for {plan.to_sprint.name}</h3>
-            <div className="sppPeople">
-              {plan.people.map(p => (
-                <PersonCard
-                  key={personKey(p)}
-                  person={p}
-                  sprintName={plan.to_sprint.name}
-                  project={project}
-                  mode={capacityMode}
-                  allPeople={plan.people}
-                  onReassign={handleReassign}
-                />
-              ))}
+            <div className="sppPlanningPanes">
+              <section className="sppWorkloadPane" aria-label="Planned team workloads" data-testid="spp-workload-pane">
+                <h4>Team workloads</h4>
+                <p className="sppMuted">Carryover, existing sprint commitments and automatically planned work. Assignment changes update this draft only.</p>
+                <div className="sppPeople">
+                  {plan.people.map(p => (
+                    <PersonCard
+                      key={personKey(p)}
+                      person={p}
+                      loadComments={loadComments}
+                      sprintName={plan.to_sprint.name}
+                      project={project}
+                      mode={capacityMode}
+                      allPeople={plan.people}
+                      onReassign={handleReassign}
+                    />
+                  ))}
+                </div>
+              </section>
+              <section className="sppCard sppBacklogPane" aria-label="Available backlog" data-testid="spp-unplaced">
+                <div className="sppCardHead"><div><h3>Available backlog ({rankedBacklog.length})</h3>
+                  <p>Remaining work from this team's scope. Sprint Goal topic matches appear first. Select a team member to add an item to their workload.</p>
+                  <p className="sppMuted">Separate goal topics with commas or "and". Matches require a topic phrase; single-word topics must appear in the title or a tag. Equal matches retain backlog order. The planner reads up to 300 backlog candidates.</p>
+                </div></div>
+                <ul className="sppUnplaced">
+                  {rankedBacklog.map(({ story, matches, evidence }) => (
+                    <StoryRow
+                      key={story.id}
+                      story={story}
+                      project={project}
+                      loadComments={loadComments}
+                      note={plan.unplaced.find(item => item.story.id === story.id)?.reason}
+                      goalMatches={matches}
+                      goalEvidence={evidence}
+                      people={plan.people}
+                      onReassign={handleReassign}
+                    />
+                  ))}
+                </ul>
+                {rankedBacklog.length === 0 && <p className="sppMuted">No remaining backlog items in the candidates read for this plan.</p>}
+              </section>
             </div>
           </section>
-
-          {plan.unplaced_total > 0 && (
-            <section className="sppCard" data-testid="spp-unplaced">
-              <div className="sppCardHead"><div><h3>Not placed ({plan.unplaced_total})</h3><p>Backlog stories nobody could take. Select an assignee to allocate.</p></div></div>
-              <ul className="sppUnplaced">
-                {plan.unplaced.map(u => (
-                  <StoryRow
-                    key={u.story.id}
-                    story={u.story}
-                    project={project}
-                    note={u.reason}
-                    people={plan.people}
-                    onReassign={handleReassign}
-                  />
-                ))}
-              </ul>
-              {plan.unplaced_total > plan.unplaced.length && <p className="sppMuted">Showing the first {plan.unplaced.length} of {plan.unplaced_total}.</p>}
-            </section>
-          )}
 
           {plan.outside_plan.length > 0 && (
             <section className="sppCard" data-testid="spp-outside">
               <div className="sppCardHead"><div><h3>Open stories of people who are not in this plan ({plan.outside_plan.length})</h3><p>Not counted for anyone.</p></div></div>
-              <ul>{plan.outside_plan.map(s => <StoryRow key={s.id} story={s} project={project} note={s.assigned_to} />)}</ul>
+              <ul>{plan.outside_plan.map(s => <StoryRow key={s.id} story={s} project={project} loadComments={loadComments} note={s.assigned_to} />)}</ul>
             </section>
           )}
 

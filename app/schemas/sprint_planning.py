@@ -44,6 +44,20 @@ class PlanPerson(BaseModel):
     focus_factor: float | None = Field(default=0.8, ge=0.1, le=1.0)
 
 
+class CapacityInput(BaseModel):
+    name: str
+    unique_name: str = ""
+    capacity_per_day: float = Field(ge=0, le=24)
+    days_off: float = Field(ge=0, le=366)
+
+
+class VelocityCapacity(BaseModel):
+    target_iteration_id: str
+    previous_iteration_id: str | None = None
+    upcoming_members: list[CapacityInput] = Field(default_factory=list, max_length=1000)
+    previous_members: list[CapacityInput] = Field(default_factory=list, max_length=1000)
+
+
 class SprintPlanRequest(BaseModel):
     organization: str = Field(min_length=1, max_length=256)
     project: str = Field(min_length=1, max_length=256)
@@ -60,6 +74,7 @@ class SprintPlanRequest(BaseModel):
     focus_factor: float = Field(default=0.8, ge=0.1, le=1.0)
     tags: list[str] | None = Field(default=None, max_length=20)
     area_filter: str | None = Field(default=None, max_length=256)
+    velocity_capacity: VelocityCapacity | None = None
 
 
 class StoryFlag(BaseModel):
@@ -76,6 +91,7 @@ class StoryComment(BaseModel):
 class PlanStory(BaseModel):
     id: int
     title: str
+    description: str = ""
     type: str = ""
     state: str = ""
     state_category: str = ""
@@ -110,6 +126,13 @@ class PlannedPerson(BaseModel):
     points_capacity: float | None = None
     points_over_by: float = 0.0
     points_open: float = 0.0
+    velocity_based: bool = False
+    forecast_status: str | None = None
+    previous_completed_points: float | None = None
+    previous_available_days: float | None = None
+    total_capacity_hours: float | None = None
+    forecast_note: str | None = None
+    points_reserved: float = 0.0
     carried: list[PlanStory] = Field(default_factory=list)
     already_planned: list[PlanStory] = Field(default_factory=list)
     new: list[PlanStory] = Field(default_factory=list)
@@ -136,6 +159,7 @@ class PlanSummary(BaseModel):
     unplaced: int = 0
     open_places: int = 0
     total_points_planned: float = 0.0
+    total_points_reserved: float = 0.0
     total_points_capacity: float = 0.0
     points_carried: float = 0.0
     points_new: float = 0.0
@@ -159,6 +183,7 @@ class SprintPlan(BaseModel):
     flagged: list[PlanStory] = Field(default_factory=list)
     unplaced: list[UnplacedStory] = Field(default_factory=list)
     unplaced_total: int = 0
+    available_backlog: list[PlanStory] = Field(default_factory=list)
     outside_plan: list[PlanStory] = Field(default_factory=list)  # open stories of people who are not in this plan
     backlog_left: int = 0
     summary: PlanSummary
@@ -197,4 +222,3 @@ class SprintCommitResponse(BaseModel):
     updated_count: int = 0
     message: str = ""
     errors: list[str] = Field(default_factory=list)
-

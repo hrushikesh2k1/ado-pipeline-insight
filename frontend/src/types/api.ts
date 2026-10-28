@@ -709,14 +709,30 @@ export type SprintPlanRequest = {
   focus_factor?: number
   tags?: string[]
   area_filter?: string
+  velocity_capacity?: VelocityCapacity
 }
 
+export type CapacitySnapshot = { iteration_id: string; working_days: number; members: AdoCapacityMember[] }
+export type VelocityContext = {
+  target: PlanSprint
+  previous: PlanSprint | null
+  upcoming_capacity: CapacitySnapshot | null
+  previous_capacity: CapacitySnapshot | null
+  notes: string[]
+}
+export type VelocityCapacity = {
+  target_iteration_id: string
+  previous_iteration_id: string | null
+  upcoming_members: Array<{ name: string; unique_name: string; capacity_per_day: number; days_off: number }>
+  previous_members: Array<{ name: string; unique_name: string; capacity_per_day: number; days_off: number }>
+}
 export type StoryFlag = { code: 'blocked' | 'active_too_long' | string; reason: string }
 export type StoryComment = { author: string; date: string; text: string }
 
 export type PlanStory = {
   id: number
   title: string
+  description?: string
   type: string
   state: string
   state_category: string
@@ -751,6 +767,13 @@ export type PlannedPerson = {
   points_capacity?: number | null
   points_over_by?: number
   points_open?: number
+  velocity_based?: boolean
+  forecast_status?: string | null
+  previous_completed_points?: number | null
+  previous_available_days?: number | null
+  total_capacity_hours?: number | null
+  forecast_note?: string | null
+  points_reserved?: number
   carried: PlanStory[]
   already_planned: PlanStory[]
   new: PlanStory[]
@@ -774,6 +797,7 @@ export type SprintPlan = {
   flagged: PlanStory[]
   unplaced: Array<{ story: PlanStory; reason: string }>
   unplaced_total: number
+  available_backlog?: PlanStory[]
   outside_plan: PlanStory[]
   backlog_left: number
   summary: {
@@ -788,6 +812,7 @@ export type SprintPlan = {
     unplaced: number
     open_places: number
     total_points_planned?: number
+    total_points_reserved?: number
     total_points_capacity?: number
     points_carried?: number
     points_new?: number

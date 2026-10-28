@@ -78,10 +78,21 @@ describe('buildTeamDeliverablesReport & team deliverable helpers', () => {
     expect(formatSprintMonthYear(null, null, '26-09 (Sep Work) Sprint')).toBe("Sep '26")
   })
 
-  it('calculates 21 sprint business days and 168h capacity for September', () => {
+  it('uses the Capacity-tab inclusive working days rather than a monthly hours default', () => {
     const days = calculateSprintBusinessDays('2026-09-01T00:00:00Z', '2026-09-30T00:00:00Z')
-    expect(days).toBe(21)
-    expect(days * 8).toBe(168)
+    expect(days).toBe(22)
+    expect(calculateSprintBusinessDays(null, null)).toBeNull()
+    expect(calculateSprintBusinessDays('invalid', 'invalid')).toBeNull()
+  })
+
+  it('preserves zero capacity and explicitly reports missing Capacity-tab entries', () => {
+    const members = prepareMemberDeliverables([], [{ name: 'Zero', completedHours: 8 }, { name: 'Unknown', completedHours: 8 }], [], { Zero: 0 })
+    expect(members.find(m => m.name === 'Zero')?.hoursDelivered).toBe(0)
+    expect(members.find(m => m.name === 'Unknown')?.hoursDelivered).toBeNull()
+    const report = buildTeamDeliverablesReport({ sprintLabel: 'Test sprint', teamTitle: 'Demo', capacityPerPersonHours: null, members })
+    expect(report.text).toContain('@Zero (0h)')
+    expect(report.text).toContain('@Unknown (Capacity unavailable)')
+    expect(report.text).toContain('Capacity data unavailable.')
   })
 
   it('matches member names resiliently with aliases', () => {

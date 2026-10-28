@@ -1,4 +1,15 @@
-import type { PlanStory, PlannedPerson, SprintPlan } from '../../types/api'
+import type { PlanStory, PlannedPerson, SprintPlan, VelocityContext } from '../../types/api'
+export const velocityContext = (target = 's3'): VelocityContext => ({
+  target: { id: target, name: `Sprint ${target}`, path: `Demo\\Sprint ${target}`, time_frame: 'future' },
+  previous: { id: 's1', name: 'Previous completed sprint', path: 'Demo\\Sprint 1', time_frame: 'past' },
+  upcoming_capacity: { iteration_id: target, working_days: 10, members: [
+    { id: 'ava', name: 'Ava', unique_name: 'ava@test', activity: 'Development', capacity_per_day: 8, days_off: 0 },
+    { id: 'ben', name: 'Ben', unique_name: 'ben@test', activity: 'Development', capacity_per_day: 8, days_off: 0 },
+    { id: 'planner', name: 'Test Planner', unique_name: 'planner@example.test', activity: 'Development', capacity_per_day: 8, days_off: 0 },
+  ] },
+  previous_capacity: { iteration_id: 's1', working_days: 10, members: [] },
+  notes: [],
+})
 export const story = (over: Partial<PlanStory> = {}): PlanStory => ({
   id: 1, title: 'Blocked carryover', type: 'User Story', state: 'Active', state_category: 'inprogress', area_path: 'Demo\\Alpha',
   iteration_path: 'Demo\\Sprint 2', assigned_to: 'Ava', assigned_unique: 'ava@test', tags: [], points: 3, days_in_state: 15,

@@ -78,6 +78,14 @@
 .sppTable td { padding: 8px 10px; border-bottom: 1px solid var(--spp-border); vertical-align: middle; }
 .sppTable td small { display: block; color: var(--spp-muted); font-size: 11px; }
 .sppTable tr.off { opacity: 0.5; }
+.sppRosterActions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.sppRosterEditor { margin: 12px 0; padding: 12px; border: 1px solid var(--spp-border); border-radius: 8px; background: var(--spp-card-2); }
+.sppRosterEditor h4 { margin: 0 0 6px; font-size: 13px; }
+.sppRosterSearch { box-sizing: border-box; width: 100%; padding: 8px 10px; background: var(--spp-field); color: var(--spp-text); border: 1px solid var(--spp-border); border-radius: 8px; font: inherit; font-size: 12.5px; }
+.sppRosterSearch:focus-visible { outline: 2px solid var(--spp-accent); outline-offset: 1px; }
+.sppRosterChoices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 6px; max-height: 280px; overflow-y: auto; margin: 10px 0; }
+.sppRosterChoice { display: flex; align-items: center; gap: 8px; padding: 6px; font-size: 12.5px; cursor: pointer; }
+.sppRosterChoice small { display: block; color: var(--spp-muted); overflow-wrap: anywhere; }
 .sppAddPerson { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 .sppAddPerson input { flex: 1 1 240px; }
 .sppAddPerson button, .sppGhost, .sppPrimary, .sppIconBtn {
@@ -130,6 +138,16 @@
 .sppComments blockquote p { margin: 3px 0 0; font-size: 12.5px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .sppPeople { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 12px; align-items: start; }
+.sppPlanningPanes { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+.sppWorkloadPane, .sppBacklogPane { min-width: 0; }
+.sppWorkloadPane > h4 { margin: 0 0 8px; color: var(--spp-text); }
+.sppWorkloadPane .sppPeople { grid-template-columns: minmax(0, 1fr); }
+.sppBacklogPane .sppUnplaced { padding: 0; list-style: none; }
+.sppBacklogPane .sppStory { margin-bottom: 10px; }
+.sppStory.sppGoalMatch { border: 2px solid var(--spp-good); background: var(--spp-card-2); padding: 10px; }
+@media (max-width: 1000px) {
+  .sppPlanningPanes { grid-template-columns: minmax(0, 1fr); }
+}
 .sppPerson { background: var(--spp-card); border: 1px solid var(--spp-border); border-radius: 12px; padding: 14px 16px; }
 .sppPerson.short { border-color: rgba(245, 158, 11, 0.45); }
 .sppPerson.over { border-color: rgba(248, 113, 113, 0.5); }
@@ -338,6 +356,6 @@
   .sppTable thead { display: none; }
   .sppTable tr { display: grid; grid-template-columns: auto 1fr auto; gap: 6px 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--spp-border); }
   .sppTable td { border: 0; padding: 0; }
-  .sppTable td:nth-child(3) { grid-column: 1 / -1; }
+  .sppTable td[data-label] { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 10px; }
+  .sppTable td[data-label]::before { content: attr(data-label); color: var(--spp-muted); font-size: 11px; }
 }
-

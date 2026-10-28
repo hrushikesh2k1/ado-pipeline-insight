@@ -5,9 +5,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { LegacySprintPlanningPage as SprintPlanningPage } from '../../components/SprintPlanningPage'
 import { api } from '../../services/api'
 import type { SprintPlan } from '../../types/api'
-import { fixture } from './planningFixtures'
+import { fixture, story, velocityContext } from './planningFixtures'
 
-vi.mock('../../services/api', () => ({ api: { teams: vi.fn(), sprintPlanningSetup: vi.fn(), sprintPlan: vi.fn(), sprintCommit: vi.fn() } }))
+vi.mock('../../services/api', () => ({ api: { teams: vi.fn(), sprintPlanningSetup: vi.fn(), sprintVelocityContext: vi.fn(), sprintPlan: vi.fn(), sprintCommit: vi.fn() } }))
 let host: HTMLDivElement, root: Root
 const setup = () => ({ team: 'Alpha', sprints: [fixture().from_sprint, fixture().to_sprint], default_to_id: 's3', default_from_id: 's2',
   members: [{ name: 'Ava', unique_name: 'ava@test' }, { name: 'Ben', unique_name: 'ben@test' }], areas: ['Demo\\Alpha'],
@@ -28,6 +28,7 @@ beforeEach(() => {
   localStorage.setItem('ado_sprint_planning:org:demo:alpha', JSON.stringify(fixture().people.map(p => ({ ...p, included: true, manual: false }))))
   vi.mocked(api.teams).mockResolvedValue([{ id: 't', name: 'Alpha' }])
   vi.mocked(api.sprintPlanningSetup).mockResolvedValue(setup())
+  vi.mocked(api.sprintVelocityContext).mockImplementation(async (_org, _project, _team, target) => velocityContext(target))
   vi.mocked(api.sprintPlan).mockResolvedValue(fixture())
   vi.mocked(api.sprintCommit).mockResolvedValue({ success: true, message: 'Updated', updated_count: 1, errors: [] })
   host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host)
@@ -37,10 +38,45 @@ afterEach(async () => { await act(async () => root.unmount()); host.remove() })
 it('assigns an unplaced work item through its dropdown and includes it in the confirmed commit', async () => {
   await mount(); await generate()
   await change('select[aria-label="Reassign story 2"]', 'ben@test')
-  expect(host.querySelector('[data-testid="spp-unplaced"]')).toBeNull()
+  expect(host.querySelector('[data-testid="spp-unplaced"]')?.textContent).toContain('No remaining backlog items')
   await click(button('Commit to Azure DevOps')); await click(button('Confirm & Commit'))
   expect(api.sprintCommit).toHaveBeenCalledWith(expect.objectContaining({ to_iteration_id: 's3', to_iteration_path: 'Demo\\Sprint 3',
     assignments: [{ story_id: 1, assigned_to: 'ava@test' }, { story_id: 2, assigned_to: 'ben@test' }] }))
+})
+
+it('ranks and highlights goal-related backlog, assigns it immediately, and returns removed work to the right pane', async () => {
+  const plan = fixture()
+  plan.sprint_goal = 'OAuth, monitoring'
+  plan.available_backlog = [
+    story({ id: 20, title: 'Unrelated maintenance', flags: [], iteration_path: 'Demo' }),
+    story({ id: 21, title: 'OAuth monitoring rollout', flags: [], description: 'Monitoring integration', iteration_path: 'Demo' }),
+    story({ id: 22, title: 'Improve dashboard', flags: [], tags: ['monitoring'], iteration_path: 'Demo' }),
+  ]
+  vi.mocked(api.sprintPlan).mockResolvedValue(plan)
+  await mount(); await generate()
+  const left = host.querySelector('[data-testid="spp-workload-pane"]')!
+  const right = host.querySelector('[data-testid="spp-unplaced"]')!
+  expect([...right.querySelectorAll('.sppStory')].map(row => row.getAttribute('data-testid'))).toEqual(['spp-story-21', 'spp-story-22', 'spp-story-20'])
+  expect(right.querySelectorAll('.sppGoalMatch')).toHaveLength(2)
+  expect(right.querySelector('[data-testid="spp-story-21"] [data-testid="spp-goal-evidence"]')?.textContent).toContain('Matched "oauth" in title')
+  expect([...right.querySelectorAll('select[aria-label="Reassign story 21"] option')].map(option => option.textContent)).toEqual(['(Not in plan)', 'Ava', 'Ben'])
+  expect(left.querySelector('[data-testid="spp-story-1"]')).not.toBeNull()
+
+  await change('[data-testid="spp-unplaced"] select[aria-label="Reassign story 21"]', 'ben@test')
+  expect(right.querySelector('[data-testid="spp-story-21"]')).toBeNull()
+  expect(left.querySelector('[data-testid="spp-card-ben@test"] [data-testid="spp-story-21"]')).not.toBeNull()
+  expect(host.querySelector('[data-testid="spp-kpi-stories"]')?.textContent).toContain('2')
+  expect(api.sprintCommit).not.toHaveBeenCalled()
+
+  await change('[data-testid="spp-workload-pane"] select[aria-label="Reassign story 21"]', '')
+  expect(left.querySelector('[data-testid="spp-story-21"]')).toBeNull()
+  expect(right.querySelectorAll('[data-testid="spp-story-21"]')).toHaveLength(1)
+  expect(right.querySelector('.sppStory')?.getAttribute('data-testid')).toBe('spp-story-21')
+  await change('[data-testid="spp-unplaced"] select[aria-label="Reassign story 21"]', 'ben@test')
+  await click(button('Commit to Azure DevOps')); await click(button('Confirm & Commit'))
+  expect(api.sprintCommit).toHaveBeenCalledWith(expect.objectContaining({
+    assignments: [{ story_id: 1, assigned_to: 'ava@test' }, { story_id: 21, assigned_to: 'ben@test' }],
+  }))
 })
 
 it('removes a flagged story from the draft and flags without claiming an Azure backlog write', async () => {
@@ -109,17 +145,16 @@ const input = async (selector: string, value: string) => {
 it.each([
   ['[data-testid="spp-per-person"]', '3'],
   ['[data-testid="spp-active-days"]', '4'],
-  ['[data-testid="spp-tags-filter"]', 'Changed'],
-  ['[data-testid="spp-area-filter"]', 'AnotherArea'],
-  ['input[title="Working days in sprint"]', '0'],
-  ['input[title="PTO / Leave days"]', '10'],
 ])('invalidates the generated plan after editing %s', async (selector, value) => {
   await mount(); await generate(); await input(selector, value)
   expect(host.querySelector('[data-testid="spp-result"]')).toBeNull()
 })
 
-it('sends zero working days as zero, instead of replacing it with ten', async () => {
-  await mount(); await input('input[title="Working days in sprint"]', '0'); await generate()
+it('sends zero Capacity-tab working days as zero, instead of replacing it with ten', async () => {
+  const context = velocityContext()
+  context.upcoming_capacity!.working_days = 0
+  vi.mocked(api.sprintVelocityContext).mockResolvedValue(context)
+  await mount(); await generate()
   expect(vi.mocked(api.sprintPlan).mock.calls[0][0].people[0].working_days).toBe(0)
 })
 

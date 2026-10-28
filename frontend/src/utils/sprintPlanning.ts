@@ -84,6 +84,37 @@ export function mergeMembers(saved: PlanningPerson[], members: TeamMemberChoice[
   return merged
 }
 
+const rosterKey = (org: string, project: string, team: string) =>
+  `ado_sprint_roster:v1:${[org, project, team].map(value => value.trim().toLowerCase()).join(':')}`
+
+export function loadRoster(org: string, project: string, team: string): string[] | null {
+  const raw = localStorage.getItem(rosterKey(org, project, team))
+  if (raw === null) return null
+  const parsed: unknown = JSON.parse(raw)
+  if (!Array.isArray(parsed) || parsed.some(value => typeof value !== 'string' || !value.trim())) {
+    throw new Error('The saved team roster could not be read. Clear its browser storage entry and select the team again.')
+  }
+  return [...new Set(parsed.map(value => value.trim().toLowerCase()))]
+}
+
+export function saveRoster(org: string, project: string, team: string, keys: string[]): void {
+  localStorage.setItem(rosterKey(org, project, team), JSON.stringify([...new Set(keys.map(key => key.trim().toLowerCase()).filter(Boolean))]))
+}
+
+/** A refresh must not silently remove someone explicitly saved in this team's roster. */
+export function mergeRosterMembers(saved: PlanningPerson[], members: TeamMemberChoice[], roster: string[] | null): PlanningPerson[] {
+  const merged = mergeMembers(saved, members)
+  const seen = new Set(merged.map(personKey))
+  for (const person of saved) {
+    const key = personKey(person)
+    if (roster?.includes(key) && !seen.has(key)) {
+      merged.push({ ...person, manual: true })
+      seen.add(key)
+    }
+  }
+  return merged
+}
+
 /** Someone added by hand: a name, or an email (then the email also identifies them in Azure DevOps). */
 export function addPerson(people: PlanningPerson[], text: string): PlanningPerson[] {
   const value = text.trim()
@@ -186,7 +217,11 @@ export function daysInState(story: Pick<PlanStory, 'days_in_state' | 'state_sinc
 /** The plan as Markdown, to paste into a chat or a meeting note. */
 export function planAsMarkdown(plan: SprintPlan): string {
   const line = (s: PlanStory) => `- #${s.id} ${s.title} (${s.state}${s.flags.length ? `; ${s.flags.map(f => f.reason).join('; ')}` : ''})`
-  const out: string[] = [`# Sprint plan: ${plan.to_sprint.name}`, '', `Team ${plan.team}. Stories carried over from ${plan.from_sprint.name}. ${plan.per_person} stories per person. Nothing was changed in Azure DevOps.`, '']
+  const velocityBased = plan.people.some(p => p.velocity_based)
+  const allocation = velocityBased
+    ? 'Assignments use previous completed points scaled by Capacity-tab available days. Carryover reserves 50% of original points.'
+    : `${plan.per_person} stories per person.`
+  const out: string[] = [`# Sprint plan: ${plan.to_sprint.name}`, '', `Team ${plan.team}. Stories carried over from ${plan.from_sprint.name}. ${allocation} Nothing was changed in Azure DevOps.`, '']
   if (plan.sprint_goal) {
     out.push(`> **Sprint Goal:** ${plan.sprint_goal}`, '')
   }
@@ -201,7 +236,12 @@ export function planAsMarkdown(plan: SprintPlan): string {
     }
   }
   for (const p of plan.people) {
-    out.push(`## ${p.name} (${fullness(p)})`)
+    out.push(`## ${p.name} (${p.velocity_based ? `${p.total} stories` : fullness(p)})`)
+    if (p.velocity_based) out.push(
+      p.forecast_status === 'ready'
+        ? `Forecast: ${p.points_capacity ?? 0} pts. Reserved: ${p.points_reserved ?? 0} pts. Original story size: ${p.points_planned ?? 0} pts.`
+        : 'Forecast unavailable; review manual and existing commitments.',
+      `Previous completed: ${p.previous_completed_points ?? 'unavailable'} pts; previous available days: ${p.previous_available_days ?? 'unavailable'}. Capacity: ${p.total_capacity_hours ?? 'unavailable'}h.`)
     if (p.carried.length) out.push('Carried over:', ...p.carried.map(line))
     if (p.already_planned.length) out.push(`Already in ${plan.to_sprint.name}:`, ...p.already_planned.map(line))
     if (p.new.length) out.push('New:', ...p.new.map(line))
@@ -213,6 +253,40 @@ export function planAsMarkdown(plan: SprintPlan): string {
 }
 
 
+
+export type GoalEvidence = { topic: string; source: 'title' | 'description' | 'tag'; excerpt: string }
+
+export function rankGoalBacklog(stories: PlanStory[], goal: string): Array<{ story: PlanStory; matches: string[]; evidence: GoalEvidence[] }> {
+  const stopWords = new Set('a an are as at be by for from in is it of on that the this to with high low higher lower reduce reducing improve improving enable deliver'.split(' '))
+  const genericWords = new Set('data work item items story stories system systems service services metrics enhanced new all'.split(' '))
+  const tokenize = (text: string) => [...text.matchAll(/[\p{L}\p{N}]+/gu)]
+    .map(match => ({ word: match[0].toLowerCase().replace(/^costs$/, 'cost'), start: match.index, end: match.index + match[0].length }))
+    .filter(token => !stopWords.has(token.word))
+  const topics = [...new Set(goal.split(/[,;\n]+|\b(?:and|or)\b/iu).map(part => tokenize(part).map(token => token.word).join(' ')))]
+    .filter(topic => topic && topic.split(' ').some(word => !genericWords.has(word)))
+  return stories.map(story => {
+    const sources: Array<{ source: GoalEvidence['source']; text: string }> = [
+      { source: 'title', text: story.title }, ...story.tags.map(text => ({ source: 'tag' as const, text })),
+      { source: 'description', text: story.description ?? '' },
+    ]
+    const evidence: GoalEvidence[] = []
+    for (const topic of topics) {
+      const words = topic.split(' ')
+      for (const { source, text } of sources) {
+        // A single word buried in a description is not sufficient evidence of goal alignment.
+        if (source === 'description' && words.length === 1) continue
+        const tokens = tokenize(text)
+        const index = tokens.findIndex((_, i) => words.every((word, offset) => tokens[i + offset]?.word === word))
+        if (index < 0) continue
+        const start = Math.max(0, tokens[index].start - 60)
+        const end = Math.min(text.length, tokens[index + words.length - 1].end + 100)
+        evidence.push({ topic, source, excerpt: `${start ? '...' : ''}${text.slice(start, end).trim()}${end < text.length ? '...' : ''}` })
+        break
+      }
+    }
+    return { story, matches: evidence.map(item => item.topic), evidence }
+  }).sort((a, b) => b.matches.length - a.matches.length)
+}
 
 /** Move a draft assignment atomically; no Azure DevOps write happens here. */
 export function reassignStory(plan: SprintPlan, storyId: number, targetKey: string): SprintPlan {
@@ -230,7 +304,7 @@ export function reassignStory(plan: SprintPlan, storyId: number, targetKey: stri
   }
   const fromUnplaced = plan.unplaced.find(u => u.story.id === storyId)
   if (!moving) {
-    moving = fromUnplaced?.story
+    moving = fromUnplaced?.story ?? plan.available_backlog?.find(story => story.id === storyId)
     if (!moving || !target) return plan
     lane = moving.iteration_path === plan.from_sprint.path ? 'carried'
       : moving.iteration_path === plan.to_sprint.path ? 'already_planned' : 'new'
@@ -244,7 +318,10 @@ export function reassignStory(plan: SprintPlan, storyId: number, targetKey: stri
   const unplaced = plan.unplaced.filter(u => u.story.id !== storyId)
   if (!target) unplaced.push({ story, reason: 'Excluded manually from this draft; Azure DevOps is unchanged.' })
   const hiddenUnplaced = Math.max(0, plan.unplaced_total - plan.unplaced.length)
-  return recalculatePlan({ ...plan, people, unplaced, unplaced_total: hiddenUnplaced + unplaced.length })
+  const available_backlog = plan.available_backlog?.filter(item => item.id !== storyId)
+  if (!target && available_backlog) available_backlog.push(story)
+  return recalculatePlan({ ...plan, people, unplaced, unplaced_total: hiddenUnplaced + unplaced.length,
+    ...(available_backlog ? { available_backlog } : {}) })
 }
 
 const points = (stories: PlanStory[]) => Math.round(stories.reduce((sum, s) => sum + (s.points ?? 0), 0) * 10) / 10
@@ -255,23 +332,32 @@ export function recalculatePlan(plan: SprintPlan): SprintPlan {
     const total = storyCount(p)
     const points_carried = points(p.carried), points_already_planned = points(p.already_planned), points_new = points(p.new)
     const points_planned = Math.round((points_carried + points_already_planned + points_new) * 10) / 10
+    const points_reserved = p.velocity_based ? Math.round((points_carried * 0.5 + points_already_planned + points_new) * 100) / 100 : points_planned
+    const allocated = p.velocity_based ? points_reserved : points_planned
     const cap = p.points_capacity ?? p.capacity_points ?? 0
     const open_places = Math.max(0, p.capacity - total), over_by = Math.max(0, total - p.capacity)
     const warnings: string[] = []
+    if (p.velocity_based) {
+      if (p.forecast_note) warnings.push(p.forecast_note)
+      if (p.carried.length) warnings.push('Carryover is assumed half complete: 50% of original points is reserved, not a measured remaining estimate.')
+      if ([...p.carried, ...p.already_planned, ...p.new].some(s => s.points === null)) warnings.push('Assigned work has missing points; remaining workload is uncertain.')
+      if (p.forecast_status !== 'ready' && total) warnings.push('Manual or existing assignments remain despite unavailable velocity; review before committing.')
+      if (allocated > cap) warnings.push(`Forecast exceeded: ${allocated} reserved pts against ${cap} forecast pts.`)
+    }
     if (!p.areas.length) warnings.push('No area of choice is set, so no new story can be given to this person.')
-    if (open_places) warnings.push(`${open_places} places still empty in this draft.`)
-    if (over_by) warnings.push(`${over_by} more than the ${p.capacity} planned.`)
-    if (points_planned > cap * 1.15) warnings.push(`Capacity exceeded: ${points_planned} pts allocated exceeds estimated ${cap} pts capacity.`)
-    return { ...p, total, open_places, over_by, points_carried, points_already_planned, points_new, points_planned,
-      points_open: Math.max(0, Math.round((cap - points_planned) * 10) / 10),
-      points_over_by: Math.max(0, Math.round((points_planned - cap) * 10) / 10), warnings }
+    if (open_places && !p.velocity_based) warnings.push(`${open_places} places still empty in this draft.`)
+    if (over_by && !p.velocity_based) warnings.push(`${over_by} more than the ${p.capacity} planned.`)
+    if (points_planned > cap * 1.15 && !p.velocity_based) warnings.push(`Capacity exceeded: ${points_planned} pts allocated exceeds estimated ${cap} pts capacity.`)
+    return { ...p, total, open_places, over_by, points_carried, points_already_planned, points_new, points_planned, points_reserved,
+      points_open: Math.max(0, Math.round((cap - allocated) * 100) / 100),
+      points_over_by: Math.max(0, Math.round((allocated - cap) * 100) / 100), warnings }
   })
   const all = people.flatMap(p => [...p.carried, ...p.already_planned, ...p.new])
   const flagged = [...all.filter(s => s.flags.length && s.iteration_path === plan.from_sprint.path), ...plan.outside_plan.filter(s => s.flags.length)]
   const blocked = flagged.filter(s => s.flags.some(f => f.code === 'blocked')).length
   const long_active = flagged.filter(s => s.flags.some(f => f.code === 'active_too_long')).length
   const unpointed_stories = all.filter(s => s.points === null).length
-  const overloaded = people.filter(p => (p.points_planned ?? 0) > (p.points_capacity ?? p.capacity_points ?? 0))
+  const overloaded = people.filter(p => ((p.velocity_based ? p.points_reserved : p.points_planned) ?? 0) > (p.points_capacity ?? p.capacity_points ?? 0))
   const score = blocked * 2 + (unpointed_stories ? unpointed_stories < 3 ? 1 : 2 : 0) + (overloaded.length ? 2 : 0)
   const risk_reasons: string[] = [], ai_recommendations: string[] = []
   if (blocked) {
@@ -291,7 +377,8 @@ export function recalculatePlan(plan: SprintPlan): SprintPlan {
     people: people.length, stories_planned: all.length, carried: people.reduce((n, p) => n + p.carried.length, 0),
     already_planned: people.reduce((n, p) => n + p.already_planned.length, 0), new: people.reduce((n, p) => n + p.new.length, 0),
     flagged: flagged.length, blocked, long_active, unplaced: plan.unplaced_total, open_places: people.reduce((n, p) => n + p.open_places, 0),
-    total_points_planned: points(all), total_points_capacity: Math.round(people.reduce((n, p) => n + (p.points_capacity ?? p.capacity_points ?? 0), 0) * 10) / 10,
+    total_points_planned: points(all), total_points_reserved: Math.round(people.reduce((n, p) => n + (p.points_reserved ?? 0), 0) * 100) / 100,
+    total_points_capacity: Math.round(people.reduce((n, p) => n + (p.points_capacity ?? p.capacity_points ?? 0), 0) * 100) / 100,
     points_carried: points(people.flatMap(p => p.carried)), points_new: points(people.flatMap(p => p.new)), unpointed_stories,
     risk_score: score >= 4 ? 'High' : score >= 2 ? 'Medium' : 'Low', risk_reasons, sprint_confidence_pct: Math.max(40, Math.min(95, 95 - score * 12)),
   } }

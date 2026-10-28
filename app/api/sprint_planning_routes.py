@@ -9,6 +9,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from app.api.routes import _resolve_pat
 from app.schemas.sprint_planning import SprintCommitRequest, SprintCommitResponse, SprintPlan, SprintPlanRequest, SprintPlanningSetup
 from app.services import sprint_planning
+from app.services.sprint_velocity import velocity_context
 from core.ado_client import AzureDevOpsClient
 from core.validation import validate_organization, validate_project
 
@@ -68,10 +69,27 @@ def sprint_planning_plan(payload: SprintPlanRequest) -> SprintPlan:
             people=[p.model_dump() for p in payload.people], per_person=payload.per_person, active_days=payload.active_days, work_item_types=payload.work_item_types,
             sprint_goal=payload.sprint_goal, capacity_mode=payload.capacity_mode, focus_factor=payload.focus_factor,
             tags=payload.tags, area_filter=payload.area_filter,
+            velocity_capacity=payload.velocity_capacity.model_dump() if payload.velocity_capacity else None,
         )
     except Exception as exc:
         raise _explain(exc) from exc
     return SprintPlan(**plan)
+
+
+@router.get("/ado/sprint-planning/velocity-context", tags=["ado"])
+def sprint_velocity_context(
+    organization: str = Query(..., min_length=1, max_length=256),
+    project: str = Query(..., min_length=1, max_length=256),
+    team: str = Query(..., min_length=1, max_length=256),
+    to_iteration_id: str = Query(..., min_length=1, max_length=64),
+    x_ado_pat: str | None = Header(default=None, alias="X-ADO-PAT"),
+) -> dict:
+    org, proj = _names(organization, project)
+    token = _resolve_pat(org, x_ado_pat)
+    try:
+        return velocity_context(AzureDevOpsClient(org, token), proj, team.strip(), to_iteration_id)
+    except Exception as exc:
+        raise _explain(exc) from exc
 
 
 @router.post("/ado/sprint-planning/commit", response_model=SprintCommitResponse, tags=["ado"], operation_id="sprint_planning_commit")
@@ -95,4 +113,3 @@ def sprint_planning_commit(payload: SprintCommitRequest) -> SprintCommitResponse
     except Exception as exc:
         raise _explain(exc) from exc
     return SprintCommitResponse(**result)
-

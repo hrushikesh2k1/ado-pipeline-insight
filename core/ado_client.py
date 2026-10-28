@@ -342,6 +342,8 @@ class AzureDevOpsClient:
 
     def list_teams(self, project: str, top: int = 100) -> list[dict[str, Any]]:
         """List all teams within a project."""
+        if top <= 0:
+            raise ValueError("Team page size must be positive")
         url = f"https://dev.azure.com/{quote(self.organization, safe='')}/_apis/projects/{quote(project, safe='')}/teams"
         try:
             response = self.session.get(
@@ -350,17 +352,24 @@ class AzureDevOpsClient:
                 timeout=30,
             )
             response.raise_for_status()
-            return self._json_response(response).get("value", [])
         except Exception:
             # Fallback to alternate route
-            url_alt = self._url(project, "_apis/teams")
+            url = self._url(project, "_apis/teams")
             response = self.session.get(
-                url_alt,
+                url,
                 params={"$top": top, "api-version": self.api_version},
                 timeout=30,
             )
             response.raise_for_status()
-            return self._json_response(response).get("value", [])
+        teams = self._json_response(response).get("value", [])
+        page = teams
+        while len(page) == top:
+            response = self.session.get(url,
+                                        params={"$top": top, "$skip": len(teams), "api-version": self.api_version}, timeout=30)
+            response.raise_for_status()
+            page = self._json_response(response).get("value", [])
+            teams.extend(page)
+        return teams
 
     def list_team_iterations(
         self, project: str, team: str, timeframe: str | None = None
@@ -397,7 +406,11 @@ class AzureDevOpsClient:
         url = f"https://dev.azure.com/{quote(self.organization, safe='')}/{quote(project, safe='')}/{quote(team, safe='')}/_apis/work/teamsettings/iterations/{quote(iteration_id, safe='')}/capacities"
         response = self.session.get(url, params={"api-version": self.api_version}, timeout=30)
         response.raise_for_status()
-        return self._json_response(response).get("value", [])
+        data = self._json_response(response)
+        members = data.get("teamMembers") if "teamMembers" in data else data.get("value")
+        if not isinstance(members, list) or any(not isinstance(member, dict) for member in members):
+            raise ValueError("Azure DevOps returned an invalid iteration capacity response.")
+        return members
 
     def query_wiql(self, project: str, wiql_query: str, top: int | None = None) -> list[int]:
         """Execute a WIQL query and return a list of matching work item IDs (at most `top`, when given)."""
@@ -487,10 +500,61 @@ class AzureDevOpsClient:
 
     def list_team_members(self, project: str, team: str, top: int = 200) -> list[dict[str, Any]]:
         """The members of a team: [{"isTeamAdmin": bool, "identity": {"id", "displayName", "uniqueName"}}] (Teams - Get Team Members With Extended Properties, 7.1)."""
+        if top <= 0:
+            raise ValueError("Member page size must be positive")
         url = f"https://dev.azure.com/{quote(self.organization, safe='')}/_apis/projects/{quote(project, safe='')}/teams/{quote(team, safe='')}/members"
-        response = self.session.get(url, params={"$top": int(top), "api-version": self.api_version}, timeout=30)
-        response.raise_for_status()
-        return self._json_response(response).get("value", [])
+        members: list[dict[str, Any]] = []
+        while True:
+            response = self.session.get(url, params={"$top": int(top), "$skip": len(members), "api-version": self.api_version}, timeout=30)
+            response.raise_for_status()
+            page = self._json_response(response).get("value", [])
+            members.extend(page)
+            if len(page) < top:
+                return members
+
+    def list_group_members(self, identity_id: str) -> list[dict[str, Any]]:
+        """Expand an Azure DevOps identity group, including nested groups, into user identities."""
+        url = f"https://vssps.dev.azure.com/{quote(self.organization, safe='')}/_apis/identities"
+        people: list[dict[str, Any]] = []
+        pending = [("identityIds", identity_id)]
+        requested: set[tuple[str, str]] = set()
+        visited: set[str] = set()
+        while pending:
+            parameter = pending[0][0]
+            batch = list(dict.fromkeys(value for kind, value in pending if kind == parameter and (kind, value) not in requested))[:100]
+            requested.update((parameter, value) for value in batch)
+            pending = [entry for entry in pending if entry not in requested]
+            if not batch:
+                continue
+            response = self.session.get(url, params={parameter: ",".join(batch), "queryMembership": "Direct", "api-version": "7.1"}, timeout=30)
+            response.raise_for_status()
+            identities = self._json_response(response).get("value", [])
+            if len(identities) < len(batch):
+                raise ValueError("Azure DevOps did not return all requested group member identities")
+            for identity in identities:
+                key = identity["id"]
+                if key in visited:
+                    continue
+                visited.add(key)
+                if identity.get("isContainer"):
+                    member_ids = identity.get("memberIds") or []
+                    if member_ids:
+                        pending.extend(("identityIds", value) for value in member_ids)
+                    else:
+                        for member in identity.get("members", []):
+                            descriptor = member if isinstance(member, str) else f"{member['identityType']};{member['identifier']}"
+                            pending.append(("descriptors", descriptor))
+                    continue
+                if identity.get("isActive") is False:
+                    continue
+                properties = identity.get("properties") or {}
+                account = properties.get("Account", {}).get("$value", "")
+                people.append({
+                    "id": identity.get("id"),
+                    "displayName": identity.get("customDisplayName") or identity.get("providerDisplayName") or account,
+                    "uniqueName": properties.get("Mail", {}).get("$value") or account,
+                })
+        return people
 
     def get_work_item_comments(self, project: str, work_item_id: int, top: int = 3) -> list[dict[str, Any]]:
         """The newest `top` comments of a work item, newest first (Comments - Get Comments, 7.1-preview.4: order=desc)."""
@@ -514,7 +578,7 @@ class AzureDevOpsClient:
         return self._json_response(response)
 
     def get_work_items_batch(
-        self, project: str, ids: list[int], fields: list[str] | None = None
+        self, project: str, ids: list[int], fields: list[str] | None = None, as_of: str | None = None
     ) -> list[dict[str, Any]]:
         """Batch fetch work items by their IDs.
 
@@ -528,6 +592,8 @@ class AzureDevOpsClient:
         for i in range(0, len(ids), 200):
             chunk = ids[i : i + 200]
             payload: dict[str, Any] = {"ids": chunk}
+            if as_of:
+                payload["asOf"] = as_of
             if fields:
                 payload["fields"] = fields
             else:

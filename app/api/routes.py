@@ -61,6 +61,7 @@ from app.services.irp_service import IrpService
 from app.services import pr_knowledge, pr_review, pr_review_jobs, innersource_service
 from app.schemas.insights import AlertInventoryUpload, InsightsRefreshRequest
 from app.services.work_item_insights import WorkItemInsightsService
+from app.services.sprint_capacity import normalize_capacity_members as _normalize_capacity_members
 from app.repositories import work_item_insights_repository as insights_store
 from app.services.board_service import (
     evaluate_sprint_work_items,
@@ -69,7 +70,6 @@ from app.services.board_service import (
     parse_team_area_scopes,
     calculate_remaining_work_days,
     calculate_sprint_working_days,
-    calculate_weekday_overlap_days,
     parse_ado_date,
     calculate_sprint_milestones,
     strip_html_tags,
@@ -118,52 +118,6 @@ service = PipelineService()
 repo = PipelineRepository()
 ai_service = AIService()
 
-
-def _normalize_capacity_members(raw_capacities: list[dict[str, Any]], start_dt: datetime | None, finish_dt: datetime | None) -> list[dict[str, Any]]:
-    members: list[dict[str, Any]] = []
-    for idx, row in enumerate(raw_capacities):
-        person = row.get("teamMember") or row.get("member") or {}
-        name = str(person.get("displayName") or person.get("name") or "").strip()
-        unique_name = str(person.get("uniqueName") or person.get("unique_name") or "").strip() or None
-        member_id = str(person.get("id") or unique_name or name or f"capacity-{idx}")
-        if not name:
-            continue
-
-        activities = row.get("activities") or []
-        activity_names: list[str] = []
-        capacity_per_day = 0.0
-        for activity in activities:
-            if not isinstance(activity, dict):
-                continue
-            activity_name = str(activity.get("name") or activity.get("activity") or "").strip()
-            if activity_name:
-                activity_names.append(activity_name)
-            try:
-                capacity_per_day += float(activity.get("capacityPerDay") or activity.get("capacity_per_day") or 0)
-            except (TypeError, ValueError):
-                pass
-
-        days_off = 0
-        for day_range in row.get("daysOff") or row.get("days_off") or []:
-            if not isinstance(day_range, dict):
-                continue
-            days_off += calculate_weekday_overlap_days(
-                start_dt,
-                finish_dt,
-                parse_ado_date(day_range.get("start")),
-                parse_ado_date(day_range.get("end")),
-            )
-
-        members.append({
-            "id": member_id,
-            "name": name,
-            "unique_name": unique_name,
-            "activity": ", ".join(dict.fromkeys(activity_names)) or "Development",
-            "capacity_per_day": round(capacity_per_day, 2),
-            "days_off": days_off,
-            "source": "ado",
-        })
-    return members
 
 @router.get("/health")
 def health():
@@ -1465,10 +1419,12 @@ def get_work_item_comments_endpoint(
             date = str(c.get("createdDate") or "")
             text = strip_html_tags(c.get("text") or "")
             cleaned.append({"author": author, "date": date, "text": text})
-        return cleaned
+        return cleaned[:top]
+    except HTTPException:
+        raise
     except Exception as exc:
-        logging.warning("Could not read comments for work item %s: %s", work_item_id, exc)
-        return []
+        logging.warning("Could not read comments for work item %s (%s)", work_item_id, type(exc).__name__)
+        raise HTTPException(status_code=502, detail="Recent comments could not be read from Azure DevOps. Check Work Items read permissions and try again.") from exc
 
 
 @router.post("/sprint-board/milestone-ai-summary", response_model=MilestoneAiSummaryResponse)

@@ -134,6 +134,108 @@ ADO_PAT_SECRET_TEMPLATE=ado-pat-{organization}
 For organization `cicd-analysis`, the resolver reads the Key Vault secret `ado-pat-cicd-analysis`. Organization names are normalized to lowercase and hyphen-separated. Grant the Function App and FastAPI host managed identities permission to read every organization secret. For local development without `KEY_VAULT_URL`, `ADO_PAT` remains the local fallback.
 
 
+## Sprint planning team roster
+
+Sprint Planning initially lists available people across all teams in the selected Azure DevOps project,
+including expanded team groups, with duplicate users shown only once. Project/team read permissions
+are required; expanding groups also requires identity read access. Incomplete discovery is shown as a warning.
+Use **Edit team roster** to search for people, select the members to plan for, and **Save team roster**.
+The saved selection is restored separately for each organization, project and team in the same browser.
+It does not change Azure DevOps team membership or synchronize between browsers.
+
+**Refresh available people** reloads available members without resetting the saved roster, capacity,
+leave or planning settings. Newly discovered people can be selected in **Edit team roster**; saved
+members remain selected even if a refresh no longer returns them. The **In plan** checkbox temporarily
+includes or excludes a saved member from a plan without changing the saved roster. When a roster has
+been saved, people added manually must also be selected in **Edit team roster** to appear in the table.
+Opening the editor or refreshing people invalidates the current plan; generate a new plan afterward.
+
+The **Sprints and rules** section contains only the sprint, a display-only story count reference and active-days
+threshold. Planning uses the standard work item types supplied by setup, with no additional backlog
+tag or area filter. The selected team's normal scope still applies. There is no per-person area
+dropdown: everyone is eligible for any area within that scope, including people with previously saved
+personal area restrictions. Saved roster preferences are unchanged; old planning-only Days/PTO values
+are no longer used.
+
+### Capacity and individual velocity
+
+The **Capacity tab** is the shared source for Working Days, Days Off (PTO) and Total Capacity.
+Azure DevOps iteration capacities are read from the response's `teamMembers` collection
+(with compatibility for `value`-wrapped responses); a valid empty collection means no members
+are configured for that team and sprint.
+Planning shows these values read-only; change them in Capacity for the relevant team and sprint,
+then use **Refresh Capacity data**. Working Days use the same inclusive weekdays as Capacity;
+available days are `max(0, working days - PTO)` and hours are available days multiplied by the
+person's Capacity/Day. Zero values remain zero. Reports reuse Capacity totals instead of
+assuming every person has the same number of hours. People without an entry must be configured
+in Capacity; a roster entry alone does not imply eight hours/day.
+
+Capacity overrides are saved locally, scoped by organization, project, team ID and sprint ID.
+Existing Capacity-tab settings remain readable. Overrides are shared with planning in the same
+browser, not written to Azure DevOps or synchronized across browsers. Missing or unreadable data
+is reported rather than replaced with default working days, hours or points.
+If ADO Capacity cannot be read, saved Capacity-tab entries can still be used with valid sprint dates;
+people without a saved entry remain unavailable.
+
+Each person's automatic assignment budget is:
+
+`previous completed points × upcoming available days ÷ previous available days`
+
+The baseline is the most recent **completed** team sprint before the planned sprint. Completion
+state, story points and owner are read as of that sprint's final UTC day, so later reassignments
+do not change attribution. Only the process's Completed category counts, not merely Resolved or
+Removed; unavailable or unmapped process states pause the forecast rather than guessing completion.
+Capacity settings for both sprints must be present. This is a one-sprint baseline;
+unusual incidents or blocking can make it noisy. A rolling average is not implemented yet.
+
+Existing commitments remain assigned. Carryover is **assumed 50% complete**, reserving half its
+original points; existing target-sprint stories and new backlog stories reserve full points.
+This does not change ADO story points or record actual progress. The UI distinguishes original
+story size from remaining reserved points. New automatic assignments must fit the remaining
+forecast exactly; there is no 15% overage or fixed eight-point budget, and the story-count view
+does not impose a separate story-count limit.
+
+Unknown history, missing point estimates on completed or existing work, missing Capacity entries,
+or zero previous availability pause automatic new assignment for the affected person. Zero upcoming
+availability gives a zero budget. Unestimated backlog work stays available for manual planning.
+Manual dropdown moves remain possible and update reserved totals and warnings immediately;
+overriding a forecast is explicit. No multiple-active-work-item flag is added.
+
+Story comments in the sprint plan are hidden by default. Each story has **View Recent Comments**
+to reveal its latest three comments (or fewer if fewer exist), displayed oldest first.
+Use **Hide Recent Comments** to collapse them again. Comments not included in the plan are loaded
+from Azure DevOps only when opened; read failures are shown explicitly and can be retried.
+
+**Look at these first** has an **All / Blocked / Active too long** display filter and a visible count.
+Stories with both flags appear in either filtered view. Filtering does not change workloads, totals
+or commit assignments. A newly generated plan starts with **All** selected.
+
+**Team Workload Swimlanes** uses two panes (stacked on smaller screens):
+
+- **Team workloads** shows carryovers, existing commitments and automatically planned work per person.
+- **Available backlog** shows all remaining candidates read by the planner, including work left after
+  capacity is filled, not just the legacy truncated "Not placed" list. The existing limit of 300
+  backlog candidates per plan still applies.
+
+Sprint Goal matching treats comma-, semicolon-, newline-, "and"- or "or"-separated entries as topics.
+Multiword topics must match as a phrase within one title, plain-text description or tag; isolated
+words from different fields do not combine into a match. Single-word topics must occur in a title
+or tag, not merely somewhere in a description. Generic-only topics such as "high" or "data" do not
+qualify. Matching ignores case, punctuation, common linking/action words and high/low modifiers;
+"cost" and "costs" are equivalent. For example, `cost, high data ingestion` matches the cost topic
+or the data-ingestion phrase, not "high" or "data" alone.
+
+Matching items are highlighted and ranked by distinct matched topics, with ties retaining backlog
+order. Each match shows its topic, source field and an evidence excerpt. No matches is a valid
+result; unrelated items remain available without highlights. This is conservative text matching,
+not semantic or AI assessment, so synonyms and differently worded goals may require revised topics.
+Automatic assignment order is unchanged. With no goal, original backlog order is retained.
+
+Select a roster member from a backlog item's assignee dropdown to move it immediately into that
+person's workload and update totals, capacity warnings and the draft commit assignments. Selecting
+**(Not in plan)** in a workload returns the item to the available pane. These are local draft changes;
+only **Commit to Azure DevOps** writes assignments and the target iteration to Azure DevOps.
+
 ## V7 telemetry correction
 
 V7 treats a successful Azure DevOps timeline as the source of truth for a run. Re-ingestion replaces stale child stage/job/task telemetry, updates previously degraded runs to complete, and removes fallback child records. This fixes the earlier condition where existing 0-5 second child durations could survive a real ADO ingestion.

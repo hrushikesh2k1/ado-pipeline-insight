@@ -158,6 +158,10 @@ export const api = {
     const p = new URLSearchParams({ organization, project, team })
     return request<SprintPlanningSetup>(`/api/v1/ado/sprint-planning/setup?${p.toString()}`, {headers: pat ? {'X-ADO-PAT': pat} : {}})
   },
+  sprintVelocityContext:(organization:string,project:string,team:string,target:string,pat?:string)=>{
+    const p = new URLSearchParams({ organization, project, team, to_iteration_id: target })
+    return request<import('../types/api').VelocityContext>(`/api/v1/ado/sprint-planning/velocity-context?${p.toString()}`, {headers: pat ? {'X-ADO-PAT': pat} : {}})
+  },
   /** The plan for the next sprint. It is only shown: nothing is written to Azure DevOps. */
   sprintPlan:(payload:SprintPlanRequest)=>request<SprintPlan>('/api/v1/ado/sprint-planning/plan', {
     method: 'POST',
@@ -329,4 +333,3 @@ export const api = {
     return request<InnerSourceLeaderboardResponse>(`/api/v1/ado/innersource/leaderboard?${p.toString()}`)
   },
 }
-

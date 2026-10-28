@@ -4,11 +4,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SprintPlanningPage } from '../../components/SprintPlanningPage'
 import { api } from '../../services/api'
 import type { PlanSprint, SprintPlan, SprintPlanningSetup } from '../../types/api'
+import { velocityContext } from './planningFixtures'
 
 vi.mock('../../services/api', () => ({
   api: {
     teams: vi.fn(),
     sprintPlanningSetup: vi.fn(),
+    sprintVelocityContext: vi.fn(),
     sprintPlan: vi.fn(),
     sprintCommit: vi.fn(),
   },
@@ -110,6 +112,7 @@ beforeEach(() => {
   }
   vi.mocked(api.teams).mockResolvedValue([{ id: 'team-a', name: 'Team A' }, { id: 'team-b', name: 'Team B' }])
   vi.mocked(api.sprintPlanningSetup).mockImplementation(async (_organization, project, team) => setup(project, team))
+  vi.mocked(api.sprintVelocityContext).mockImplementation(async (_org, _project, _team, target) => velocityContext(target))
   vi.mocked(api.sprintPlan).mockImplementation(async request => plan(request.to_iteration_id, request.project, request.team))
   vi.mocked(api.sprintCommit).mockResolvedValue({ success: true, updated_count: 1, message: 'Test commit complete', errors: [] })
   currentProps = {
@@ -129,23 +132,119 @@ afterEach(async () => {
 })
 
 describe('sprint planning draft scope', () => {
-  it.each([['0', 0], ['4', 4], ['', 10]] as const)('preserves Days input %s in storage and the actual JSON request', async (value, expected) => {
+  it('shows known sprint working days even when no member capacity is configured', async () => {
+    const context = velocityContext()
+    context.upcoming_capacity!.working_days = 21
+    context.upcoming_capacity!.members = []
+    vi.mocked(api.sprintVelocityContext).mockResolvedValue(context)
+    await render()
+    expect(element('[data-testid="spp-days-planner@example.test"]').textContent).toBe('21')
+    expect(element('[data-testid="spp-pto-planner@example.test"]').textContent).toBe('Unavailable')
+    expect(element('[data-testid="spp-hours-planner@example.test"]').textContent).toBe('Unavailable')
+  })
+
+  it.each([{ areas: [] }, { areas: ['Project A\\Legacy Area'] }])('plans any team-scoped area regardless of saved personal areas $areas', async ({ areas }) => {
+    localStorage.setItem('ado_sprint_planning:org-a:project a:team a', JSON.stringify([{
+      name: 'Test Planner', unique_name: 'planner@example.test', areas, included: true, manual: false,
+      working_days: 7, pto_days: 2,
+    }]))
     const actual = await vi.importActual<typeof import('../../services/api')>('../../services/api')
     const fetchPlan = vi.fn(async (_url: RequestInfo | URL, _options?: RequestInit) =>
       new Response(JSON.stringify(plan()), { status: 200, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchPlan)
     vi.mocked(api.sprintPlan).mockImplementation(actual.api.sprintPlan)
     await render()
-    await enterNumber('input[title="Working days in sprint"]', value)
-    expect(element<HTMLInputElement>('input[title="Working days in sprint"]').value).toBe(String(expected))
-    const saved = JSON.parse(localStorage.getItem('ado_sprint_planning:org-a:project a:team a')!)
-    expect(saved[0].working_days).toBe(expected)
+
+    const capacity = element('[data-testid="spp-people"]')
+    expect(capacity.querySelector('.sppPicker')).toBeNull()
+    expect(capacity.querySelector('[data-testid^="spp-areas-"]')).toBeNull()
+    expect(capacity.querySelectorAll('th')).toHaveLength(6)
+    expect(capacity.textContent).not.toContain('Areas of choice')
+    expect(element('[data-testid="spp-days-planner@example.test"]').textContent).toBe('10')
+    expect(element('[data-testid="spp-pto-planner@example.test"]').textContent).toBe('0')
+    expect(capacity.querySelector('input[type="number"]')).toBeNull()
+    expect(element<HTMLButtonElement>('[data-testid="spp-plan"]').disabled).toBe(false)
+    await click(element('[data-testid="spp-plan"]'))
+
+    const request = JSON.parse(String(fetchPlan.mock.calls[0][1]?.body))
+    expect(request.people).toEqual([expect.objectContaining({
+      unique_name: 'planner@example.test', areas: ['*'], working_days: 10, pto_days: 0,
+    })])
+    expect(request).not.toHaveProperty('area_filter')
+    expect(request.team).toBe('Team A')
+  })
+
+  it('removes optional filter controls and sends no backlog restrictions while keeping setup default types', async () => {
+    vi.mocked(api.sprintPlanningSetup).mockResolvedValue({
+      ...setup(), work_item_types: ['User Story', 'Bug', 'Product Backlog Item'], default_types: ['Product Backlog Item', 'Bug'],
+    })
+    const actual = await vi.importActual<typeof import('../../services/api')>('../../services/api')
+    const fetchPlan = vi.fn(async (_url: RequestInfo | URL, _options?: RequestInit) =>
+      new Response(JSON.stringify(plan()), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchPlan)
+    vi.mocked(api.sprintPlan).mockImplementation(actual.api.sprintPlan)
+    await render()
+
+    const settings = element('[data-testid="spp-settings"]')
+    expect(settings.querySelectorAll('input, select')).toHaveLength(3)
+    expect(settings.textContent).not.toMatch(/Backlog Tags|Backlog Area|Work item types/i)
+    expect(container.querySelector('[data-testid="spp-tags-filter"]')).toBeNull()
+    expect(container.querySelector('[data-testid="spp-area-filter"]')).toBeNull()
+    expect(container.querySelector('.sppTypes')).toBeNull()
+    await click(element('[data-testid="spp-plan"]'))
+
+    expect(fetchPlan).toHaveBeenCalledTimes(1)
+    const request = JSON.parse(String(fetchPlan.mock.calls[0][1]?.body))
+    expect(request).not.toHaveProperty('tags')
+    expect(request).not.toHaveProperty('area_filter')
+    expect(request.work_item_types).toEqual(['Product Backlog Item', 'Bug'])
+    expect(request.per_person).toBe(6)
+    expect(request.active_days).toBe(10)
+  })
+
+  it.each([0, 4, 10])('uses Capacity-tab working days %s without independent editable defaults', async (expected) => {
+    const context = velocityContext()
+    context.upcoming_capacity!.working_days = expected
+    vi.mocked(api.sprintVelocityContext).mockResolvedValue(context)
+    const actual = await vi.importActual<typeof import('../../services/api')>('../../services/api')
+    const fetchPlan = vi.fn(async (_url: RequestInfo | URL, _options?: RequestInit) =>
+      new Response(JSON.stringify(plan()), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchPlan)
+    vi.mocked(api.sprintPlan).mockImplementation(actual.api.sprintPlan)
+    await render()
+    expect(element('[data-testid="spp-days-planner@example.test"]').textContent).toBe(String(expected))
     await click(element('[data-testid="spp-plan"]'))
 
     expect(fetchPlan).toHaveBeenCalledTimes(1)
     const request = JSON.parse(String(fetchPlan.mock.calls[0][1]?.body))
     expect(request.people[0].working_days).toBe(expected)
+    expect(request.velocity_capacity.target_iteration_id).toBe('s3')
     expect(request.capacity_mode).toBe('points')
+  })
+
+  it('uses shared scoped Capacity overrides and invalidates the plan when Capacity changes', async () => {
+    localStorage.setItem('ado_sprint_capacity:v2:org-a:project a:team-a:s3', JSON.stringify([{
+      id: 'planner', name: 'Test Planner', unique_name: 'planner@example.test', capacity_per_day: 6, days_off: 2, activity: 'Development',
+    }]))
+    await render()
+    expect(element('[data-testid="spp-pto-planner@example.test"]').textContent).toBe('2')
+    expect(element('[data-testid="spp-hours-planner@example.test"]').textContent).toBe('48')
+    await click(element('[data-testid="spp-plan"]'))
+    expect(vi.mocked(api.sprintPlan).mock.calls[0][0].velocity_capacity?.upcoming_members).toContainEqual(expect.objectContaining({ days_off: 2, capacity_per_day: 6 }))
+    await act(async () => window.dispatchEvent(new Event('sprint-capacity-changed')))
+    expect(container.querySelector('[data-testid="spp-result"]')).toBeNull()
+  })
+
+  it('reports capacity read errors and rejects obsolete capacity responses after a sprint switch', async () => {
+    const pending = deferred<ReturnType<typeof velocityContext>>()
+    vi.mocked(api.sprintVelocityContext).mockReturnValueOnce(pending.promise).mockRejectedValueOnce(new Error('Unavailable'))
+    await render()
+    expect(element<HTMLButtonElement>('[data-testid="spp-plan"]').disabled).toBe(true)
+    await select('[data-testid="spp-to"]', 's4')
+    await act(async () => pending.resolve(velocityContext()))
+    expect(container.textContent).toContain('Capacity data could not be loaded: Unavailable')
+    expect(container.querySelector('[data-testid="spp-velocity-baseline"]')).toBeNull()
+    expect(element<HTMLButtonElement>('[data-testid="spp-plan"]').disabled).toBe(true)
   })
 
   it('shows a zero-point budget and existing overload without falling back to story count', async () => {

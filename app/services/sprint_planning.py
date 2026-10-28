@@ -43,7 +43,7 @@ BLOCKED = "blocked"
 LONG_ACTIVE = "active_too_long"
 
 BASE_FIELDS = [
-    "System.Id", "System.WorkItemType", "System.Title", "System.State", "System.AssignedTo", "System.AreaPath", "System.IterationPath",
+    "System.Id", "System.WorkItemType", "System.Title", "System.Description", "System.State", "System.AssignedTo", "System.AreaPath", "System.IterationPath",
     "System.Tags", "System.ChangedDate", "Microsoft.VSTS.Common.StateChangeDate",
 ]
 OPTIONAL_FIELDS = ["Microsoft.VSTS.Common.ActivatedDate", "Microsoft.VSTS.CMMI.Blocked", "Microsoft.VSTS.Scheduling.StoryPoints"]
@@ -223,7 +223,7 @@ def make_story(raw: dict[str, Any], *, states: StateMap, now: datetime, active_d
         since, exact = (parse_when(fields.get("Microsoft.VSTS.Common.ActivatedDate")) if category == "inprogress" else None) or parse_when(fields.get("System.ChangedDate")), False
     elapsed = (now - since) if since else None
     return {
-        "id": item_id, "title": str(fields.get("System.Title") or "").strip(), "type": item_type, "state": state, "state_category": category,
+        "id": item_id, "title": str(fields.get("System.Title") or "").strip(), "description": strip_html_tags(fields.get("System.Description") or ""), "type": item_type, "state": state, "state_category": category,
         "area_path": str(fields.get("System.AreaPath") or "").strip(), "iteration_path": str(fields.get("System.IterationPath") or "").strip(),
         "assigned_to": name, "assigned_unique": unique, "tags": tags, "points": safe_float(fields.get("Microsoft.VSTS.Scheduling.StoryPoints")),
         "days_in_state": max(0, elapsed.days) if elapsed is not None else None,
@@ -342,7 +342,9 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
     for p in people:
         avail_days = _available_days(p)
         cap_pts = p.get("capacity_points")
-        if avail_days <= 0:
+        if p.get("velocity_based"):
+            cap_pts = p.get("capacity_points") or 0.0
+        elif avail_days <= 0:
             cap_pts = 0.0
         elif cap_pts is None:
             focus_factor = p.get("focus_factor")
@@ -382,16 +384,26 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
             outside_planned += 1
 
     # 3. Capacity calculation and backlog placement
+    unowned_carryover_ids = {story["id"] for story in leftovers}
     def free_stories(row: dict[str, Any]) -> int:
         return per_person - len(row["carried"]) - len(row["already_planned"]) - len(row["new"])
 
     def current_points(row: dict[str, Any]) -> float:
+        if row.get("velocity_based"):
+            return sum((s.get("points") or 0.0) * 0.5 for s in row["carried"]) + sum(s.get("points") or 0.0 for s in row["already_planned"] + row["new"])
         return sum(s.get("points") or 0.0 for s in row["carried"] + row["already_planned"] + row["new"])
 
     def free_points(row: dict[str, Any]) -> float:
         return max(0.0, round(row["points_capacity"] - current_points(row), 1))
 
     def can_take_story(row: dict[str, Any], story: dict[str, Any]) -> bool:
+        if row.get("velocity_based"):
+            if row.get("forecast_status") != "ready" or _available_days(row) <= 0 or story.get("points") is None or story.get("points", 0) <= 0:
+                return False
+            if any(s.get("points") is None for s in row["carried"] + row["already_planned"]):
+                return False
+            remaining = story["points"] * (0.5 if story.get("id") in unowned_carryover_ids else 1)
+            return current_points(row) + remaining <= row["points_capacity"]
         if free_stories(row) <= 0 or _available_days(row) <= 0:
             return False
         if capacity_mode == "points":
@@ -414,7 +426,7 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
     for story in pool:
         if not any(can_take_story(r, story) for r in rows):
             # A large story must not prevent a later smaller story from fitting.
-            if not any(can_take_story(r, {"points": 0}) for r in rows):
+            if not any(can_take_story(r, {"points": 0.01 if r.get("velocity_based") else 0}) for r in rows):
                 break
         taken += 1
 
@@ -426,13 +438,14 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
             chosen = next((c for c in candidates if c[0]["name"] == orig_owner["name"]), None) if orig_owner else None
 
             if not chosen:
-                if capacity_mode == "points":
+                if capacity_mode == "points" or any(r.get("velocity_based") for r in rows):
                     chosen = max(candidates, key=lambda c: (free_points(c[0]), free_stories(c[0]), -len(c[0]["areas"]), -rows.index(c[0])))
                 else:
                     chosen = max(candidates, key=lambda c: (free_stories(c[0]), -len(c[0]["areas"]), -rows.index(c[0])))
 
             row, area = chosen
-            row["new"].append({**story, "matched_area": area})
+            lane = "carried" if row.get("velocity_based") and story["id"] in unowned_carryover_ids else "new"
+            row[lane].append({**story, "matched_area": area})
             continue
 
         unplaced_total += 1
@@ -448,9 +461,21 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
         row["points_already_planned"] = _sum_points(row["already_planned"])
         row["points_new"] = _sum_points(row["new"])
         row["points_planned"] = round(row["points_carried"] + row["points_already_planned"] + row["points_new"], 1)
+        row["points_reserved"] = round(current_points(row), 2)
         cap = row["points_capacity"]
-        row["points_over_by"] = max(0.0, round(row["points_planned"] - cap, 1))
-        row["points_open"] = max(0.0, round(cap - row["points_planned"], 1))
+        allocated = row["points_reserved"] if row.get("velocity_based") else row["points_planned"]
+        row["points_over_by"] = max(0.0, round(allocated - cap, 2))
+        row["points_open"] = max(0.0, round(cap - allocated, 2))
+        if row.get("velocity_based"):
+            if row.get("forecast_note"):
+                row["warnings"].append(row["forecast_note"])
+            if row["carried"]:
+                row["warnings"].append("Carryover is assumed half complete: 50% of original points is reserved, not a measured remaining estimate.")
+            if any(s.get("points") is None for s in row["carried"] + row["already_planned"]):
+                row["warnings"].append("Existing work has no points estimate; automatic new assignments are paused.")
+            if allocated > cap:
+                row["warnings"].append(f"Forecast exceeded: {allocated:g} reserved pts against {cap:g} forecast pts.")
+            continue
 
         if not row["areas"]:
             row["warnings"].append("No area of choice is set, so no new story can be given to this person.")
@@ -470,7 +495,10 @@ def make_plan(*, people: list[dict[str, Any]], carried: list[dict[str, Any]], pl
         if row["points_planned"] > cap * 1.15:
             row["warnings"].append(f"Capacity exceeded: {row['points_planned']} pts allocated exceeds estimated {row['points_capacity']} pts capacity.")
 
+    assigned_ids = {story["id"] for row in rows for lane in ("carried", "already_planned", "new") for story in row[lane]}
+    remaining = {story["id"]: story for story in pool if story["id"] not in assigned_ids}
     return {"people": rows, "outside_plan": outside, "outside_planned": outside_planned, "unplaced": unplaced, "unplaced_total": unplaced_total,
+            "available_backlog": list(remaining.values()),
             "backlog_left": max(0, len(pool) - taken)}
 
 
@@ -501,19 +529,54 @@ def team_scopes(client: Any, project: str, team: str) -> tuple[list[tuple[str, b
     return written, parse_team_area_scopes({"values": [{"value": p, "includeChildren": c} for p, c in written]}), None
 
 
+def project_roster_members(client: Any, project: str, team: str, notes: list[str]) -> list[dict[str, Any]]:
+    teams = [team]
+    try:
+        teams.extend(str(t.get("name") or t["id"]) for t in client.list_teams(project))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Project teams could not be read (%s)", type(exc).__name__)
+        notes.append("All project teams could not be read. Available people may be incomplete; check PAT project/team read permissions and refresh.")
+    people: dict[str, dict[str, Any]] = {}
+    groups: set[str] = set()
+    for name in dict.fromkeys(teams):
+        try:
+            members = client.list_team_members(project, name)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("The members of team %s could not be read (%s)", name, type(exc).__name__)
+            notes.append(f"The members of the team could not be read ('{name}'). Available people may be incomplete; refresh or add people by hand.")
+            continue
+        for member in members:
+            identity = member.get("identity")
+            if not isinstance(identity, dict):
+                continue
+            candidates = [identity]
+            if identity.get("isContainer"):
+                group_id = identity.get("id")
+                if not group_id or group_id in groups:
+                    continue
+                groups.add(group_id)
+                try:
+                    candidates = client.list_group_members(group_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.info("Team group members could not be read (%s)", type(exc).__name__)
+                    notes.append("A team group's members could not be read. Available people may be incomplete; check PAT identity read permissions and refresh.")
+                    continue
+            for person in candidates:
+                key = str(person.get("uniqueName") or person.get("id") or person.get("displayName") or "").strip().lower()
+                if key and not person.get("isContainer"):
+                    people.setdefault(key, person)
+    return list(people.values())
+
+
 def team_setup(client: Any, project: str, team: str) -> dict[str, Any]:
-    """What the planning page needs to start: the sprints and the two to propose, the team's members, the area paths to choose from and the story types."""
+    """Selected-team sprints and areas, project-wide roster candidates, and story types."""
     notes: list[str] = []
     sprints = list_sprints(client, project, team)
     from_id, to_id = default_sprints(sprints)
     written, scopes, note = team_scopes(client, project, team)
     if note:
         notes.append(note)
-    try:
-        members = [m["identity"] for m in client.list_team_members(project, team) if isinstance(m.get("identity"), dict) and not m["identity"].get("isContainer")]
-    except Exception as exc:  # noqa: BLE001
-        logger.info("The members of team %s could not be read (%s)", team, type(exc).__name__)
-        members, notes = [], notes + ["The members of the team could not be read: add the people by hand."]
+    members = project_roster_members(client, project, team, notes)
     try:
         areas = area_choices(client, project, scopes)
     except Exception as exc:  # noqa: BLE001
@@ -548,7 +611,7 @@ def _calculate_risks(people_rows: list[dict[str, Any]], flagged: list[dict[str, 
         recommendations.append(f"Estimate points for {len(unpointed)} unpointed items to ensure accurate workload balancing.")
         score_points += 1 if len(unpointed) < 3 else 2
 
-    overloaded = [r for r in people_rows if r.get("points_capacity") is not None and r.get("points_planned", 0) > r["points_capacity"]]
+    overloaded = [r for r in people_rows if r.get("points_capacity") is not None and r.get("points_reserved" if r.get("velocity_based") else "points_planned", 0) > r["points_capacity"]]
     if overloaded:
         names = ", ".join(r["name"] for r in overloaded)
         reasons.append(f"Capacity exceeded for {names}.")
@@ -569,6 +632,7 @@ def plan_sprint(client: Any, *, organization: str, project: str, team: str, to_i
                 per_person: int = DEFAULT_PER_PERSON, active_days: int = DEFAULT_ACTIVE_DAYS, work_item_types: list[str] | None = None,
                 sprint_goal: str | None = None, capacity_mode: str = "stories", focus_factor: float = 0.8,
                 tags: list[str] | None = None, area_filter: str | None = None,
+                velocity_capacity: dict[str, Any] | None = None,
                 now: datetime | None = None) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
     crew = normalize_people(people)
@@ -605,6 +669,10 @@ def plan_sprint(client: Any, *, organization: str, project: str, team: str, to_i
     if not types:
         raise PlanningError(f"None of the story types ({', '.join(wanted)}) exists in project '{project}'. Choose the types to plan from.")
     notes: list[str] = []
+    if velocity_capacity is not None:
+        from app.services.sprint_velocity import forecast_people
+        crew, forecast_notes = forecast_people(client, project, team, target["id"], crew, velocity_capacity, types, now)
+        notes.extend(forecast_notes)
     written, scopes, note = team_scopes(client, project, team)
     if note:
         notes.append(note)
@@ -745,7 +813,7 @@ def plan_sprint(client: Any, *, organization: str, project: str, team: str, to_i
     risk_score, risk_reasons, confidence, ai_recs = _calculate_risks(people_rows, flagged, all_planned)
 
     total_pts_planned = round(sum(r.get("points_planned", 0.0) for r in people_rows), 1)
-    total_pts_cap = round(sum(r.get("points_capacity", 0.0) or 0.0 for r in people_rows), 1)
+    total_pts_cap = round(sum(r.get("points_capacity", 0.0) or 0.0 for r in people_rows), 2)
     pts_carried = round(sum(r.get("points_carried", 0.0) for r in people_rows), 1)
     pts_new = round(sum(r.get("points_new", 0.0) for r in people_rows), 1)
     unpointed_count = sum(1 for s in all_planned if s.get("points") is None)
@@ -753,7 +821,7 @@ def plan_sprint(client: Any, *, organization: str, project: str, team: str, to_i
     return {
         "team": team, "project": project, "from_sprint": source, "to_sprint": target, "per_person": per_person, "active_days": active_days, "work_item_types": types,
         "sprint_goal": sprint_goal or "", "capacity_mode": capacity_mode, "people": people_rows, "flagged": flagged, "unplaced": result["unplaced"],
-        "unplaced_total": result["unplaced_total"], "outside_plan": result["outside_plan"], "backlog_left": result["backlog_left"], "notes": notes,
+        "unplaced_total": result["unplaced_total"], "available_backlog": result["available_backlog"], "outside_plan": result["outside_plan"], "backlog_left": result["backlog_left"], "notes": notes,
         "ai_recommendations": ai_recs,
         "generated_at": now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "posted_to_ado": False,
@@ -764,6 +832,7 @@ def plan_sprint(client: Any, *, organization: str, project: str, team: str, to_i
             "long_active": sum(1 for s in flagged if any(f["code"] == LONG_ACTIVE for f in s["flags"])),
             "unplaced": result["unplaced_total"], "open_places": sum(r["open_places"] for r in people_rows),
             "total_points_planned": total_pts_planned,
+            "total_points_reserved": round(sum(r.get("points_reserved", 0.0) for r in people_rows), 2),
             "total_points_capacity": total_pts_cap,
             "points_carried": pts_carried,
             "points_new": pts_new,
@@ -800,4 +869,3 @@ def commit_sprint_plan(client: Any, *, project: str, iteration_path: str, assign
     if errors:
         message += f" Encountered {len(errors)} error{'s' if len(errors) != 1 else ''}."
     return {"success": len(errors) == 0, "updated_count": updated, "message": message, "errors": errors}
-
